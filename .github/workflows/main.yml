@@ -119,6 +119,18 @@ jobs:
       - name: Restore persistent state (from state repo)
         run: bash .github/scripts/restore.sh
 
+      - name: Audit persisted paths (diagnostic)
+        run: |
+          echo "==== size audit of persisted paths (runner image) ===="
+          for p in /home/Hamid /root /var/lib/tailscale /etc /usr/local/bin /usr/local/sbin /srv /var/www /var/spool/cron /opt; do
+            echo "--- $p ---"
+            sudo du -sh --exclude='hostedtoolcache' "$p" 2>/dev/null || echo "  (n/a)"
+          done
+          echo "--- /opt components (hostedtoolcache excluded from recursion) ---"
+          sudo ls -la /opt 2>/dev/null | head -20
+          sudo du -sh --exclude='hostedtoolcache' /opt/* 2>/dev/null | sort -h | tail -10 || true
+          echo "==== end audit ===="
+
       - name: Write persistence probe (test artifact — idempotent, verifies restore)
         if: env.PROBE_ENABLED == 'true'
         run: |
