@@ -51,10 +51,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── بازیابی وضعیت قبلی از Release (اولین قدم، تا بقیه‌ی قدم‌ها روی داده‌های قبلی کار کنند)
-      - name: Restore persistent state (from GitHub Releases)
-        run: bash .github/scripts/restore.sh
-
       - name: Setup base system
         run: |
           set -euo pipefail
@@ -63,6 +59,10 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             openssh-server sudo curl wget git tar rsync jq || true
           echo "Base system ready"
+
+      # ── بازیابی وضعیت قبلی از Release (بعد از آماده‌سازی سیستم پایه)
+      - name: Restore persistent state (from GitHub Releases)
+        run: bash .github/scripts/restore.sh
 
       - name: Create user Hamid
         run: |

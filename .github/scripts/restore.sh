@@ -29,6 +29,8 @@ log "state extracted"
 
 # ── نصب پکیج‌ها ──
 if [ -f "$RESTORE/packages.list" ]; then
+  log "refreshing apt lists"
+  sudo apt-get update -y || true
   log "installing $(wc -l < "$RESTORE/packages.list") packages"
   sudo dpkg --set-selections < "$RESTORE/packages.list" || true
   sudo DEBIAN_FRONTEND=noninteractive apt-get -y dselect-upgrade \
