@@ -148,10 +148,18 @@ jobs:
                 bash .github/scripts/save.sh || echo "[auto-sync] Warning: periodic save skipped"
               done
             ) &
+            SYNC_PID=$!
           fi
           
-          # نگه‌داشتن سرور تا سقف ۵.۵ ساعت (~۱۹۸۰۰ ثانیه)
-          sleep 19800 || true
+          # مدیریت پاسخگویی فوری به سیگنال‌های توقف / Cancel
+          trap 'echo "Termination signal received, shutting down gracefully..."; [ -n "${SYNC_PID:-}" ] && kill -9 $SYNC_PID 2>/dev/null || true; exit 0' SIGTERM SIGINT SIGQUIT SIGHUP
+          
+          # نگه‌داشتن سرور با قابلیت دریافت فوری Signal
+          END_TIME=$(( $(date +%s) + 19800 ))
+          while [ $(date +%s) -lt $END_TIME ]; do
+            sleep 2 &
+            wait $!
+          done
 
       - name: Final state save
         if: always()
