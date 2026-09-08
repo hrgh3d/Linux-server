@@ -114,19 +114,47 @@ jobs:
       - name: Restore persistent state (from state repo)
         run: bash .github/scripts/restore.sh
 
-      - name: Write persistence probe (test artifact)
+      - name: Write persistence probe (test artifact — idempotent, verifies restore)
         if: env.PROBE_ENABLED == 'true'
         run: |
-          set -euo pipefail
-          echo "PROBE created at $(date -u '+%Y-%m-%dT%H:%M:%SZ') run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT:-1}" \
-            | sudo tee /root/persistence-probe.txt >/dev/null
-          echo "PROBE created at $(date -u '+%Y-%m-%dT%H:%M:%SZ') run=${GITHUB_RUN_ID}" \
-            | tee /home/Hamid/persistence-probe.txt >/dev/null
-          sudo mkdir -p /opt/persistence-probe
-          echo "probe app config v=1" | sudo tee /opt/persistence-probe/app.cfg >/dev/null
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y htop >/dev/null 2>&1 || true
-          echo "Probe written: /root/persistence-probe.txt, /home/Hamid/persistence-probe.txt, /opt/persistence-probe/app.cfg + package htop"
-          ls -la /root/persistence-probe.txt /home/Hamid/persistence-probe.txt /opt/persistence-probe/app.cfg
+          TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          # --- /root probe (ماندگاری /root) ---
+          if sudo test -f /root/persistence-probe.txt; then
+            echo "== /root probe ALREADY PRESENT (restored from state) =="
+            sudo cat /root/persistence-probe.txt
+          else
+            echo "PROBE created at $TS run=${GITHUB_RUN_ID}" | sudo tee /root/persistence-probe.txt >/dev/null
+            echo "== /root probe created fresh =="
+          fi
+          # --- /home/Hamid probe ---
+          if sudo test -f /home/Hamid/persistence-probe.txt; then
+            echo "== Hamid probe ALREADY PRESENT (restored from state) =="
+            sudo cat /home/Hamid/persistence-probe.txt
+          else
+            echo "PROBE created at $TS run=${GITHUB_RUN_ID}" | sudo tee /home/Hamid/persistence-probe.txt >/dev/null
+            sudo chown Hamid:Hamid /home/Hamid/persistence-probe.txt
+            echo "== Hamid probe created fresh =="
+          fi
+          # --- /opt probe ---
+          if sudo test -f /opt/persistence-probe/app.cfg; then
+            echo "== /opt probe ALREADY PRESENT (restored from state) =="
+            sudo cat /opt/persistence-probe/app.cfg
+          else
+            sudo mkdir -p /opt/persistence-probe
+            echo "probe app config v=1" | sudo tee /opt/persistence-probe/app.cfg >/dev/null
+            echo "== /opt probe created fresh =="
+          fi
+          # --- htop (نرم‌افزار تستی) ---
+          if command -v htop >/dev/null 2>&1; then
+            echo "== htop ALREADY INSTALLED ($(dpkg-query -W -f='${Version}' htop 2>/dev/null)) =="
+          else
+            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y htop >/dev/null 2>&1; then
+              echo "== htop installed fresh =="
+            else
+              echo "== WARN: htop install failed =="
+            fi
+          fi
+          echo "Probe step finished."
 
       - name: Configure SSH (fixed key + host keys)
         run: bash .github/scripts/ssh_configure.sh
@@ -159,7 +187,7 @@ jobs:
       - name: Initial state snapshot (early persistence)
         run: |
           echo "Creating initial persistent snapshot for this boot..."
-          if bash .github/scripts/save.sh; then
+          if timeout 420 bash .github/scripts/save.sh; then
             echo "Initial state snapshot OK"
           else
             echo "WARN: initial snapshot failed — periodic auto-sync will retry"
@@ -168,7 +196,7 @@ jobs:
       - name: Verify and report
         run: bash .github/scripts/server_report.sh
 
-      - name: Keep server alive (with periodic auto-sync + graceful signal flush)
+      - name: Keep server alive (periodic auto-sync + final save on lifetime end / signal)
         run: |
           set -uo pipefail
           LIFETIME_MIN=$(echo "${LIFETIME_MIN:-330}" | grep -Eo '^[0-9]+$' || echo 330)
@@ -177,12 +205,21 @@ jobs:
           echo "Auto-sync every ${SAVE_INTERVAL_MIN} min (upload only when data changed)"
           FLUSHED=0
           SYNC_PID=""
+          do_save() {
+            # هر ذخیره‌سازی با timeout تا هرگز باعث قفل/حلق‌آویز step نشود
+            if timeout 420 bash .github/scripts/save.sh; then
+              echo "[save] OK"
+            else
+              local rc=$?
+              echo "[save] WARN: save failed (rc=$rc)"
+            fi
+          }
           flush_sync() {
             if [ "$FLUSHED" = "0" ]; then
               FLUSHED=1
               [ -n "$SYNC_PID" ] && kill -9 "$SYNC_PID" 2>/dev/null || true
-              echo "[keepalive] termination received — executing immediate state save..."
-              bash .github/scripts/save.sh || echo "[keepalive] WARN: flush save failed"
+              echo "[keepalive] termination received — executing immediate final state save..."
+              do_save
             fi
           }
           trap 'flush_sync; exit 0' SIGTERM SIGINT SIGQUIT SIGHUP
@@ -193,7 +230,11 @@ jobs:
             while true; do
               sleep "$INTERVAL"
               echo "[auto-sync $(date -u '+%T')] periodic state save..."
-              bash .github/scripts/save.sh && echo "[auto-sync] OK" || echo "[auto-sync] WARN: save failed (will retry next interval)"
+              if timeout 420 bash .github/scripts/save.sh; then
+                echo "[auto-sync] OK"
+              else
+                echo "[auto-sync] WARN: save failed (will retry next interval)"
+              fi
             done
           ) &
           SYNC_PID=$!
@@ -203,15 +244,6 @@ jobs:
             sleep 3 || { echo "[keepalive] sleep interrupted"; break; }
           done
           kill -9 "$SYNC_PID" 2>/dev/null || true
-          echo "[keepalive] lifetime reached — run will now end gracefully and save final state."
-
-      - name: Final state save (runs always — incl. cancel)
-        if: always()
-        timeout-minutes: 8
-        run: |
-          echo "Executing final state save..."
-          if bash .github/scripts/save.sh; then
-            echo "Final state save: OK"
-          else
-            echo "WARN: final state save failed (periodic auto-sync snapshots still protect data)"
-          fi
+          echo "[keepalive] lifetime reached — executing final state save (in this step)..."
+          do_save
+          echo "[keepalive] done — run ending normally."
