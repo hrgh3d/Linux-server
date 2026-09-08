@@ -33,6 +33,9 @@ EXCLUDES=(
   --exclude='ssl'
   --exclude='alternatives'
   --exclude='ld.so.cache'
+  # sudoers هر بار توسط خود workflow ساخته می‌شود؛ ذخیره‌سازی آن فقط ریسک خراب شدن sudo را دارد
+  --exclude='sudoers'
+  --exclude='sudoers.d'
 )
 
 # 1) لیست پکیج‌ها
@@ -69,9 +72,9 @@ while IFS= read -r p; do
   fi
 done < "$SCRIPT_DIR/persist.list"
 
-# 3) ساخت آرشیو
+# 4) ساخت آرشیو (مالکیت به root نرمال می‌شود تا restore بدون مشکل باشد)
 sudo chown -R "$(id -u):$(id -g)" "$WORK" 2>/dev/null || true
-tar -czf state.tar.gz -C "$WORK" .
+tar --owner=0 --group=0 -czf state.tar.gz -C "$WORK" .
 log "archive: $(du -h state.tar.gz | cut -f1)"
 
 # 4) آپلود روی Release چرخشی

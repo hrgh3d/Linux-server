@@ -38,15 +38,18 @@ if [ -f "$RESTORE/packages.list" ]; then
 fi
 
 # ── بازگردانی فایل‌ها ──
-# فایل‌های حساس میزبان را بازنویسی نمی‌کنیم؛ بقیه‌ی /etc و سایر مسیرها بازگردانی می‌شوند.
+# نکتهٔ مهم: مالکیت (owner/group) از آرشیو حفظ نمی‌شود تا فایل‌های سیستمی با
+# مالکیت root ساخته شوند و sudo هرگز خراب نشود.
+# فایل‌های حساس میزبان و sudoers (که هر بار توسط workflow ساخته می‌شوند) بازنویسی نمی‌شوند.
 restore_dir() {
   local rel="$1" dst="$2"
   if [ -d "$RESTORE/$rel" ]; then
     sudo mkdir -p "$dst"
-    sudo rsync -a \
+    sudo rsync -a --no-owner --no-group \
       --exclude='resolv.conf' --exclude='hostname' --exclude='machine-id' \
       --exclude='mtab' --exclude='fstab' --exclude='apt' --exclude='ssl' \
       --exclude='alternatives' --exclude='ld.so.cache' \
+      --exclude='sudoers' --exclude='sudoers.d' \
       "$RESTORE/$rel/" "$dst/" 2>/dev/null || true
     log "restored /$rel -> $dst"
   fi
