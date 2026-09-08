@@ -39,14 +39,14 @@ sudo tar -xzf /tmp/state.tar.gz -C "$RESTORE" 2>/dev/null || {
 # ---------------------------------------------------------------- پکیج‌ها
 if [ -f "$RESTORE/user_packages.list" ] && [ -s "$RESTORE/user_packages.list" ]; then
   log "Reinstalling user-installed packages..."
-  (sudo apt-get update -y || true) 2>&1 | tail -2
+  (timeout 300 sudo apt-get update -y -o DPkg::Lock::Timeout=120 || true) 2>&1 | tail -2
   FAILED=0
   while IFS= read -r pkg; do
     [ -n "$pkg" ] || continue
     case "$pkg" in \#*) continue ;; esac
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+    if ! timeout 300 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=120 "$pkg" >/dev/null 2>&1; then
       # تلاش دوم
-      if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+      if ! timeout 300 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=120 "$pkg" >/dev/null 2>&1; then
         log "WARN: could not reinstall package '$pkg' (will retry in future cycles)"
         FAILED=$((FAILED+1))
       fi

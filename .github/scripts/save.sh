@@ -21,14 +21,14 @@ log "Starting persistent state snapshot..."
 sudo rm -rf "$WORK"
 mkdir -p "$WORK"
 
-# 1) لیست پکیج‌ها
+# 1) لیست پکیج‌ها (با timeout تا قفل dpkg باعث حلق‌آویز نشود)
 if command -v dpkg &>/dev/null; then
-  sudo dpkg --get-selections > "$WORK/packages.list" 2>/dev/null || true
+  timeout 90 sudo dpkg --get-selections > "$WORK/packages.list" 2>/dev/null || true
 fi
 if command -v apt-mark &>/dev/null; then
-  sudo apt-mark showmanual > "$WORK/manual_packages.list" 2>/dev/null || true
+  timeout 60 sudo apt-mark showmanual > "$WORK/manual_packages.list" 2>/dev/null || true
   if [ -f /tmp/base_manual_packages.list ]; then
-    comm -23 <(sudo apt-mark showmanual | sort) <(sort /tmp/base_manual_packages.list) \
+    comm -23 <(timeout 60 sudo apt-mark showmanual | sort) <(sort /tmp/base_manual_packages.list) \
       > "$WORK/user_packages.list" 2>/dev/null || true
   fi
 fi

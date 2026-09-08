@@ -87,7 +87,12 @@ jobs:
             || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             openssh-server sudo curl wget git tar rsync jq python3 ca-certificates
           # لیست پکیج‌های manual پایه‌ی image برای محاسبه‌ی پکیج‌های کاربر در save
-          apt-mark showmanual | sort > /tmp/base_manual_packages.list || true
+          timeout 60 apt-mark showmanual | sort > /tmp/base_manual_packages.list || true
+          # در حالت تست (probe)، نرم‌افزار را همین‌جا و بدون درگیری با قفل dpkg نصب می‌کنیم
+          if [ "${PROBE_ENABLED:-false}" = "true" ]; then
+            timeout 180 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 htop >/dev/null 2>&1 \
+              && echo "htop installed (probe) OK" || echo "WARN: htop install failed"
+          fi
           echo "Base system ready"
 
       - name: Create user Hamid and configure sudo
@@ -144,12 +149,12 @@ jobs:
             echo "probe app config v=1" | sudo tee /opt/persistence-probe/app.cfg >/dev/null
             echo "== /opt probe created fresh =="
           fi
-          # --- htop (نرم‌افزار تستی) ---
+          # --- htop (نرم‌افزار تستی) — در base نصب شده؛ فقط بررسی/تلاش امن
           if command -v htop >/dev/null 2>&1; then
             echo "== htop ALREADY INSTALLED ($(dpkg-query -W -f='${Version}' htop 2>/dev/null)) =="
           else
-            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y htop >/dev/null 2>&1; then
-              echo "== htop installed fresh =="
+            if timeout 180 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 htop >/dev/null 2>&1; then
+              echo "== htop installed (fallback) =="
             else
               echo "== WARN: htop install failed =="
             fi
