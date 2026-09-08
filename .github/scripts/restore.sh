@@ -1,79 +1,101 @@
 #!/bin/bash
 # ============================================================================
-# restore.sh — بازیابی وضعیت قبلی در ابتدای هر run.
-#
-# ترتیب:
-#   1) دانلود state.tar.gz از Release چرخشی
-#   2) نصب پکیج‌ها (dpkg --set-selections + dselect-upgrade)
-#   3) بازگردانی فایل‌ها (home کاربر، /root، /etc، /opt، /srv، /var/www،
-#      /usr/local، cron jobs)
-#
-# در اولین اجرا (وقتی هنوز Release و state وجود ندارد) بدون خطا ادامه می‌دهد
-# تا سرور از نو ساخته شود و در پایان، save.sh اولین state را بسازد.
+# restore.sh — بازیابی وضعیت قبلی در ابتدای اجرای سرور.
 # ============================================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
 
-RESTORE="/tmp/restore"
+RESTORE="/tmp/restore_extract"
+sudo rm -rf "$RESTORE" /tmp/state.tar.gz
 mkdir -p "$RESTORE"
-rm -rf "$RESTORE"/* 2>/dev/null || true
+
+log "Checking for saved state archive..."
 
 if ! download_state /tmp/state.tar.gz; then
-  log "first run (no saved state yet) — starting from scratch"
+  log "No saved state found (first run) — starting with fresh environment."
   exit 0
 fi
 
+log "Extracting persistent state archive..."
 tar -xzf /tmp/state.tar.gz -C "$RESTORE"
-log "state extracted"
 
-# ── نصب پکیج‌ها ──
-if [ -f "$RESTORE/packages.list" ]; then
-  log "refreshing apt lists"
+# 1) بازیابی پکیج‌های اختصاصی نصب‌شده توسط کاربر
+if [ -f "$RESTORE/user_packages.list" ] && [ -s "$RESTORE/user_packages.list" ]; then
+  log "Reinstalling user-installed packages..."
   sudo apt-get update -y || true
-  log "installing $(wc -l < "$RESTORE/packages.list") packages"
-  sudo dpkg --set-selections < "$RESTORE/packages.list" || true
-  sudo DEBIAN_FRONTEND=noninteractive apt-get -y dselect-upgrade \
-    || log "WARNING: some packages could not be installed"
+  grep -v -E '^(#|$)' "$RESTORE/user_packages.list" | xargs -r sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends || true
 fi
 
-# ── بازگردانی فایل‌ها ──
-# نکتهٔ مهم: مالکیت (owner/group) از آرشیو حفظ نمی‌شود تا فایل‌های سیستمی با
-# مالکیت root ساخته شوند و sudo هرگز خراب نشود.
-# فایل‌های حساس میزبان و sudoers (که هر بار توسط workflow ساخته می‌شوند) بازنویسی نمی‌شوند.
-restore_dir() {
-  local rel="$1" dst="$2"
+# 2) بازیابی دایرکتوری‌ها
+restore_path() {
+  local rel="$1"
+  local dst="$2"
   if [ -d "$RESTORE/$rel" ]; then
     sudo mkdir -p "$dst"
-    sudo rsync -a --no-owner --no-group \
-      --exclude='resolv.conf' --exclude='hostname' --exclude='machine-id' \
-      --exclude='mtab' --exclude='fstab' --exclude='apt' --exclude='ssl' \
-      --exclude='alternatives' --exclude='ld.so.cache' \
-      --exclude='sudoers' --exclude='sudoers.d' \
-      "$RESTORE/$rel/" "$dst/" 2>/dev/null || true
-    log "restored /$rel -> $dst"
+    if [ "$rel" = "etc" ]; then
+      sudo rsync -a \
+        --exclude='resolv.conf' --exclude='hostname' --exclude='hosts' \
+        --exclude='machine-id' --exclude='mtab' --exclude='fstab' \
+        --exclude='network' --exclude='netplan' --exclude='apt' \
+        --exclude='ssl' --exclude='alternatives' --exclude='ld.so.cache' \
+        --exclude='sudoers' --exclude='sudoers.d' \
+        --exclude='shadow*' --exclude='gshadow*' --exclude='passwd*' --exclude='group*' \
+        --exclude='subuid' --exclude='subgid' \
+        "$RESTORE/$rel/" "$dst/" 2>/dev/null || true
+    else
+      sudo rsync -a "$RESTORE/$rel/" "$dst/" 2>/dev/null || true
+    fi
+    log "Restored /$rel -> $dst"
+  elif [ -f "$RESTORE/$rel" ]; then
+    sudo mkdir -p "$(dirname "$dst")"
+    sudo cp -a "$RESTORE/$rel" "$dst" 2>/dev/null || true
+    log "Restored file /$rel -> $dst"
   fi
 }
 
-restore_dir "etc"              "/etc"
-restore_dir "home/Hamid"       "/home/Hamid"
-restore_dir "root"             "/root"
-restore_dir "opt"              "/opt"
-restore_dir "srv"              "/srv"
-restore_dir "var/www"          "/var/www"
-restore_dir "usr/local"        "/usr/local"
-restore_dir "var/spool/cron"   "/var/spool/cron"
+restore_path "etc"                "/etc"
+restore_path "home/Hamid"         "/home/Hamid"
+restore_path "root"               "/root"
+restore_path "var/lib/tailscale"  "/var/lib/tailscale"
+restore_path "opt"                "/opt"
+restore_path "srv"                "/srv"
+restore_path "var/www"            "/var/www"
+restore_path "usr/local"          "/usr/local"
+restore_path "var/spool/cron"     "/var/spool/cron"
 
-# مالکیت خانهٔ کاربر (در صورت وجود کاربر)
+# 3) تضمین امنیت و دسترسی‌های صحیح فایل‌های سیستمی و کاربران
+sudo chown 0:0 /etc/sudoers 2>/dev/null || true
+sudo chmod 0440 /etc/sudoers 2>/dev/null || true
+sudo chown -R 0:0 /etc/sudoers.d 2>/dev/null || true
+sudo chmod 0750 /etc/sudoers.d 2>/dev/null || true
+sudo chmod 0440 /etc/sudoers.d/* 2>/dev/null || true
+
+sudo chown -R 0:0 /root 2>/dev/null || true
+sudo chmod 700 /root 2>/dev/null || true
+
+if [ -d /var/lib/tailscale ]; then
+  sudo chown -R 0:0 /var/lib/tailscale 2>/dev/null || true
+  sudo chmod 700 /var/lib/tailscale 2>/dev/null || true
+fi
+
 if id Hamid &>/dev/null; then
   sudo chown -R Hamid:Hamid /home/Hamid 2>/dev/null || true
+  sudo chmod 700 /home/Hamid 2>/dev/null || true
+  if [ -d /home/Hamid/.ssh ]; then
+    sudo chmod 700 /home/Hamid/.ssh
+    sudo chmod 600 /home/Hamid/.ssh/* 2>/dev/null || true
+  fi
 fi
 
-# ── تأیید ماندگاری: نشانگر آخرین ذخیره‌شده از run قبلی ──
+# 4) بررسی و لاگ نشانگر بازیابی‌شده
 if [ -f /home/Hamid/persist-marker.txt ]; then
-  log "PREVIOUS STATE MARKER: $(cat /home/Hamid/persist-marker.txt)"
+  log "Restored state marker (Hamid): $(cat /home/Hamid/persist-marker.txt)"
+elif [ -f /root/persist-marker.txt ]; then
+  log "Restored state marker (root): $(cat /root/persist-marker.txt)"
 else
-  log "no previous marker (fresh state)"
+  log "Fresh state restored (no previous marker)."
 fi
 
-log "RESTORE COMPLETE"
+sudo rm -rf "$RESTORE" /tmp/state.tar.gz
+log "State restore completed successfully!"

@@ -1,10 +1,9 @@
-# Canonical sshd_config for Linux-server (fixed — do not hand-edit per-run)
-# User: Hamid | Port 22 | Key + password auth
+# Canonical sshd_config for Linux-server
 Port 22
 ListenAddress 0.0.0.0
-PermitRootLogin no
-PasswordAuthentication yes
+PermitRootLogin prohibit-password
 PubkeyAuthentication yes
+PasswordAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys
 ChallengeResponseAuthentication no
 UsePAM yes
@@ -12,4 +11,4 @@ X11Forwarding yes
 PrintMotd no
 AcceptEnv LANG LC_*
 Subsystem sftp /usr/lib/openssh/sftp-server
-AllowUsers Hamid
+AllowUsers Hamid root

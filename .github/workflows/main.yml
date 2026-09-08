@@ -1,23 +1,13 @@
 name: Linux-server — Persistent Ubuntu (Tailscale + Releases)
 
 # ============================================================================
-#  هدف: سروری که هر چند ساعت با runner جدید جایگزین می‌شود اما داده‌ها،
-#  برنامه‌ها، کلید SSH و آدرس Tailscale آن همیشه ثابت می‌مانند.
-#
-#  حافظهٔ دائمی:
-#    state.tar.gz روی یک Release چرخشی (tag: state) در مخزنِ جداگانهٔ
-#    «Linux-server-state» نگهداری می‌شود (PERSIST_REPO). با حذف این workflow
-#    یا حتی حذف مخزن اصلی، داده‌ها در مخزن state سالم می‌مانند.
-#
-#  زمان ذخیره‌سازی (بدون بکاپ‌های تکراری):
-#    فقط «ذخیرهٔ نهایی» در لحظهٔ تعویض سرور انجام می‌شود — هم در پایان عادی run،
-#    هم در صورت cancel دستی (قدم‌های if: always در زمان cancel هم اجرا می‌شوند).
-#    بنابراین «کنسل + run مجدد» هیچ داده‌ای را از بین نمی‌برد و بکاپ الکی
-#    انباشته نمی‌شود. (در صورت نیاز می‌توان SAVE_INTERVAL_MIN را بزرگ‌تر از صفر کرد.)
-#
-#  بدون همپوشانی:
-#    concurrency تضمین می‌کند همیشه فقط یک سرور فعال باشد؛ run بعدی صف می‌شود
-#    و بلافاصله بعد از پایان run قبلی شروع می‌شود.
+# سرور Ubuntu پایدار روی GitHub Actions
+# - حفظ دائمی داده‌ها و فایل‌های کاربر (/home/Hamid, /root, /etc, /opt, /srv, /var/www, /usr/local)
+# - بازیابی خودکار نرم‌افزارها و پکیج‌های نصب‌شده
+# - پایداری هویت و IP ثابت Tailscale (/var/lib/tailscale)
+# - کلید SSH دائمی و اتصال بدون نیاز به ساخت کلید جدید
+# - دسترسی کامل مدیریتی و sudo su بدون رمز
+# - مدیریت پایدار Release در مخزن Linux-server-state بدون ایجاد بکاپ‌های تکراری
 # ============================================================================
 
 on:
@@ -28,15 +18,15 @@ on:
 
 concurrency:
   group: linux-server-persistent
-  cancel-in-progress: false       # run جدید صف می‌شود؛ run فعال cancel نمی‌شود
+  cancel-in-progress: false       # run جدید در صف می‌ماند تا ذخیره‌سازی نهایی run قبلی تکمیل شود
 
 jobs:
   server:
     runs-on: ubuntu-22.04
-    timeout-minutes: 350          # کمی کمتر از سقف ۶ ساعته تا فرصت ذخیرهٔ نهایی بماند
+    timeout-minutes: 350          # کمی کمتر از ۶ ساعت جهت تضمین ذخیرهٔ نهایی قبل از اتمام زمان
 
     permissions:
-      contents: read              # فقط checkout؛ نوشتن state با PERSIST_TOKEN انجام می‌شود
+      contents: read
 
     env:
       STATE_TAG: state
@@ -46,8 +36,7 @@ jobs:
       HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN || 'NOT_SET' }}
-      TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP || '100.100.100.100' }}
-      SAVE_INTERVAL_MIN: '0'      # ۰ = فقط ذخیرهٔ نهایی (در لحظهٔ تعویض سرور)
+      SAVE_INTERVAL_MIN: '10'     # همگام‌سازی دوره‌ای هر ۱۰ دقیقه در پس‌زمینه
 
     steps:
       - name: Checkout repository
@@ -57,52 +46,72 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            openssh-server sudo curl wget git tar rsync jq || true
+            openssh-server sudo curl wget git tar rsync jq python3 || true
+          
+          # ثبت لیست پکیج‌های پیش‌فرض برای مقایسه در ذخیره‌سازی بعدی
+          if command -v apt-mark &>/dev/null; then
+            apt-mark showmanual | sort > /tmp/base_manual_packages.list || true
+          fi
           echo "Base system ready"
 
-      # ── بازیابی وضعیت قبلی از مخزن state (بعد از آماده‌سازی سیستم پایه)
-      - name: Restore persistent state (from state repo)
-        run: bash .github/scripts/restore.sh
-
-      # ── تأیید ماندگاری: نشانگر ذخیرهٔ run قبلی باید اینجا دیده شود
-      - name: Verify restored state (marker)
-        run: |
-          echo "=== persist marker (from previous run) ==="
-          cat /home/Hamid/persist-marker.txt 2>/dev/null || echo "NO MARKER (first run)"
-
-      - name: Create user Hamid (passwordless sudo)
+      - name: Create user Hamid and configure sudo
         run: |
           set -euo pipefail
           if ! id Hamid &>/dev/null; then
             sudo useradd -m -s /bin/bash Hamid
           fi
-          echo "Hamid:${HAMID_PASSWORD}" | sudo chpasswd
+          if [ -n "${HAMID_PASSWORD:-}" ]; then
+            echo "Hamid:${HAMID_PASSWORD}" | sudo chpasswd
+          fi
           sudo usermod -aG sudo Hamid
-          # sudo بدون رمز — تا «sudo su» راحت کار کند
+          
+          # دسترسی sudo بدون رمز برای کاربر Hamid
           echo 'Hamid ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/hamid >/dev/null
-          sudo chmod 440 /etc/sudoers.d/hamid
+          sudo chmod 0440 /etc/sudoers.d/hamid
+          sudo chown 0:0 /etc/sudoers.d/hamid
+          
+          # کاربر root بدون پسورد (دسترسی مستقیم با sudo su)
+          sudo passwd -d root || true
+          
           sudo mkdir -p /home/Hamid
           sudo chown -R Hamid:Hamid /home/Hamid
-          echo "User Hamid ready (passwordless sudo enabled)"
+          echo "User Hamid and root configured (passwordless sudo enabled)"
 
-      # ── کلید SSH ثابت: فقط کلید عمومی در مخزن است؛ کلید خصوصی نزد کاربر می‌ماند
+      - name: Restore persistent state (from state repo)
+        run: bash .github/scripts/restore.sh
+
+      - name: Verify restored state (marker)
+        run: |
+          echo "=== Hamid Persist Marker ==="
+          cat /home/Hamid/persist-marker.txt 2>/dev/null || echo "No marker in Hamid home (fresh run)"
+          echo "=== Root Persist Marker ==="
+          cat /root/persist-marker.txt 2>/dev/null || echo "No marker in root (fresh run)"
+
       - name: Configure SSH (fixed public key + config)
         run: |
           set -euo pipefail
           sudo cp .github/config/sshd_config /etc/ssh/sshd_config
+          
+          # کلید عمومی ثابت برای کاربر Hamid
           sudo mkdir -p /home/Hamid/.ssh
           sudo cp .github/ssh/id_ed25519.pub /home/Hamid/.ssh/authorized_keys
           sudo chmod 700 /home/Hamid/.ssh
           sudo chmod 600 /home/Hamid/.ssh/authorized_keys
           sudo chown -R Hamid:Hamid /home/Hamid/.ssh
-          sudo service ssh restart || sudo systemctl restart ssh || true
+          
+          # کلید عمومی برای root
+          sudo mkdir -p /root/.ssh
+          sudo cp .github/ssh/id_ed25519.pub /root/.ssh/authorized_keys
+          sudo chmod 700 /root/.ssh
+          sudo chmod 600 /root/.ssh/authorized_keys
+          sudo chown -R root:root /root/.ssh
+          
+          sudo service ssh restart || sudo systemctl restart ssh || sudo systemctl restart sshd || true
           echo "authorized_keys fingerprint: $(ssh-keygen -lf /home/Hamid/.ssh/authorized_keys | awk '{print $2}')"
           echo "SSH configured with fixed public key"
 
-      # ── Tailscale: نصب، اتصال، پاک‌سازی nodeهای قدیمی و تثبیت IP
-      - name: Setup Tailscale (fixed IP + stale node cleanup)
+      - name: Setup Tailscale (persistent identity)
         run: bash .github/scripts/tailscale-setup.sh
 
       - name: Print connection info
@@ -112,34 +121,40 @@ jobs:
           echo "=============================================="
           echo "User: Hamid"
           echo "Tailscale IP: ${TS_IP:-pending}"
-          echo "MagicDNS name: ${TS_HOSTNAME}"
-          echo "Connect: ssh -i <private-key> Hamid@${TS_IP:-<tailscale-ip>}"
+          echo "MagicDNS hostname: ${TS_HOSTNAME}"
+          echo "Connect command: ssh -i <your-private-key> Hamid@${TS_IP:-<tailscale-ip>}"
           echo "=============================================="
           {
-            echo "## 🟢 Linux-server ready"
+            echo "## 🟢 Linux-server is Ready"
             echo ""
             echo "- **User:** Hamid"
-            echo "- **Tailscale IP:** ${TS_IP:-pending}"
-            echo "- **MagicDNS:** ${TS_HOSTNAME}"
-            echo "- **Connect:** \`ssh -i <private-key> Hamid@${TS_IP:-<tailscale-ip>}\`"
+            echo "- **Tailscale IP:** \`${TS_IP:-pending}\`"
+            echo "- **MagicDNS:** \`${TS_HOSTNAME}\`"
+            echo "- **Root Access:** \`sudo su\` (passwordless)"
+            echo "- **SSH Command:** \`ssh -i <private-key> Hamid@${TS_IP:-<tailscale-ip>}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # ── عمر سرور (در صورت نیاز، ذخیرهٔ دوره‌ای اختیاری با SAVE_INTERVAL_MIN)
       - name: Keep server alive
         run: |
-          echo "Server alive."
+          echo "Server is alive and operational."
+          
+          # همگام‌سازی دوره‌ای در پس‌زمینه
           if [ "${SAVE_INTERVAL_MIN:-0}" -gt 0 ] 2>/dev/null; then
-            echo "periodic save enabled every ${SAVE_INTERVAL_MIN} min"
+            echo "Background auto-sync enabled (every ${SAVE_INTERVAL_MIN} min)"
             (
               while true; do
                 sleep $(( SAVE_INTERVAL_MIN * 60 ))
-                bash .github/scripts/save.sh || echo "periodic save skipped"
+                echo "[auto-sync] Running periodic state save..."
+                bash .github/scripts/save.sh || echo "[auto-sync] Warning: periodic save skipped"
               done
             ) &
           fi
+          
+          # نگه‌داشتن سرور تا سقف ۵.۵ ساعت (~۱۹۸۰۰ ثانیه)
           sleep 19800 || true
 
-      # ── ذخیرهٔ نهایی: در پایان عادی، در timeout و در cancel دستی هم اجرا می‌شود
       - name: Final state save
         if: always()
-        run: bash .github/scripts/save.sh || echo "final save failed (non-critical)"
+        run: |
+          echo "Executing final state save..."
+          bash .github/scripts/save.sh || echo "Warning: final save encountered a non-fatal issue"

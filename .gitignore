@@ -1,2 +1,5 @@
 state.tar.gz
 artifacts/
+__pycache__/
+*.pyc
+.cache/
