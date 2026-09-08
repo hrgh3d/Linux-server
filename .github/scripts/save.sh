@@ -7,13 +7,21 @@ echo "=== SAVING PERSISTENT STATE ==="
 mkdir -p persistent/data/home/Hamid/.ssh
 mkdir -p persistent/data/etc/ssh
 mkdir -p persistent/data/var/log
+mkdir -p persistent/data/ssh  # برای ذخیره کلید SSH
+mkdir -p persistent/data/packages  # برای ذخیره packages.list داخل archive
 
-# 1. Save installed packages
+# 1. Save installed packages (inside archive too)
 sudo dpkg --get-selections > persistent/packages.list || echo "Failed to save package list"
+cp persistent/packages.list persistent/data/packages/packages.list || echo "Failed to copy package list"
 echo "Package list saved: $(wc -l < persistent/packages.list) packages"
 
-# 2. Save SSH server configuration
+# 2. Save SSH server configuration + private key (same as System 1)
 sudo cp /etc/ssh/sshd_config persistent/data/etc/ssh/ || echo "SSH config copy failed"
+if [ -f ".github/ssh/id_ed25519" ]; then
+  cp ".github/ssh/id_ed25519" persistent/data/ssh/id_ed25519 || echo "Private SSH key copy failed"
+  cp ".github/ssh/id_ed25519.pub" persistent/data/ssh/id_ed25519.pub || echo "Public SSH key copy failed"
+fi
+echo "SSH keys saved"
 
 # 3. Save user data and configurations (exclude temporary files)
 if [ -d /home/Hamid ]; then
@@ -34,7 +42,23 @@ sudo chmod -R +r persistent/data/ || true
 sudo find persistent/data -type f -exec chmod 644 {} \; 2>/dev/null || true
 sudo find persistent/data -type d -exec chmod 755 {} \; 2>/dev/null || true
 
-# 6. Create compressed archive
+# 6. Save to SAFE directory (separate from archive/workflow) — for persistence across cancel/restart
+mkdir -p persistent/safe/ssh
+mkdir -p persistent/safe/packages
+mkdir -p persistent/safe/home/Hamid/.ssh
+mkdir -p persistent/safe/etc/ssh
+cp ".github/ssh/id_ed25519" persistent/safe/ssh/ || echo "Private SSH key safe copy failed"
+cp ".github/ssh/id_ed25519.pub" persistent/safe/ssh/ || echo "Public SSH key safe copy failed"
+cp persistent/packages.list persistent/safe/packages/packages.list || echo "Package list safe copy failed"
+if [ -f "/etc/ssh/sshd_config" ]; then
+  cp /etc/ssh/sshd_config persistent/safe/etc/ssh/ || echo "SSH config safe copy failed"
+fi
+if [ -d /home/Hamid ]; then
+  cp -r /home/Hamid/.ssh/* persistent/safe/home/Hamid/.ssh/ 2>/dev/null || true
+fi
+echo "SAFE directory saved: $(find persistent/safe/ -type f | wc -l) files"
+
+# 7. Create compressed archive
 cd persistent/data || exit 1
 tar -czf ../../state.tar.gz . || echo "Archive creation failed (some files may be skipped)"
 cd ../..
