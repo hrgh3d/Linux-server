@@ -10,7 +10,7 @@ WORK="/tmp/persist-work"
 sudo rm -rf "$WORK"
 mkdir -p "$WORK"
 
-log "Starting state backup..."
+log "Starting fast state backup..."
 
 # 1) ثبت لیست پکیج‌های نصب‌شده
 if command -v dpkg &>/dev/null; then
@@ -53,16 +53,19 @@ ETC_EXCLUDES=(
   --exclude='ld.so.cache'
   --exclude='sudoers'
   --exclude='sudoers.d'
-  --exclude='shadow'
-  --exclude='shadow-'
-  --exclude='gshadow'
-  --exclude='gshadow-'
-  --exclude='passwd'
-  --exclude='passwd-'
-  --exclude='group'
-  --exclude='group-'
+  --exclude='shadow*'
+  --exclude='gshadow*'
+  --exclude='passwd*'
+  --exclude='group*'
   --exclude='subuid'
   --exclude='subgid'
+)
+
+GEN_EXCLUDES=(
+  --exclude='.cache'
+  --exclude='__pycache__'
+  --exclude='hostedtoolcache'
+  --exclude='containerd'
 )
 
 while IFS= read -r p; do
@@ -74,7 +77,7 @@ while IFS= read -r p; do
     if [ "$p" = "/etc" ]; then
       sudo rsync -a "${ETC_EXCLUDES[@]}" "$p/" "$WORK/$rel/" 2>/dev/null || true
     else
-      sudo rsync -a --exclude='.cache' "$p/" "$WORK/$rel/" 2>/dev/null || true
+      sudo rsync -a "${GEN_EXCLUDES[@]}" "$p/" "$WORK/$rel/" 2>/dev/null || true
     fi
     log "saved directory: $p"
   elif [ -f "$p" ]; then

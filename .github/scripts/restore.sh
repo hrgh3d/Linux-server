@@ -58,10 +58,11 @@ restore_path "etc"                "/etc"
 restore_path "home/Hamid"         "/home/Hamid"
 restore_path "root"               "/root"
 restore_path "var/lib/tailscale"  "/var/lib/tailscale"
+restore_path "usr/local/bin"      "/usr/local/bin"
+restore_path "usr/local/sbin"     "/usr/local/sbin"
 restore_path "opt"                "/opt"
 restore_path "srv"                "/srv"
 restore_path "var/www"            "/var/www"
-restore_path "usr/local"          "/usr/local"
 restore_path "var/spool/cron"     "/var/spool/cron"
 
 # 3) تضمین امنیت و دسترسی‌های صحیح فایل‌های سیستمی و کاربران
