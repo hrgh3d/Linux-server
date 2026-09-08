@@ -39,7 +39,15 @@ EXCLUDES=(
 sudo dpkg --get-selections > "$WORK/packages.list"
 log "packages: $(wc -l < "$WORK/packages.list")"
 
-# 2) فایل‌ها و پوشه‌های دائمی (طبق manifest)
+# 2) نشانگر آخرین ذخیره — داخل state می‌رود تا در run بعدی قابل تأیید باشد
+if [ -d /home/Hamid ]; then
+  echo "saved_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') run_id=${GITHUB_RUN_ID:-local}" \
+    | sudo tee /home/Hamid/persist-marker.txt >/dev/null
+  sudo chown Hamid:Hamid /home/Hamid/persist-marker.txt 2>/dev/null || true
+  log "marker written"
+fi
+
+# 3) فایل‌ها و پوشه‌های دائمی (طبق manifest)
 while IFS= read -r p; do
   [ -n "$p" ] || continue
   case "$p" in \#*) continue ;; esac

@@ -4,18 +4,20 @@ name: Linux-server — Persistent Ubuntu (Tailscale + Releases)
 #  هدف: سروری که هر چند ساعت با runner جدید جایگزین می‌شود اما داده‌ها،
 #  برنامه‌ها، کلید SSH و آدرس Tailscale آن همیشه ثابت می‌مانند.
 #
-#  مدل ذخیره‌سازی:
-#    - state.tar.gz روی یک Release چرخشی (tag: state) در همین مخزن نگهداری می‌شود
-#      (نه داخل git) → فایل‌های حجیم تاریخچهٔ git را باد نمی‌کنند.
-#    - در شروع هر run، restore.sh آخرین state را دانلود و بازیابی می‌کند.
-#    - در پایان هر run (و هر ۳۰ دقیقه در حین اجرا)، save.sh state جدید را
-#      روی همان Release آپلود می‌کند. پس حتی اگر run به صورت دستی cancel شود
-#      (قدم‌های if: always) آخرین وضعیت ذخیره می‌شود.
+#  حافظهٔ دائمی:
+#    state.tar.gz روی یک Release چرخشی (tag: state) در مخزنِ جداگانهٔ
+#    «Linux-server-state» نگهداری می‌شود (PERSIST_REPO). با حذف این workflow
+#    یا حتی حذف مخزن اصلی، داده‌ها در مخزن state سالم می‌مانند.
 #
-#  نکته‌ی زمان‌بندی:
-#    - cron هر ۵ ساعت یک run صف می‌کند؛ هر run حدود ۵ ساعت و ۴۵ دقیقه زنده
-#      می‌ماند. به کمک concurrency (cancel-in-progress: false) run بعدی تا پایان
-#      run قبلی در صف می‌ماند → هرگز دو سرور همزمان بالا نیستند و وقفه تقریباً صفر است.
+#  زمان ذخیره‌سازی (بدون بکاپ‌های تکراری):
+#    فقط «ذخیرهٔ نهایی» در لحظهٔ تعویض سرور انجام می‌شود — هم در پایان عادی run،
+#    هم در صورت cancel دستی (قدم‌های if: always در زمان cancel هم اجرا می‌شوند).
+#    بنابراین «کنسل + run مجدد» هیچ داده‌ای را از بین نمی‌برد و بکاپ الکی
+#    انباشته نمی‌شود. (در صورت نیاز می‌توان SAVE_INTERVAL_MIN را بزرگ‌تر از صفر کرد.)
+#
+#  بدون همپوشانی:
+#    concurrency تضمین می‌کند همیشه فقط یک سرور فعال باشد؛ run بعدی صف می‌شود
+#    و بلافاصله بعد از پایان run قبلی شروع می‌شود.
 # ============================================================================
 
 on:
@@ -24,10 +26,9 @@ on:
     - cron: '0 */5 * * *'        # هر ۵ ساعت (UTC)
   repository_dispatch:
 
-# تضمین می‌کند که همیشه فقط یک نمونه از سرور فعال باشد
 concurrency:
   group: linux-server-persistent
-  cancel-in-progress: false       # run جدید صف می‌شود، run فعال cancel نمی‌شود
+  cancel-in-progress: false       # run جدید صف می‌شود؛ run فعال cancel نمی‌شود
 
 jobs:
   server:
@@ -35,17 +36,18 @@ jobs:
     timeout-minutes: 350          # کمی کمتر از سقف ۶ ساعته تا فرصت ذخیرهٔ نهایی بماند
 
     permissions:
-      contents: write             # لازم برای دانلود/آپلود Release و state
+      contents: read              # فقط checkout؛ نوشتن state با PERSIST_TOKEN انجام می‌شود
 
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GH_REPO: ${{ github.repository }}
       STATE_TAG: state
+      PERSIST_REPO: hrgh3d/Linux-server-state
+      PERSIST_TOKEN: ${{ secrets.PERSIST_TOKEN }}
       TS_HOSTNAME: linux-server-vps
       HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN || 'NOT_SET' }}
       TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP || '100.100.100.100' }}
+      SAVE_INTERVAL_MIN: '0'      # ۰ = فقط ذخیرهٔ نهایی (در لحظهٔ تعویض سرور)
 
     steps:
       - name: Checkout repository
@@ -60,11 +62,17 @@ jobs:
             openssh-server sudo curl wget git tar rsync jq || true
           echo "Base system ready"
 
-      # ── بازیابی وضعیت قبلی از Release (بعد از آماده‌سازی سیستم پایه)
-      - name: Restore persistent state (from GitHub Releases)
+      # ── بازیابی وضعیت قبلی از مخزن state (بعد از آماده‌سازی سیستم پایه)
+      - name: Restore persistent state (from state repo)
         run: bash .github/scripts/restore.sh
 
-      - name: Create user Hamid
+      # ── تأیید ماندگاری: نشانگر ذخیرهٔ run قبلی باید اینجا دیده شود
+      - name: Verify restored state (marker)
+        run: |
+          echo "=== persist marker (from previous run) ==="
+          cat /home/Hamid/persist-marker.txt 2>/dev/null || echo "NO MARKER (first run)"
+
+      - name: Create user Hamid (passwordless sudo)
         run: |
           set -euo pipefail
           if ! id Hamid &>/dev/null; then
@@ -72,9 +80,12 @@ jobs:
           fi
           echo "Hamid:${HAMID_PASSWORD}" | sudo chpasswd
           sudo usermod -aG sudo Hamid
+          # sudo بدون رمز — تا «sudo su» راحت کار کند
+          echo 'Hamid ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/hamid >/dev/null
+          sudo chmod 440 /etc/sudoers.d/hamid
           sudo mkdir -p /home/Hamid
           sudo chown -R Hamid:Hamid /home/Hamid
-          echo "User Hamid ready"
+          echo "User Hamid ready (passwordless sudo enabled)"
 
       # ── کلید SSH ثابت: فقط کلید عمومی در مخزن است؛ کلید خصوصی نزد کاربر می‌ماند
       - name: Configure SSH (fixed public key + config)
@@ -87,6 +98,7 @@ jobs:
           sudo chmod 600 /home/Hamid/.ssh/authorized_keys
           sudo chown -R Hamid:Hamid /home/Hamid/.ssh
           sudo service ssh restart || sudo systemctl restart ssh || true
+          echo "authorized_keys fingerprint: $(ssh-keygen -lf /home/Hamid/.ssh/authorized_keys | awk '{print $2}')"
           echo "SSH configured with fixed public key"
 
       # ── Tailscale: نصب، اتصال، پاک‌سازی nodeهای قدیمی و تثبیت IP
@@ -103,13 +115,6 @@ jobs:
           echo "MagicDNS name: ${TS_HOSTNAME}"
           echo "Connect: ssh -i <private-key> Hamid@${TS_IP:-<tailscale-ip>}"
           echo "=============================================="
-          mkdir -p artifacts
-          {
-            echo "User: Hamid"
-            echo "Tailscale IP: ${TS_IP:-pending}"
-            echo "MagicDNS name: ${TS_HOSTNAME}"
-            echo "Command: ssh -i <private-key> Hamid@${TS_IP:-<tailscale-ip>}"
-          } > artifacts/connection-info.txt
           {
             echo "## 🟢 Linux-server ready"
             echo ""
@@ -119,37 +124,22 @@ jobs:
             echo "- **Connect:** \`ssh -i <private-key> Hamid@${TS_IP:-<tailscale-ip>}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload connection info artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: connection-info
-          path: artifacts/
-          retention-days: 30
-          if-no-files-found: ignore
-
-      # ── عمر سرور: در پس‌زمینه هر ۳۰ دقیقه ذخیره می‌شود
+      # ── عمر سرور (در صورت نیاز، ذخیرهٔ دوره‌ای اختیاری با SAVE_INTERVAL_MIN)
       - name: Keep server alive
         run: |
-          echo "Server alive. State is auto-saved every 30 minutes (background)."
-          (
-            while true; do
-              sleep 1800
-              bash .github/scripts/save.sh || echo "periodic save skipped"
-            done
-          ) &
+          echo "Server alive."
+          if [ "${SAVE_INTERVAL_MIN:-0}" -gt 0 ] 2>/dev/null; then
+            echo "periodic save enabled every ${SAVE_INTERVAL_MIN} min"
+            (
+              while true; do
+                sleep $(( SAVE_INTERVAL_MIN * 60 ))
+                bash .github/scripts/save.sh || echo "periodic save skipped"
+              done
+            ) &
+          fi
           sleep 19800 || true
 
-      # ── ذخیرهٔ نهایی (حتی در صورت cancel شدن run هم اجرا می‌شود)
+      # ── ذخیرهٔ نهایی: در پایان عادی، در timeout و در cancel دستی هم اجرا می‌شود
       - name: Final state save
         if: always()
         run: bash .github/scripts/save.sh || echo "final save failed (non-critical)"
-
-      - name: Upload final state artifact (backup copy)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: state-backup
-          path: state.tar.gz
-          retention-days: 90
-          if-no-files-found: ignore

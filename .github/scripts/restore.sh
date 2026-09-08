@@ -66,4 +66,11 @@ if id Hamid &>/dev/null; then
   sudo chown -R Hamid:Hamid /home/Hamid 2>/dev/null || true
 fi
 
+# ── تأیید ماندگاری: نشانگر آخرین ذخیره‌شده از run قبلی ──
+if [ -f /home/Hamid/persist-marker.txt ]; then
+  log "PREVIOUS STATE MARKER: $(cat /home/Hamid/persist-marker.txt)"
+else
+  log "no previous marker (fresh state)"
+fi
+
 log "RESTORE COMPLETE"
