@@ -1,11 +1,10 @@
-# Canonical sshd_config for Linux-server
+# Canonical sshd_config for Linux-server (v4)
 Port 22
 ListenAddress 0.0.0.0
 PermitRootLogin prohibit-password
 PubkeyAuthentication yes
 PasswordAuthentication yes
-AuthorizedKeysFile .ssh/authorized_keys
-ChallengeResponseAuthentication no
+KbdInteractiveAuthentication no
 UsePAM yes
 X11Forwarding yes
 PrintMotd no

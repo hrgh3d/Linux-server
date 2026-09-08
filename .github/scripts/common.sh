@@ -1,11 +1,12 @@
 #!/bin/bash
 # ============================================================================
-# common.sh — توابع مشترک لایه‌ی ماندگاری (Persistence).
+# common.sh — توابع مشترک لایه‌ی ماندگاری (Persistence) — نسخه‌ی v4.
 #
-# داده‌ها در یک آرشیو تک‌نسخه‌ای (state.tar.gz) بر روی Release با تگ 'state'
-# در مخزن اختصاصی PERSIST_REPO ذخیره و بازیابی می‌شوند.
-#
-# این اسکریپت از state_sync.py برای برقراری ارتباط مطمئن با GitHub API استفاده می‌کند.
+# داده‌ها در قالب یک اسنپ‌شات چرخشی (state-*.tar.gz) روی Release با تگ 'state'
+# در مخزن اختصاصی PERSIST_REPO نگهداری می‌شوند. اسکریپت state_sync.py:
+#   - آپلود با نام یکتا + حذف نسخه‌های قدیمی => همیشه دقیقاً یک state نگهداری می‌شود.
+#   - اگر محتوا نسبت به آخرین state تغییر نکرده باشد، آپلودی رخ نمی‌دهد
+#     (بدون تولید بکاپ اضافی حتی با Run مجدد یا Cancel پشت سر هم).
 # ============================================================================
 set -euo pipefail
 
@@ -19,7 +20,7 @@ log() { echo "[persist $(date -u '+%T')] $*"; }
 download_state() {
   local dest="${1:-state.tar.gz}"
   if python3 "$SCRIPT_DIR/state_sync.py" download "$dest"; then
-    log "state downloaded successfully -> $dest"
+    log "state downloaded successfully -> $dest ($(du -h "$dest" 2>/dev/null | cut -f1))"
     return 0
   else
     log "no existing state archive found or download failed"
@@ -27,6 +28,7 @@ download_state() {
   fi
 }
 
+# 0 = موفق (ذخیره شد یا به‌دلیل عدم تغییر رد شد)، 1 = خطا
 upload_state() {
   local src="${1:-state.tar.gz}"
   if [ ! -f "$src" ]; then
@@ -34,10 +36,10 @@ upload_state() {
     return 1
   fi
   if python3 "$SCRIPT_DIR/state_sync.py" upload "$src"; then
-    log "state successfully uploaded to $PERSIST_REPO tag '$STATE_TAG'"
+    log "state synced OK -> $PERSIST_REPO tag '$STATE_TAG'"
     return 0
   else
-    log "ERROR: upload failed"
+    log "ERROR: state upload failed"
     return 1
   fi
 }

@@ -1,29 +1,52 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases)
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v4]
 
 # ============================================================================
-# سرور Ubuntu پایدار روی GitHub Actions
-# - حفظ دائمی داده‌ها و فایل‌های کاربر (/home/Hamid, /root, /etc, /opt, /srv, /var/www, /usr/local)
-# - بازیابی خودکار نرم‌افزارها و پکیج‌های نصب‌شده
-# - پایداری هویت و IP ثابت Tailscale (/var/lib/tailscale)
-# - کلید SSH دائمی و اتصال بدون نیاز به ساخت کلید جدید
-# - دسترسی کامل مدیریتی و sudo su بدون رمز
-# - مدیریت پایدار Release در مخزن Linux-server-state بدون ایجاد بکاپ‌های تکراری
+# سرور Ubuntu پایدار روی GitHub Actions — معماری v4
+#
+# اصل معماری:
+#   Runner هر ~۶ ساعت از بین می‌رود؛ هیچ داده‌ای فقط روی Filesystem موقت
+#   Runner نمی‌ماند. State کاربر (فایل‌ها، /root، پکیج‌ها، کانفیگ‌ها، هویت
+#   Tailscale، کلیدهای Host) به‌صورت Rolling روی Release مخزن
+#   Linux-server-state همگام‌سازی می‌شود و هر چرخه‌ی جدید آن را بازمی‌گرداند.
+#
+# تضمین‌های کلیدی v4:
+#   - یک اسنپ‌شاتِ واحد (بدون بکاپ تکراری)؛ آپلود فقط وقتی محتوا عوض شده باشد.
+#   - Cancel/Re-run → بدون تولید state اضافی؛ آخرین وضعیت حفظ و بازگردانی می‌شود.
+#   - کلید SSH ثابت (کلید عمومی در مخزن) و کلیدهای Host پایدار در State.
+#   - هویت Tailscale بازیابی می‌شود => IP قبلی ثابت می‌ماند (+ pin اختیاری).
+#   - root بدون پسورد و `sudo su` بدون درخواست Password.
 # ============================================================================
 
 on:
   workflow_dispatch:
+    inputs:
+      lifetime_min:
+        description: 'طول عمر سرور در این Run به دقیقه (پیش‌فرض 330 ≈ 5.5 ساعت؛ حداکثر 340)'
+        required: false
+        default: '330'
+        type: string
+      probe:
+        description: 'نوشتن فایل/نصب نرم‌افزار تستی برای راستی‌آزمایی Persistence'
+        required: false
+        default: 'false'
+        type: string
+      selftest:
+        description: 'اجرای تست محلی SSH (sudo بدون رمز، sudo su، ورود root با کلید)'
+        required: false
+        default: 'true'
+        type: string
   schedule:
     - cron: '0 */5 * * *'        # هر ۵ ساعت (UTC)
   repository_dispatch:
 
 concurrency:
   group: linux-server-persistent
-  cancel-in-progress: false       # run جدید در صف می‌ماند تا ذخیره‌سازی نهایی run قبلی تکمیل شود
+  cancel-in-progress: false       # Run جدید در صف می‌ماند تا Run قبلی تمام/ذخیره شود
 
 jobs:
   server:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 350          # کمی کمتر از ۶ ساعت جهت تضمین ذخیرهٔ نهایی قبل از اتمام زمان
+    runs-on: ubuntu-24.04
+    timeout-minutes: 345          # کمی کمتر از ۶ ساعت؛ ذخیره‌سازی دوره‌ای در همین بازه انجام می‌شود
 
     permissions:
       contents: read
@@ -33,26 +56,38 @@ jobs:
       PERSIST_REPO: hrgh3d/Linux-server-state
       PERSIST_TOKEN: ${{ secrets.PERSIST_TOKEN }}
       TS_HOSTNAME: linux-server-vps
-      HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN || 'NOT_SET' }}
-      SAVE_INTERVAL_MIN: '10'     # همگام‌سازی دوره‌ای هر ۱۰ دقیقه در پس‌زمینه
+      TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP || '' }}
+      HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
+      SAVE_INTERVAL_MIN: '5'      # همگام‌سازی خودکار هر ۵ دقیقه (فقط در صورت تغییر واقعی)
+      LIFETIME_MIN: ${{ inputs.lifetime_min || '330' }}
+      PROBE_ENABLED: ${{ inputs.probe || 'false' }}
+      SS_SELFTEST: ${{ inputs.selftest || 'true' }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Init boot context
+        run: |
+          BOOT_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          echo "BOOT_TS=${BOOT_TS}" >> "$GITHUB_ENV"
+          echo "Boot started: ${BOOT_TS} (run ${GITHUB_RUN_ID}, attempt ${GITHUB_RUN_ATTEMPT:-1})"
+          sudo mkdir -p /root /home/Hamid 2>/dev/null || true
+          echo "boot_ts=${BOOT_TS} run_id=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT:-1} event=${GITHUB_EVENT_NAME}" | sudo tee -a /root/server.log >/dev/null
+          echo "BOOT_ID=${BOOT_TS}" >> "$GITHUB_ENV"
 
       - name: Setup base system
         run: |
           set -euo pipefail
           sudo apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            openssh-server sudo curl wget git tar rsync jq python3 || true
-          
-          # ثبت لیست پکیج‌های پیش‌فرض برای مقایسه در ذخیره‌سازی بعدی
-          if command -v apt-mark &>/dev/null; then
-            apt-mark showmanual | sort > /tmp/base_manual_packages.list || true
-          fi
+            openssh-server sudo curl wget git tar rsync jq python3 ca-certificates \
+            || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            openssh-server sudo curl wget git tar rsync jq python3 ca-certificates
+          # لیست پکیج‌های manual پایه‌ی image برای محاسبه‌ی پکیج‌های کاربر در save
+          apt-mark showmanual | sort > /tmp/base_manual_packages.list || true
           echo "Base system ready"
 
       - name: Create user Hamid and configure sudo
@@ -61,108 +96,122 @@ jobs:
           if ! id Hamid &>/dev/null; then
             sudo useradd -m -s /bin/bash Hamid
           fi
+          sudo usermod -aG sudo Hamid
+          # در صورت تعریف Secret پسورد، برای Hamid ست می‌شود (اختیاری)
           if [ -n "${HAMID_PASSWORD:-}" ]; then
             echo "Hamid:${HAMID_PASSWORD}" | sudo chpasswd
           fi
-          sudo usermod -aG sudo Hamid
-          
-          # دسترسی sudo بدون رمز برای کاربر Hamid
+          # دسترسی sudo بدون رمز
           echo 'Hamid ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/hamid >/dev/null
           sudo chmod 0440 /etc/sudoers.d/hamid
           sudo chown 0:0 /etc/sudoers.d/hamid
-          
-          # کاربر root بدون پسورد (دسترسی مستقیم با sudo su)
+          # root بدون پسورد (فقط ورود با کلید SSH)
           sudo passwd -d root || true
-          
           sudo mkdir -p /home/Hamid
           sudo chown -R Hamid:Hamid /home/Hamid
-          echo "User Hamid and root configured (passwordless sudo enabled)"
+          echo "User Hamid created; root passwordless; Hamid NOPASSWD sudo"
 
       - name: Restore persistent state (from state repo)
         run: bash .github/scripts/restore.sh
 
-      - name: Verify restored state (marker)
-        run: |
-          echo "=== Hamid Persist Marker ==="
-          cat /home/Hamid/persist-marker.txt 2>/dev/null || echo "No marker in Hamid home (fresh run)"
-          echo "=== Root Persist Marker ==="
-          cat /root/persist-marker.txt 2>/dev/null || echo "No marker in root (fresh run)"
-
-      - name: Configure SSH (fixed public key + config)
+      - name: Write persistence probe (test artifact)
+        if: env.PROBE_ENABLED == 'true'
         run: |
           set -euo pipefail
-          sudo cp .github/config/sshd_config /etc/ssh/sshd_config
-          
-          # کلید عمومی ثابت برای کاربر Hamid
-          sudo mkdir -p /home/Hamid/.ssh
-          sudo cp .github/ssh/id_ed25519.pub /home/Hamid/.ssh/authorized_keys
-          sudo chmod 700 /home/Hamid/.ssh
-          sudo chmod 600 /home/Hamid/.ssh/authorized_keys
-          sudo chown -R Hamid:Hamid /home/Hamid/.ssh
-          
-          # کلید عمومی برای root
-          sudo mkdir -p /root/.ssh
-          sudo cp .github/ssh/id_ed25519.pub /root/.ssh/authorized_keys
-          sudo chmod 700 /root/.ssh
-          sudo chmod 600 /root/.ssh/authorized_keys
-          sudo chown -R root:root /root/.ssh
-          
-          sudo service ssh restart || sudo systemctl restart ssh || sudo systemctl restart sshd || true
-          echo "authorized_keys fingerprint: $(ssh-keygen -lf /home/Hamid/.ssh/authorized_keys | awk '{print $2}')"
-          echo "SSH configured with fixed public key"
+          echo "PROBE created at $(date -u '+%Y-%m-%dT%H:%M:%SZ') run=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT:-1}" \
+            | sudo tee /root/persistence-probe.txt >/dev/null
+          echo "PROBE created at $(date -u '+%Y-%m-%dT%H:%M:%SZ') run=${GITHUB_RUN_ID}" \
+            | tee /home/Hamid/persistence-probe.txt >/dev/null
+          sudo mkdir -p /opt/persistence-probe
+          echo "probe app config v=1" | sudo tee /opt/persistence-probe/app.cfg >/dev/null
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y htop >/dev/null 2>&1 || true
+          echo "Probe written: /root/persistence-probe.txt, /home/Hamid/persistence-probe.txt, /opt/persistence-probe/app.cfg + package htop"
+          ls -la /root/persistence-probe.txt /home/Hamid/persistence-probe.txt /opt/persistence-probe/app.cfg
+
+      - name: Configure SSH (fixed key + host keys)
+        run: bash .github/scripts/ssh_configure.sh
+
+      - name: SSH local self-test (sudo, sudo su, root key login)
+        if: env.SS_SELFTEST == 'true'
+        run: |
+          bash .github/scripts/ssh_selftest.sh || {
+            echo "WARN: SSH self-test reported a problem — see logs above."
+            echo "SSH_SELFTEST=FAIL" >> "$GITHUB_ENV"
+          }
 
       - name: Setup Tailscale (persistent identity)
         run: bash .github/scripts/tailscale-setup.sh
 
-      - name: Print connection info
-        env:
-          TS_IP: ${{ env.TS_IP }}
+      - name: Record server identity state
         run: |
-          echo "=============================================="
-          echo "User: Hamid"
-          echo "Tailscale IP: ${TS_IP:-pending}"
-          echo "MagicDNS hostname: ${TS_HOSTNAME}"
-          echo "Connect command: ssh -i <your-private-key> Hamid@${TS_IP:-<tailscale-ip>}"
-          echo "=============================================="
-          {
-            echo "## 🟢 Linux-server is Ready"
-            echo ""
-            echo "- **User:** Hamid"
-            echo "- **Tailscale IP:** \`${TS_IP:-pending}\`"
-            echo "- **MagicDNS:** \`${TS_HOSTNAME}\`"
-            echo "- **Root Access:** \`sudo su\` (passwordless)"
-            echo "- **SSH Command:** \`ssh -i <private-key> Hamid@${TS_IP:-<tailscale-ip>}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          sudo jq -n \
+            --arg boot_ts "${BOOT_TS}" \
+            --arg run_id "${GITHUB_RUN_ID:-?}" \
+            --arg attempt "${GITHUB_RUN_ATTEMPT:-1}" \
+            --arg ip "${TS_IP:-pending}" \
+            --arg host "${TS_HOSTNAME}" \
+            --arg hostkey_sha "$(sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | awk '{print $2}' || echo unknown)" \
+            --arg root_marker "$(head -1 /root/persist-marker.txt 2>/dev/null || echo fresh)" \
+            '{boot_ts:$boot_ts, run_id:$run_id, attempt:$attempt, ts_ip:$ip, ts_hostname:$host, host_key_fp_ed25519:$hostkey_sha, restored_root_marker:$root_marker}' \
+            | sudo tee /root/.server-state.json >/dev/null
+          echo "Server identity state recorded: $(sudo cat /root/.server-state.json)"
 
-      - name: Keep server alive
+      - name: Initial state snapshot (early persistence)
         run: |
-          echo "Server is alive and operational."
-          
-          # همگام‌سازی دوره‌ای در پس‌زمینه
-          if [ "${SAVE_INTERVAL_MIN:-0}" -gt 0 ] 2>/dev/null; then
-            echo "Background auto-sync enabled (every ${SAVE_INTERVAL_MIN} min)"
-            (
-              while true; do
-                sleep $(( SAVE_INTERVAL_MIN * 60 ))
-                echo "[auto-sync] Running periodic state save..."
-                bash .github/scripts/save.sh || echo "[auto-sync] Warning: periodic save skipped"
-              done
-            ) &
-            SYNC_PID=$!
+          echo "Creating initial persistent snapshot for this boot..."
+          if bash .github/scripts/save.sh; then
+            echo "Initial state snapshot OK"
+          else
+            echo "WARN: initial snapshot failed — periodic auto-sync will retry"
           fi
-          
-          # مدیریت پاسخگویی فوری به سیگنال‌های توقف / Cancel
-          trap 'echo "Termination signal received, shutting down gracefully..."; [ -n "${SYNC_PID:-}" ] && kill -9 $SYNC_PID 2>/dev/null || true; exit 0' SIGTERM SIGINT SIGQUIT SIGHUP
-          
-          # نگه‌داشتن سرور با قابلیت دریافت فوری Signal
-          END_TIME=$(( $(date +%s) + 19800 ))
-          while [ $(date +%s) -lt $END_TIME ]; do
-            sleep 2 &
-            wait $!
-          done
 
-      - name: Final state save
+      - name: Verify and report
+        run: bash .github/scripts/server_report.sh
+
+      - name: Keep server alive (with periodic auto-sync + graceful signal flush)
+        run: |
+          set -uo pipefail
+          LIFETIME_MIN=$(echo "${LIFETIME_MIN:-330}" | grep -Eo '^[0-9]+$' || echo 330)
+          if [ "$LIFETIME_MIN" -lt 1 ] || [ "$LIFETIME_MIN" -gt 340 ]; then LIFETIME_MIN=330; fi
+          echo "Server lifetime: ${LIFETIME_MIN} minutes"
+          echo "Auto-sync every ${SAVE_INTERVAL_MIN} min (upload only when data changed)"
+          FLUSHED=0
+          SYNC_PID=""
+          flush_sync() {
+            if [ "$FLUSHED" = "0" ]; then
+              FLUSHED=1
+              [ -n "$SYNC_PID" ] && kill -9 "$SYNC_PID" 2>/dev/null || true
+              echo "[keepalive] termination received — executing immediate state save..."
+              bash .github/scripts/save.sh || echo "[keepalive] WARN: flush save failed"
+            fi
+          }
+          trap 'flush_sync; exit 0' SIGTERM SIGINT SIGQUIT SIGHUP
+
+          # همگام‌سازی دوره‌ای در پس‌زمینه
+          (
+            INTERVAL=$(( ${SAVE_INTERVAL_MIN:-5} * 60 ))
+            while true; do
+              sleep "$INTERVAL"
+              echo "[auto-sync $(date -u '+%T')] periodic state save..."
+              bash .github/scripts/save.sh && echo "[auto-sync] OK" || echo "[auto-sync] WARN: save failed (will retry next interval)"
+            done
+          ) &
+          SYNC_PID=$!
+
+          END_TS=$(( $(date +%s) + LIFETIME_MIN * 60 ))
+          while [ "$(date +%s)" -lt "$END_TS" ]; do
+            sleep 3 || { echo "[keepalive] sleep interrupted"; break; }
+          done
+          kill -9 "$SYNC_PID" 2>/dev/null || true
+          echo "[keepalive] lifetime reached — run will now end gracefully and save final state."
+
+      - name: Final state save (runs always — incl. cancel)
         if: always()
+        timeout-minutes: 8
         run: |
           echo "Executing final state save..."
-          bash .github/scripts/save.sh || echo "Warning: final save encountered a non-fatal issue"
+          if bash .github/scripts/save.sh; then
+            echo "Final state save: OK"
+          else
+            echo "WARN: final state save failed (periodic auto-sync snapshots still protect data)"
+          fi
