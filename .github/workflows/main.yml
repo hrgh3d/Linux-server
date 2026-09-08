@@ -1,0 +1,251 @@
+name: Linux-server — Persistent Ubuntu 22.04
+
+on:
+  workflow_dispatch:
+  schedule:
+    # هر ۵ ساعت یکبار اجرا شود تا قبل از انقضای ۶ ساعته قبلی، سرور جدید آماده باشد
+    - cron: '0 */5 * * *'
+  repository_dispatch:
+
+jobs:
+  persistent-server:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360  # حداکثر ۶ ساعت (محدودیت GitHub-hosted)
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SERVEO_ALIAS: ''
+    steps:
+      - name: Checkout repository with persistent state
+        uses: actions/checkout@v4
+
+      - name: Restore persistent state
+        run: bash .github/scripts/restore.sh
+
+      - name: Setup system environment
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          sudo apt-get install -y openssh-server sudo curl tar rsync git
+          echo "Basic packages installed"
+
+      - name: Create user Hamid with full access
+        run: |
+          set -euo pipefail
+          # Create user if not exists
+          if ! id "Hamid" &>/dev/null; then
+            sudo useradd -m -s /bin/bash Hamid
+            echo "User Hamid created"
+          else
+            echo "User Hamid already exists"
+          fi
+          # Set password
+          echo 'Hamid:hamid1369' | sudo chpasswd
+          # Add to sudo group for full access
+          sudo usermod -aG sudo Hamid
+          # Ensure home directory exists with correct permissions
+          sudo mkdir -p /home/Hamid
+          sudo chown -R Hamid:Hamid /home/Hamid
+          sudo chmod 755 /home/Hamid
+          echo "User Hamid configured: password=hamid1369, sudo access enabled"
+
+      - name: Configure SSH server with fixed key
+        run: |
+          set -euo pipefail
+          # Restore SSH config from persistent state if available
+          if [ -f /tmp/restore/etc/ssh/sshd_config ]; then
+            sudo cp /tmp/restore/etc/ssh/sshd_config /etc/ssh/sshd_config || true
+          fi
+          # Configure SSH server
+          # Configure SSH server using echo commands to avoid YAML indentation issues
+          echo 'Port 22' | sudo tee -a /etc/ssh/sshd_config
+          echo 'PermitRootLogin no' | sudo tee -a /etc/ssh/sshd_config
+          echo 'PasswordAuthentication yes' | sudo tee -a /etc/ssh/sshd_config
+          echo 'PubkeyAuthentication yes' | sudo tee -a /etc/ssh/sshd_config
+          echo 'ChallengeResponseAuthentication no' | sudo tee -a /etc/ssh/sshd_config
+          echo 'UsePAM yes' | sudo tee -a /etc/ssh/sshd_config
+          echo 'X11Forwarding yes' | sudo tee -a /etc/ssh/sshd_config
+          echo 'PrintMotd no' | sudo tee -a /etc/ssh/sshd_config
+          echo 'AcceptEnv LANG LC_*' | sudo tee -a /etc/ssh/sshd_config
+          echo 'Subsystem sftp /usr/lib/openssh/sftp-server' | sudo tee -a /etc/ssh/sshd_config
+          # Ensure SSH service is enabled
+          sudo systemctl enable ssh || sudo service ssh enable || true
+          echo "SSH server configured"
+
+      - name: Setup persistent SSH key for access
+        env:
+          PUBLIC_KEY_CONTENT: ${{ github.workspace }}/.github/ssh/id_ed25519.pub
+        run: |
+          set -euo pipefail
+          # Ensure .ssh directory exists for Hamid
+          sudo mkdir -p /home/Hamid/.ssh
+          sudo chmod 700 /home/Hamid/.ssh
+          # Add public key to authorized_keys
+          if [ -f "$PUBLIC_KEY_CONTENT" ]; then
+            sudo cp "$PUBLIC_KEY_CONTENT" /home/Hamid/.ssh/authorized_keys
+            sudo chmod 600 /home/Hamid/.ssh/authorized_keys
+            sudo chown -R Hamid:Hamid /home/Hamid/.ssh
+            echo "Fixed SSH public key installed"
+          else
+            echo "Warning: Public SSH key file not found"
+          fi
+
+      - name: Setup SSH access with private key in secrets
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          # If private key is provided via secret, configure it for tunnel usage
+          if [ -n "$SSH_PRIVATE_KEY" ]; then
+            mkdir -p ~/.ssh
+            echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519_persistent
+            chmod 600 ~/.ssh/id_ed25519_persistent
+            echo "Private SSH key configured from secret"
+          else
+            echo "No SSH_PRIVATE_KEY secret set — using repository key"
+            cp .github/ssh/id_ed25519 ~/.ssh/id_ed25519_persistent || true
+            chmod 600 ~/.ssh/id_ed25519_persistent || true
+          fi
+
+      - name: Restore installed packages from persistent state
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/restore/packages.list ]; then
+            echo "Restoring packages from persistent state..."
+            sudo xargs -a /tmp/restore/packages.list apt-get install -y --no-install-recommends || echo "Some packages could not be restored (expected for fresh environment)"
+          else
+            # First-time setup: save basic package list
+            sudo dpkg --get-selections > persistent/packages.list || true
+          fi
+
+      - name: Restore user data and configurations
+        run: |
+          set -euo pipefail
+          # Restore /home/Hamid data
+          if [ -d /tmp/restore/home/Hamid ]; then
+            sudo rsync -av /tmp/restore/home/Hamid/ /home/Hamid/ || true
+            sudo chown -R Hamid:Hamid /home/Hamid || true
+            echo "User data restored"
+          fi
+          # Restore system configs
+          if [ -d /tmp/restore/etc ]; then
+            sudo cp -r /tmp/restore/etc/* /etc/ 2>/dev/null || echo "No additional system configs to restore"
+          fi
+          echo "Persistent configurations applied"
+
+      - name: Install additional required packages (first run)
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends \
+            openssh-server openssh-client curl wget git sudo tar rsync \
+            vim nano htop net-tools iputils-ping \
+            python3 python3-pip || true
+          echo "Additional packages installed"
+
+      - name: Start SSH server
+        run: |
+          set -euo pipefail
+          sudo service ssh restart || sudo systemctl restart ssh || sudo /etc/init.d/ssh restart || true
+          sudo service ssh status || sudo systemctl status ssh || echo "SSH service started/restarted"
+          echo "SSH server running on port 22"
+
+      - name: Setup tailscale for direct SSH access
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY || 'NOT_SET' }}
+        run: |
+          set -euo pipefail
+          echo "=== INSTALLING TAILSCALE ==="
+          # Download and install tailscale
+          curl -fsSL https://tailscale.com/install.sh | sh
+          echo "tailscale installed"
+          # Configure auth
+          if [ -n "${TAILSCALE_AUTH_KEY}" ]; then
+            sudo tailscale up --authkey=${TAILSCALE_AUTH_KEY} --hostname=linux-server-vps --ssh || echo "tailscale auth key configured (will connect on next step)"
+            echo "tailscale auth configured"
+          else
+            echo "Warning: TAILSCALE_AUTH_KEY not set. Server will not join tailnet."
+          fi
+          # Wait for connection and show status
+          sleep 10
+          echo "=== TAILSCALE STATUS ==="
+          sudo tailscale status || echo "tailscale status check completed"
+          # Get tailscale IP
+          TAILSCALE_IP=$(sudo tailscale ip -4 2>/dev/null || echo 'pending')
+          echo "TAILSCALE_IP=${TAILSCALE_IP}" >> $GITHUB_ENV
+          echo "tailscale IP: ${TAILSCALE_IP:-pending - server joining tailnet}"
+          echo "Connection info: After joining tailnet, connect with ssh Hamid@<tailscale-ip>"
+
+      - name: Show connection details and save to artifact
+        env:
+          TAILSCALE_IP: ${{ env.TAILSCALE_IP }}
+        run: |
+          set -euo pipefail
+          echo "=== CONNECTION DETAILS ==="
+          echo "Tunnel: tailscale (direct VPN)"
+          echo "User: Hamid"
+          echo "Password: hamid1369"
+          echo "SSH Key (public): $(cat .github/ssh/id_ed25519.pub 2>/dev/null || echo 'Not found')"
+          echo "tailscale IP: ${TAILSCALE_IP:-pending - server joining tailnet}"
+          echo "Connection command (with tailscale):"
+          echo "  ssh -i .github/ssh/id_ed25519 Hamid@${TAILSCALE_IP:-<tailscale-ip>}"
+          echo "=== SERVER READY ==="
+          mkdir -p artifacts
+          echo "Tunnel: tailscale" > artifacts/connection-info.txt
+          echo "User: Hamid" >> artifacts/connection-info.txt
+          echo "Password: hamid1369" >> artifacts/connection-info.txt
+          echo "Public Key: $(cat .github/ssh/id_ed25519.pub 2>/dev/null || echo 'N/A')" >> artifacts/connection-info.txt
+          echo "tailscale IP: ${TAILSCALE_IP:-pending}" >> artifacts/connection-info.txt
+          echo "Command: ssh -i .github/ssh/id_ed25519 Hamid@${TAILSCALE_IP:-<tailscale-ip>}" >> artifacts/connection-info.txt
+
+      - name: Upload connection info artifact (immediate)
+        uses: actions/upload-artifact@v4
+        with:
+          name: connection-info
+          path: artifacts/
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Keep server alive (6 hours max)
+        run: |
+          # Keep running for maximum allowed time, then trigger save before exit
+          # We use a loop that sleeps and periodically checks
+          echo "Server running... Will stay alive for up to 360 minutes"
+          # Run in background: save state every 30 minutes
+          (
+            while true; do
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] Server active. Saving state..."
+              bash .github/scripts/save.sh || echo "Periodic save skipped/failed"
+              sleep 1800  # Every 30 minutes
+            done
+          ) &
+          # Main sleep for 6 hours (but not exceeding timeout)
+          sleep 21600 || true
+
+      - name: Final persistent state save
+        if: always()
+        run: |
+          set -euo pipefail || true
+          echo "=== FINAL SAVE BEFORE SHUTDOWN ==="
+          bash .github/scripts/save.sh || echo "Save script failed (non-critical)"
+
+      - name: Upload final persistent artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: persistent-state-final
+          path: persistent/state.tar.gz
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Upload connection info artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: connection-info
+          path: artifacts/
+          retention-days: 90
+          if-no-files-found: ignore
