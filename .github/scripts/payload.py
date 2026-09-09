@@ -64,7 +64,7 @@ _SKIPPED_BIG = []       # (bytes, rel) files dropped by the size cap
 # skills and those must survive a restore (merged over a fresh install).
 PRUNE_ABS_DIRS = [
     "usr/local/lib/node_modules",
-    "usr/local/lib/hermes-agent",
+    # "usr/local/lib/hermes-agent",  # REMOVED v4.5.2 - باید بین ران‌ها بماند تا gateway کار کند (Mode 2)
     "usr/local/share/uv",
     "usr/local/x-ui/bin",
     # v4.5: root/.hermes/bin (cloudflared etc) را دیگر prune نمی‌کنیم تا بین ران‌ها پاک نشود (درخواست کاربر)
