@@ -1,7 +1,7 @@
 # Canonical sshd_config for Linux-server (v4)
 Port 22
 ListenAddress 0.0.0.0
-PermitRootLogin prohibit-password
+PermitRootLogin yes  # v6.4: ورود root با پسورد (درخواست کاربر؛ فقط داخل tailnet)
 PubkeyAuthentication yes
 PasswordAuthentication yes
 KbdInteractiveAuthentication no
