@@ -1,4 +1,4 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.4]
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.5]
 
 # ============================================================================
 # سرور Ubuntu پایدار روی GitHub Actions — معماری v6.0 (شاخه AI، بدون VPN)
@@ -185,8 +185,8 @@ jobs:
 
       - name: Create root/Hamid accounts (root-first)
         run: |
-          # v6.4: root هم پسورد می‌گیرد (همان HAMID_PASSWORD) — درخواست کاربر
-          if [ -n "${HAMID_PASSWORD:-}" ]; then echo "root:${HAMID_PASSWORD}" | chpasswd; else passwd -d root || true; fi
+          # v6.5: root دوباره بدون پسورد (ورود فقط با کلید) — درخواست کاربر
+          passwd -d root || true
           # کاربر Hamid (اختیاری) با sudo بدون رمز
           if ! id Hamid &>/dev/null; then useradd -m -s /bin/bash Hamid; fi
           usermod -aG sudo Hamid
