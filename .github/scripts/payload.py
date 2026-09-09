@@ -67,9 +67,9 @@ PRUNE_ABS_DIRS = [
     "usr/local/lib/hermes-agent",
     "usr/local/share/uv",
     "usr/local/x-ui/bin",
-    # Hermes managed runtimes/bundled code inside its data dir — regenerated.
-    "root/.hermes/bin",
-    "root/.hermes/hermes-agent",
+    # v4.5: root/.hermes/bin (cloudflared etc) را دیگر prune نمی‌کنیم تا بین ران‌ها پاک نشود (درخواست کاربر)
+    # "root/.hermes/bin",  # REMOVED - cloudflared باید بماند
+    # "root/.hermes/hermes-agent",  # REMOVED - برای حالت Mode 2 خالص
     # image-build residue under /root (never user data): cache/module stores
     # that the hosted image created while provisioning as root
     "root/.launchpadlib",
