@@ -98,7 +98,7 @@ if [ $RC -ne 0 ] || [ ! -s "$LIST" ]; then
   log "ERROR: payload scan failed"
   exit 1
 fi
-cat "$STATS" 2>/dev/null | jq -c '{dirs,files,links,mb,top:.["top"]}' | sed 's/^/[persist] stats /' || true
+cat "$STATS" 2>/dev/null | jq -c '{dirs,files,links,mb,top:.["top"],top2:.["top2"]}' | sed 's/^/[persist] stats /' || true
 
 # ----------------------------------------------------------- 4) tar
 phase "creating archive..."

@@ -136,6 +136,8 @@ def prune_file(rel):
 
 def walk_abs(absdir, members):
     """Recursively walk absdir; add dirs/files/links to members (global rel)."""
+    parent_rel = os.path.relpath(absdir, "/")
+    base_root = parent_rel if parent_rel in _BASE else None
     try:
         entries = sorted(os.scandir(absdir), key=lambda e: e.name)
     except OSError:
@@ -143,6 +145,11 @@ def walk_abs(absdir, members):
     for e in entries:
         full = os.path.join(absdir, e.name)
         rel = os.path.relpath(full, "/")
+        # Image-baseline top-level entries (files OR dirs) of /opt and
+        # /usr/local/bin|sbin are runner-image bulk -> never stored. User
+        # additions get their own new names, which are not in the baseline.
+        if base_root is not None and e.name in _BASE[base_root]:
+            continue
         try:
             st = e.stat(follow_symlinks=False)
         except OSError:
@@ -183,13 +190,20 @@ def collect(root_file, out_file, base_dir, stats_file=None):
 
     counts = {"d": 0, "f": 0, "l": 0, "bytes": 0}
     top = {}
+    top2 = {}
     for rel, kind in members:
         counts[kind] += 1
         if kind == "f":
             try:
                 sz = os.path.getsize("/" + rel)
                 counts["bytes"] += sz
-                top[rel.split("/")[0]] = top.get(rel.split("/")[0], 0) + sz
+                parts = rel.split("/")
+                top[parts[0]] = top.get(parts[0], 0) + sz
+                if len(parts) > 1:
+                    key = parts[0] + "/" + parts[1]
+                else:
+                    key = parts[0]
+                top2[key] = top2.get(key, 0) + sz
             except OSError:
                 pass
 
@@ -203,6 +217,7 @@ def collect(root_file, out_file, base_dir, stats_file=None):
                 "links": counts["l"], "bytes": counts["bytes"],
                 "mb": round(counts["bytes"] / 1048576, 2),
                 "top": sorted(top.items(), key=lambda x: -x[1])[:12],
+                "top2": sorted(top2.items(), key=lambda x: -x[1])[:15],
             }, fh, indent=2)
     print(f"[payload] roots={len(roots)} members={len(members)} "
           f"dirs={counts['d']} files={counts['f']} links={counts['l']} "
