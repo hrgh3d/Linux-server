@@ -167,11 +167,24 @@ jobs:
 
       - name: Setup base system + image baselines
         run: |
-          apt-get update -y
+          # v6.9.1: resilient apt with retries (fixes transient mirror failures)
+          for i in 1 2 3 4 5; do
+            echo "[apt] update attempt $i..."
+            if apt-get update -y; then
+              echo "[apt] update OK"
+              break
+            fi
+            echo "[apt] update failed, retrying in 10s..."
+            sleep 10
+            if [ $i -eq 5 ]; then
+              echo "[apt] WARNING: apt-get update failed after 5 attempts, continuing anyway"
+            fi
+          done
           DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 \
             openssh-server sudo curl wget git tar rsync jq python3 ca-certificates nodejs npm \
             || DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 \
-            openssh-server sudo curl wget git tar rsync jq python3 ca-certificates
+            openssh-server sudo curl wget git tar rsync jq python3 ca-certificates \
+            || { echo "[apt] install failed, retrying..."; sleep 10; DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 openssh-server sudo curl wget git tar rsync jq python3 ca-certificates || true; }
           # baseline های image برای محاسبه‌ی «آنچه کاربر اضافه کرده» در save
           timeout 60 apt-mark showmanual | sort > /tmp/base_manual_packages.list || true
           npm ls -g --depth=0 --json 2>/dev/null | jq -r '.dependencies | keys[]' | sort > /tmp/base_npm.list || true
