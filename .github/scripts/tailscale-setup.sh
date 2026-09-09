@@ -108,7 +108,9 @@ if [ -s /var/lib/tailscale/tailscaled.state ] && [ "$OWNED" = 1 ]; then
   else
     RC=$?
     echo "[tailscale] reconnect failed ($(up_err /tmp/ts_up.log "$RC")); authenticating with auth key."
-    if do_up /tmp/ts_up2.log --authkey="${TS_AUTH_KEY}"; then
+    # v6.2: --reset چون state بازیابی‌شده ممکن است prefهای ناسازگار داشته باشد
+    # (مثل ‎--ssh از v5.1) و tailscale بدون reset با خطای non-default flags رد می‌کند.
+    if do_up /tmp/ts_up2.log --authkey="${TS_AUTH_KEY}" --reset; then
       echo "[tailscale] authenticated with auth key (identity not reusable — new registration)"
     else
       RC=$?
