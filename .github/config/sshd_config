@@ -3,7 +3,7 @@ Port 22
 ListenAddress 0.0.0.0
 PermitRootLogin prohibit-password  # v6.5: برگشت به کلید-فقط برای root
 PubkeyAuthentication yes
-PasswordAuthentication yes
+PasswordAuthentication no  # v6.6: ورود فقط با کلید
 KbdInteractiveAuthentication no
 UsePAM yes
 X11Forwarding yes
