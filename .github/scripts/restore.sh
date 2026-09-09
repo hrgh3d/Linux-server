@@ -1,13 +1,14 @@
 #!/bin/bash
 # ============================================================================
-# restore.sh (v5)
+# restore.sh (v5.1)
 #
-#   restore.sh            -> آماده‌سازی: دانلود state، استخراج، بازنصب پکیج‌های
-#                            کاتالوگ (apt/npm/pip) — code پکیج‌ها دوباره نصب می‌شود.
+#   restore.sh            -> آماده‌سازی: دانلود state، بررسی سالم بودن آرشیو،
+#                            استخراج، بازنصب پکیج‌های کاتالوگ با «نسخهٔ دقیق»
+#                            (apt name=ver / npm name@ver / pip name==ver) و در
+#                            صورت نبودِ نسخه، fallback به آخرین نسخه با WARN.
 #   restore.sh apply      -> اعمال لایه‌ی داده/تنظیمات (payload) روی سیستم.
 #
 # ترتیب منطقی در Boot:  restore(prep) → provision(اپ‌های سفارشی) → restore(apply)
-# تا ابتدا خودِ پکیج‌ها نصب شوند و سپس کانفیگ/دیتای ذخیره‌شده روی آن‌ها بنشیند.
 # ============================================================================
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,6 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RESTORE=/tmp/persist-restore
 MODE="${1:-prep}"
+INSTALLED="$RESTORE/_meta/installed.json"
+
+log() { echo "[persist $(date -u '+%T')] $*"; }
 
 # ------------------------------------------------------------------ PREP
 if [ "$MODE" = "prep" ] || [ "$MODE" = "" ]; then
@@ -27,53 +31,169 @@ if [ "$MODE" = "prep" ] || [ "$MODE" = "" ]; then
     log "No saved state (first run) — fresh boot."
     exit 0
   fi
+  # بررسی سالم بودن آرشیو پیش از استخراج (قبل از هر چیز)
   if ! gzip -t /tmp/state.tar.gz 2>/dev/null; then
-    log "ERROR: archive corrupt — continuing fresh."
+    log "ERROR: state archive corrupt (gzip) — continuing fresh."
+    bash "$SCRIPT_DIR/notify.sh" --type restore --stage download \
+      --error "state archive failed gzip integrity test" || true
+    sudo rm -f /tmp/state.tar.gz
     exit 0
   fi
-  log "Extracting state..."
-  sudo tar -xzf /tmp/state.tar.gz -C "$RESTORE" 2>/dev/null || true
+  if ! tar -tzf /tmp/state.tar.gz >/dev/null 2>&1; then
+    log "ERROR: state archive cannot be listed (tar) — continuing fresh."
+    bash "$SCRIPT_DIR/notify.sh" --type restore --stage download \
+      --error "state archive cannot be listed with tar -tzf" || true
+    sudo rm -f /tmp/state.tar.gz
+    exit 0
+  fi
 
-  # ---------------- بازنصب پکیج‌ها از کاتالوگ
-  if [ -f "$RESTORE/_meta/installed.json" ]; then
-    log "Package catalog found — reinstalling user packages..."
-    timeout 300 sudo apt-get update -y -o DPkg::Lock::Timeout=120 >/dev/null 2>&1 || true
-    # apt
-    APT=()
-    while IFS= read -r p; do
-      [ -n "$p" ] || continue
-      case "$p" in tailscale|tailscale-archive-keyring|\#*) continue ;; esac
-      dpkg -s "$p" >/dev/null 2>&1 || APT+=("$p")
-    done < <(python3 -c "import json;print('\n'.join(json.load(open('$RESTORE/_meta/installed.json')).get('apt',[])))" 2>/dev/null)
-    if [ "${#APT[@]}" -gt 0 ]; then
-      log "apt reinstall: ${APT[*]}"
-      timeout 900 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 "${APT[@]}" >/dev/null 2>&1 \
-        && log "apt reinstall OK" || log "WARN: apt reinstall had failures"
+  log "Extracting state..."
+  if ! sudo tar -xzf /tmp/state.tar.gz -C "$RESTORE" 2>/tmp/restore-extract.log; then
+    log "ERROR: state extraction failed — continuing fresh (previous state not usable)."
+    tail -5 /tmp/restore-extract.log 2>/dev/null | sed 's/^/    /'
+    bash "$SCRIPT_DIR/notify.sh" --type restore --stage extract \
+      --error "state extraction failed: $(tail -2 /tmp/restore-extract.log 2>/dev/null | tr '\n' ' ')" || true
+    sudo rm -rf "$RESTORE"
+    exit 0
+  fi
+  if [ ! -f "$INSTALLED" ]; then
+    log "No catalog in state (older v4/v5 state) — app installers will handle provision."
+    log "Restore prep done (extracted at $RESTORE, no catalog)."
+    exit 0
+  fi
+
+  # ---------------- بازنصب پکیج‌ها از کاتالوگ (نسخه‌دار)
+  log "Package catalog found — reinstalling user packages (exact versions)..."
+  timeout 300 sudo apt-get update -y -o DPkg::Lock::Timeout=120 >/dev/null 2>&1 || true
+
+  norm() { # چاپ spec،name,ver برای هر ورودی؛ پشتیبانی از قالب قدیمی (فقط نام)
+    python3 - "$1" "$INSTALLED" <<'PY'
+import json, sys
+kind, path = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(open(path))
+except Exception:
+    sys.exit(0)
+entries = d.get(kind, []) or []
+out = []
+for e in entries:
+    e = (e or "").strip()
+    if not e or e.startswith("#"):
+        continue
+    name, ver = e, ""
+    if kind == "apt":
+        if "=" in e:
+            name, ver = e.split("=", 1)
+        if name in ("tailscale", "tailscale-archive-keyring"):
+            continue
+    elif kind == "npm":
+        if e.startswith("@"):
+            i = e.rfind("@")
+            if i > 1:                 # scoped with version: @scope/name@1.2.3
+                name, ver = e[:i], e[i + 1:]
+        else:
+            if "@" in e:
+                name, ver = e.rsplit("@", 1)
+    else:  # pip
+        if "==" in e:
+            name, ver = e.split("==", 1)
+    out.append((e, name, ver))
+for spec, name, ver in out:
+    print("%s\t%s\t%s" % (spec, name, ver))
+PY
+  }
+
+  is_installed() {
+    dpkg -s "$1" >/dev/null 2>&1 || return 1
+    dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'
+  }
+
+  apt_fail=0; npm_fail=0; pip_fail=0
+
+  # --- apt ---
+  APT_N=0
+  while IFS=$'\t' read -r spec name ver; do
+    [ -n "$name" ] || continue
+    if is_installed "$name"; then
+      log "apt skip (installed): $name"
+      continue
     fi
-    # npm
-    NPM=()
-    while IFS= read -r p; do
-      [ -n "$p" ] || continue
-      case "$p" in \#*) continue ;; esac
-      NPM+=("$p")
-    done < <(python3 -c "import json;print('\n'.join(json.load(open('$RESTORE/_meta/installed.json')).get('npm',[])))" 2>/dev/null)
-    if [ "${#NPM[@]}" -gt 0 ] && command -v npm >/dev/null 2>&1; then
-      log "npm reinstall: ${NPM[*]}"
-      timeout 600 npm install -g "${NPM[@]}" >/dev/null 2>&1 && log "npm reinstall OK" || log "WARN: npm reinstall failed"
+    APT_N=$((APT_N + 1))
+    log "apt install: ${spec}${ver:+  (pin $name=$ver)}"
+    if [ -n "$ver" ]; then
+      if DEBIAN_FRONTEND=noninteractive timeout 300 apt-get install -y \
+           -o DPkg::Lock::Timeout=120 "$name=$ver" >/tmp/apt-install.log 2>&1; then
+        log "apt OK: $name=$ver"
+        continue
+      fi
+      log "WARN: apt $name=$ver failed — falling back to latest"
     fi
-    # pip
-    PIP=()
-    while IFS= read -r p; do
-      [ -n "$p" ] || continue
-      PIP+=("$p")
-    done < <(python3 -c "import json;print('\n'.join(json.load(open('$RESTORE/_meta/installed.json')).get('pip',[])))" 2>/dev/null)
-    if [ "${#PIP[@]}" -gt 0 ] && command -v pip3 >/dev/null 2>&1; then
-      log "pip reinstall: ${PIP[*]}"
-      timeout 600 pip3 install --break-system-packages "${PIP[@]}" >/dev/null 2>&1 && log "pip reinstall OK" || log "WARN: pip reinstall failed"
+    if DEBIAN_FRONTEND=noninteractive timeout 300 apt-get install -y \
+         -o DPkg::Lock::Timeout=120 "$name" >/tmp/apt-install.log 2>&1; then
+      log "apt OK (latest): $name"
+    else
+      log "FAIL apt: $name ($(tail -2 /tmp/apt-install.log 2>/dev/null | tr '\n' ' '))"
+      apt_fail=1
     fi
-    log "Catalog reinstall finished."
+  done < <(norm apt)
+  [ "$APT_N" -gt 0 ] && log "apt reinstall done ($APT_N pkg(s))"
+
+  # --- npm ---
+  if command -v npm >/dev/null 2>&1; then
+    NPM_N=0
+    while IFS=$'\t' read -r spec name ver; do
+      [ -n "$name" ] || continue
+      NPM_N=$((NPM_N + 1))
+      log "npm install: $spec"
+      if timeout 300 npm install -g "$spec" >/tmp/npm-install.log 2>&1; then
+        log "npm OK: $spec"
+        continue
+      fi
+      if [ -n "$ver" ] && [ "$spec" != "$name" ]; then
+        log "WARN: npm $spec failed — retrying with plain name"
+        if timeout 300 npm install -g "$name" >/tmp/npm-install.log 2>&1; then
+          log "npm OK (latest): $name"
+          continue
+        fi
+      fi
+      log "FAIL npm: $spec ($(tail -2 /tmp/npm-install.log 2>/dev/null | tr '\n' ' '))"
+      npm_fail=1
+    done < <(norm npm)
+    [ "$NPM_N" -gt 0 ] && log "npm reinstall done ($NPM_N pkg(s))"
+  fi
+
+  # --- pip ---
+  if command -v pip3 >/dev/null 2>&1; then
+    PIP_N=0
+    while IFS=$'\t' read -r spec name ver; do
+      [ -n "$name" ] || continue
+      PIP_N=$((PIP_N + 1))
+      log "pip install: $spec"
+      if timeout 300 pip3 install --break-system-packages "$spec" >/tmp/pip-install.log 2>&1; then
+        log "pip OK: $spec"
+        continue
+      fi
+      if [ -n "$ver" ] && [ "$spec" != "$name" ]; then
+        log "WARN: pip $spec failed — retrying with plain name"
+        if timeout 300 pip3 install --break-system-packages "$name" >/tmp/pip-install.log 2>&1; then
+          log "pip OK (latest): $name"
+          continue
+        fi
+      fi
+      log "FAIL pip: $spec ($(tail -2 /tmp/pip-install.log 2>/dev/null | tr '\n' ' '))"
+      pip_fail=1
+    done < <(norm pip)
+    [ "$PIP_N" -gt 0 ] && log "pip reinstall done ($PIP_N pkg(s))"
+  fi
+
+  if [ "$apt_fail" -ne 0 ] || [ "$npm_fail" -ne 0 ] || [ "$pip_fail" -ne 0 ]; then
+    log "WARN: catalog reinstall had partial failures (apt=$apt_fail npm=$npm_fail pip=$pip_fail)"
+    # این یک خطای «واقعی» است: کاتالوگ کامل بازیابی نشد؛ اطلاع‌رسانی می‌شود ولی
+    # Boot ادامه می‌یابد تا provision اپ‌های اصلی را نصب کند.
+    bash "$SCRIPT_DIR/notify.sh" --type restore --stage catalog-reinstall \
+      --error "partial catalog reinstall failure apt=$apt_fail npm=$npm_fail pip=$pip_fail" || true
   else
-    log "No catalog (older state) — app installers will handle provision."
+    log "Catalog reinstall finished OK."
   fi
   log "Restore prep done (extracted at $RESTORE)."
   exit 0
@@ -130,7 +250,6 @@ if [ "$MODE" = "apply" ]; then
     fi
   fi
   log "Payload applied."
-  # پاک‌سازی staging نگه داشته می‌شود (تا قدم‌های بعدی مجدداً apply نکنند)
   exit 0
 fi
 

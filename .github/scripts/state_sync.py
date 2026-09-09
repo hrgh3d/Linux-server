@@ -141,6 +141,37 @@ def delete_asset(repo, asset_id, token):
         return False
 
 
+def verify_asset(repo, asset_id, token, digest, size):
+    """Confirm the just-uploaded asset is actually persisted and byte-identical
+    to what we uploaded, BEFORE the previous healthy asset is purged."""
+    url = f"{API}/repos/{repo}/releases/assets/{asset_id}"
+    try:
+        a = _request("GET", url, token)
+    except Exception as e:
+        print(f"[persist] verify: asset {asset_id} not readable: {e}", file=sys.stderr)
+        return False
+    expected_digest = f"sha256:{digest}"
+    got_digest = a.get("digest") or ""
+    if got_digest == expected_digest and a.get("size") == size:
+        return True
+    # digest field may be absent on some API versions -> re-download and hash
+    print("[persist] verify: digest field absent/different — re-downloading to verify", file=sys.stderr)
+    tmp = f"/tmp/state-verify-{asset_id}.tmp"
+    try:
+        req = urllib.request.Request(
+            a["url"], headers=_headers(token, accept="application/octet-stream"))
+        with urllib.request.urlopen(req, timeout=READ_TIMEOUT) as resp, \
+                open(tmp, "wb") as f:
+            while chunk := resp.read(1024 * 1024):
+                f.write(chunk)
+        ok = (os.path.getsize(tmp) == size and sha256_file(tmp) == digest)
+        os.remove(tmp)
+        return ok
+    except Exception as e:
+        print(f"[persist] verify: download failed: {e}", file=sys.stderr)
+        return False
+
+
 def download(repo, tag, dest_file, token):
     print(f"[persist] checking state release '{tag}' in {repo} ...")
     rel = get_release(repo, tag, token)
@@ -211,6 +242,15 @@ def upload(repo, tag, src_file, token):
     new_id = result.get("id")
     print(f"[persist] upload OK -> asset id={new_id} name={result.get('name')} "
           f"size={result.get('size')} digest={result.get('digest', '')[:32]}")
+
+    # 2b) Verify the persisted copy BEFORE touching the previous healthy asset,
+    #     so a corrupt/half-upload never replaces the last good state.
+    if not new_id or not verify_asset(repo, new_id, token, digest, size):
+        print("[persist] VERIFY FAILED — new asset not confirmed; previous "
+              "healthy state is retained", file=sys.stderr)
+        if new_id:
+            delete_asset(repo, new_id, token)  # best effort cleanup
+        return False
 
     # 3) Purge every older/other state asset (keep exactly the newest one).
     for a in assets:

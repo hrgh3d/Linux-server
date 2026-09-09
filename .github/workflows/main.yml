@@ -1,17 +1,24 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v5]
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v5.1]
 
 # ============================================================================
-# سرور Ubuntu پایدار روی GitHub Actions — معماری v5
+# سرور Ubuntu پایدار روی GitHub Actions — معماری v5.1
 #
 #  Backup فقط «داده/تنظیمات کاربر» است (نه فایل‌های نصب پکیج‌ها):
 #    - payload.py ریشه‌های داده/کانفیگ (persist.list) را اسکن می‌کند و
 #      کد/کش/ابزارهای نصب را حذف می‌کند → هر فایل جدیدِ پکیج (هر مسیر/نامی)
 #      خودکار ذخیره می‌شود.
-#    - installed.json کاتالوگ پکیج‌های apt/npm/pip کاربر است؛ در Restore
-#      پکیج‌ها ابتدا با دستور نصب خودشان بازنصب و سپس کانفیگ/دیتا روی آن‌ها
-#      اعمال می‌شود. اپ‌های سفارشی (9router/Hermes/3x-ui) هم installer خودشان
-#      را دارند (provision.sh).
+#    - installed.json کاتالوگ نسخه‌دار (apt name=ver / npm name@ver /
+#      pip name==ver) است؛ در Restore همان نسخهٔ ذخیره‌شده نصب می‌شود و سپس
+#      کانفیگ/دیتا روی آن‌ها اعمال می‌شود. اپ‌های سفارشی (9router/Hermes/3x-ui)
+#      installer خودشان را دارند (provision.sh).
+#    - دیتابیس‌های SQLite زنده با sqlite_stage.py به‌صورت consistent اسنپ‌شات
+#      می‌شوند؛ آرشیو پیش از آپلود Validate می‌شود (در خطا، آپلود نمی‌شود و
+#      State سالم قبلی حفظ می‌شود)؛ در پایان Lifetime، save نهایی واقعاً اجرا و
+#      نتیجه‌اش راست‌آزمایی می‌شود.
 #  Root-first: تمام مراحل با shell ریشه اجرا و ورود SSH مستقیم root انجام می‌شود.
+#  همگام‌سازی تک‌نسخه‌ای: concurrency بر اساس نوع trigger جدا شده و یک قدم
+#  هماهنگ‌سازی تضمین می‌کند Dispatch دستی پشت Cron معطل نماند (Cron تسلیم
+#  Manual می‌شود؛ Manual بقیه را Cancel می‌کند؛ Cron فقط Cron قدیمی را جایگزین).
 # ============================================================================
 
 on:
@@ -41,8 +48,14 @@ on:
     - cron: '0 */5 * * *'        # هر ۵ ساعت (UTC)
   repository_dispatch:
 
+# concurrency بر اساس trigger جدا شده است تا Manual Dispatch پشت Cron در صف
+# نماند. cancel-in-progress عمداً false است (Cron نباید خودکار یک سرور Manual را
+# بکشد)؛ کنترل با قدم «Single-instance coordination» انجام می‌شود:
+#   manual -> سایر runها (auto و manual) را Cancel می‌کند
+#   auto   -> اگر Manual در حال اجراست خودش Cancel می‌شود؛ وگرنه auto قدیمی را
+#             Cancel (جایگزین) می‌کند تا فقط یک سرور فعال باشد.
 concurrency:
-  group: linux-server-persistent
+  group: linux-server-${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
   cancel-in-progress: false
 
 jobs:
@@ -60,6 +73,7 @@ jobs:
 
     permissions:
       contents: read
+      actions: write        # برای Cancel/هماهنگ‌سازی runها در Single-instance coordination
 
     env:
       STATE_TAG: state
@@ -70,6 +84,7 @@ jobs:
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN || 'NOT_SET' }}
       TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP || '' }}
       HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
+      NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || '' }}
       SAVE_INTERVAL_MIN: '5'      # همگام‌سازی دوره‌ای (فقط در صورت تغییر)
       LIFETIME_MIN: ${{ inputs.lifetime_min || '350' }}
       PROBE_ENABLED: ${{ inputs.probe || 'false' }}
@@ -79,6 +94,69 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Single-instance coordination (manual preempts auto)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - "$GH_TOKEN" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" "$GITHUB_REPOSITORY" <<'PY'
+          import json, os, sys, time, urllib.request, urllib.error
+          tok, run_id, event, repo = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+          api = "https://api.github.com"
+          def req(method, path):
+              r = urllib.request.Request(api + path, method=method, headers={
+                  "Authorization": "Bearer " + tok,
+                  "Accept": "application/vnd.github+json",
+                  "User-Agent": "linux-server-coord",
+              })
+              try:
+                  with urllib.request.urlopen(r, timeout=30) as resp:
+                      raw = resp.read()
+                      return json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as e:
+                  print(f"[coord] HTTP {e.code} on {method} {path}", flush=True)
+                  return {}
+          def list_runs(status):
+              runs, page = [], 1
+              while True:
+                  d = req("GET", f"/repos/{repo}/actions/workflows/main.yml/runs?status={status}&per_page=100&page={page}")
+                  arr = d.get("workflow_runs", [])
+                  runs += arr
+                  if len(arr) < 100:
+                      break
+                  page += 1
+              return runs
+          others = []
+          for st in ("in_progress", "queued"):
+              for r in list_runs(st):
+                  if r.get("id") != int(run_id):
+                      others.append(r)
+          mine_event = event
+          is_auto = mine_event in ("schedule", "repository_dispatch")
+          print(f"[coord] run={run_id} event={mine_event} others_in_progress_or_queued={len(others)}", flush=True)
+          if not is_auto:
+              # workflow_dispatch: manual preempts everything else
+              for r in others:
+                  print(f"[coord] manual cancelling run {r['id']} ({r.get('event')}) ...", flush=True)
+                  req("POST", f"/repos/{repo}/actions/runs/{r['id']}/cancel")
+          else:
+              manuals = [r for r in others if r.get("event") == "workflow_dispatch"]
+              if manuals:
+                  print("[coord] auto run yields to manual — self-cancelling", flush=True)
+                  req("POST", f"/repos/{repo}/actions/runs/{run_id}/cancel")
+                  for _ in range(20):
+                      time.sleep(3)
+                      d = req("GET", f"/repos/{repo}/actions/runs/{run_id}")
+                      if d.get("status") == "completed":
+                          break
+                  print("[coord] self-cancelled", flush=True)
+                  sys.exit(3)
+              autos = [r for r in others if r.get("event") in ("schedule", "repository_dispatch")]
+              for r in sorted(autos, key=lambda x: x.get("created_at", "")):
+                  print(f"[coord] auto replacing older auto run {r['id']} ({r.get('event')}) ...", flush=True)
+                  req("POST", f"/repos/{repo}/actions/runs/{r['id']}/cancel")
+          print("[coord] proceeding", flush=True)
+          PY
 
       - name: Init boot context
         run: |
@@ -184,49 +262,110 @@ jobs:
 
       - name: Initial state snapshot (early persistence)
         run: |
-          if timeout 420 bash .github/scripts/save.sh; then
-            echo "Initial state snapshot OK"
+          run_snapshot() {
+            if timeout 420 bash .github/scripts/save.sh; then
+              echo "Initial state snapshot OK"
+              return 0
+            fi
+            return 1
+          }
+          if run_snapshot; then
+            :
           else
-            echo "WARN: initial snapshot failed — periodic auto-sync will retry"
+            echo "initial snapshot failed — retrying once after 20s"
+            sleep 20
+            if run_snapshot; then
+              :
+            else
+              bash .github/scripts/notify.sh --type backup --stage initial-snapshot \
+                --error "initial state snapshot failed after retry (upload skipped; previous state kept)" || true
+              echo "ERROR: initial state snapshot failed twice"
+              exit 1
+            fi
           fi
 
       - name: Verify and report
         run: bash .github/scripts/server_report.sh
 
-      - name: Keep server alive (periodic auto-sync + final save on lifetime end / signal)
+      - name: Keep server alive (serial auto-sync + verified final save)
         run: |
+          SCRIPT_DIR=.github/scripts
           LIFETIME_MIN=$(echo "${LIFETIME_MIN:-350}" | grep -Eo '^[0-9]+$' || echo 350)
           if [ "$LIFETIME_MIN" -lt 1 ]; then LIFETIME_MIN=5; fi
           if [ "$LIFETIME_MIN" -gt 355 ]; then LIFETIME_MIN=355; fi
           echo "Server lifetime: ${LIFETIME_MIN} minutes (root-first)"
-          FLUSHED=0
-          SYNC_PID=""
-          do_save() {
-            if timeout 420 bash .github/scripts/save.sh; then echo "[save] OK"; else echo "[save] WARN rc=$?"; fi
+          INTERVAL=$(( ${SAVE_INTERVAL_MIN:-5} * 60 ))
+          CONSEC=0
+          do_save() { # 0=موفق/بی‌تغییر  1=خطا (هرگز skip بی‌صدا وجود ندارد)
+            if timeout 300 bash "$SCRIPT_DIR/save.sh"; then return 0; else return 1; fi
           }
-          flush_sync() {
-            if [ "$FLUSHED" = "0" ]; then
-              FLUSHED=1
-              [ -n "$SYNC_PID" ] && kill -9 "$SYNC_PID" 2>/dev/null || true
-              echo "[keepalive] termination — final save..."
-              do_save
-            fi
+          final_save() {
+            echo "[keepalive] final save..."
+            if do_save; then echo "[save] FINAL OK"; return 0; fi
+            echo "[save] FINAL FAILED"
+            return 1
           }
-          trap 'flush_sync; exit 0' SIGTERM SIGINT SIGQUIT SIGHUP
-          (
-            INTERVAL=$(( ${SAVE_INTERVAL_MIN:-5} * 60 ))
-            while true; do
-              sleep "$INTERVAL"
-              echo "[auto-sync $(date -u '+%T')] periodic save..."
-              timeout 420 bash .github/scripts/save.sh && echo "[auto-sync] OK" || echo "[auto-sync] WARN"
-            done
-          ) &
-          SYNC_PID=$!
+          flush_on_signal() {
+            echo "[keepalive] termination signal — running final save..."
+            final_save
+          }
+          trap 'flush_on_signal || exit 1; exit 0' TERM INT QUIT HUP
           END_TS=$(( $(date +%s) + LIFETIME_MIN * 60 ))
-          while [ "$(date +%s)" -lt "$END_TS" ]; do
-            sleep 3 || break
+          LAST_AUTO=$(date +%s)
+          while :; do
+            NOW=$(date +%s)
+            if [ "$NOW" -ge "$END_TS" ]; then
+              break
+            fi
+            if [ $(( NOW - LAST_AUTO )) -ge "$INTERVAL" ]; then
+              echo "[auto-sync $(date -u '+%T')] periodic save..."
+              if do_save; then
+                echo "[auto-sync] OK"
+                CONSEC=0
+              else
+                CONSEC=$(( CONSEC + 1 ))
+                echo "[auto-sync] FAILED (consecutive=${CONSEC})"
+                if [ "$CONSEC" -ge 3 ]; then
+                  bash "$SCRIPT_DIR/notify.sh" --type backup --stage auto-sync \
+                    --error "3 consecutive periodic saves failed — aborting server (last healthy state kept)" || true
+                  echo "[keepalive] too many consecutive save failures — ending run as failure"
+                  exit 1
+                fi
+              fi
+              LAST_AUTO="$NOW"
+            fi
+            sleep 3
           done
-          kill -9 "$SYNC_PID" 2>/dev/null || true
-          echo "[keepalive] lifetime reached — final save (in this step)..."
-          do_save
-          echo "[keepalive] done."
+          echo "[keepalive] lifetime reached — final save"
+          if final_save; then
+            echo "[keepalive] done."
+          else
+            bash "$SCRIPT_DIR/notify.sh" --type backup --stage final-save \
+              --error "final save at lifetime end FAILED (last healthy state kept)" || true
+            echo "[keepalive] ERROR: final save failed"
+            exit 1
+          fi
+
+      - name: Notify on job failure (active failure notification)
+        if: always() && job.status == 'failure'
+        run: |
+          ERR="workflow job failed"
+          if [ -s /tmp/failure-notify.json ]; then
+            ERR="$(python3 -c 'import json;d=json.load(open("/tmp/failure-notify.json"));print(d["events"][-1].get("error",""))' 2>/dev/null || true)"
+          fi
+          bash .github/scripts/notify.sh --type workflow --stage job-failure --error "${ERR:-job failed}" || true
+          echo "run failed — failure notified (GitHub email/notification also applies)"
+          exit 0
+
+      - name: Report success / deferred warnings
+        if: always() && job.status == 'success'
+        run: |
+          if [ -s /tmp/failure-notify.json ]; then
+            echo "job succeeded but failures/warnings were recorded during the run:"
+            python3 -c 'import json;d=json.load(open("/tmp/failure-notify.json"));[print(" -", e.get("type"), "/", e.get("stage"), ":", e.get("error")) for e in d.get("events",[])]' 2>/dev/null || cat /tmp/failure-notify.json
+            ERR="$(python3 -c 'import json;d=json.load(open("/tmp/failure-notify.json"));print(d["events"][-1].get("error",""))' 2>/dev/null || true)"
+            bash .github/scripts/notify.sh --type workflow --stage deferred-warning --error "${ERR:-see marker}" || true
+          else
+            echo "server run completed successfully"
+          fi
+          exit 0
