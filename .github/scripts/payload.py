@@ -65,7 +65,7 @@ _SKIPPED_BIG = []       # (bytes, rel) files dropped by the size cap
 PRUNE_ABS_DIRS = [
     "usr/local/lib/node_modules",
     # "usr/local/lib/hermes-agent",  # REMOVED v4.5.2 - باید بین ران‌ها بماند تا gateway کار کند (Mode 2)
-    "usr/local/share/uv",
+    # "usr/local/share/uv",  # REMOVED v5.5 - hermes venv به uv وابسته است (symlink) باید بماند
     "usr/local/x-ui/bin",
     # v5.2: runner image bulk - never persist (android SDK 7GB caused snapshot timeout)
     "usr/local/lib/android",
@@ -451,6 +451,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
