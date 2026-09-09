@@ -6,7 +6,10 @@
 #     workflow آن را می‌خواند تا حتی اگر job در همان قدمِ خطا متوقف شد، اعلان
 #     از دست نرود).
 #   - خروجی را به GITHUB_STEP_SUMMARY (در صورت موجود بودن) اضافه می‌کند.
-#   - اگر NOTIFY_WEBHOOK_URL تنظیم شده باشد، یک POST ساده JSON می‌فرستد.
+#   - اگر NOTIFY_WEBHOOK_URL تنظیم شده باشد، اعلان می‌فرستد؛ فرمت خودکار:
+#     Discord webhook URL => {"content": ...} ؛ Telegram bot URL => {"text": ...}
+#     (برای تلگرام، chat_id را در خود URL بگذار: .../sendMessage?chat_id=<ID>)
+#     بقیه URLها => همان JSON خام قبلی.
 #     (وب‌هوک اختیاری است؛ بدون آن، GitHub notification خود workflow برای
 #     job شکست‌خورده + گزارش همین قدم در دسترس است.)
 #
@@ -72,7 +75,14 @@ fi
 
 # --- optional webhook --------------------------------------------------------
 if [ -n "${NOTIFY_WEBHOOK_URL:-}" ]; then
-  PAYLOAD="$(python3 - "$TYPE" "$STAGE" "$ERR" "$RUN" "$ATT" "$TS" <<'PY'
+  _MSG="Linux-server ${TYPE} failure at ${STAGE} (run ${RUN}#${ATT}): ${ERR}"
+  case "${NOTIFY_WEBHOOK_URL}" in
+    *discord.com/api/webhooks*)
+      PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"content": sys.argv[1][:1800]}))' "$_MSG")" ;;
+    *api.telegram.org*)
+      PAYLOAD="$(python3 -c 'import json,sys; print(json.dumps({"text": sys.argv[1][:3500]}))' "$_MSG")" ;;
+    *)
+      PAYLOAD="$(python3 - "$TYPE" "$STAGE" "$ERR" "$RUN" "$ATT" "$TS" <<'PY'
 import json, sys
 print(json.dumps({
     "type": sys.argv[1], "stage": sys.argv[2], "error": sys.argv[3],
@@ -81,7 +91,8 @@ print(json.dumps({
                f"(run {sys.argv[4]}#{sys.argv[5]})",
 }))
 PY
-)"
+)" ;;
+  esac
   if ! curl -fsS -m 20 -H 'Content-Type: application/json' \
       -d "$PAYLOAD" "$NOTIFY_WEBHOOK_URL" >/dev/null 2>&1; then
     echo "[notify] WARN: webhook send failed (URL not reachable/rejected)"

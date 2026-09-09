@@ -40,7 +40,7 @@ for ak in /home/Hamid/.ssh/authorized_keys /root/.ssh/authorized_keys; do
 done
 
 SSH_OPTS=(-i "$TEMP_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-          -o UserKnownHostsFile="$WORK/known_hosts" -o ConnectTimeout=10)
+          -o UserKnownHostsFile="$WORK/known_hosts" -o ConnectTimeout=10 -o LogLevel=ERROR)
 FAIL=0
 
 # 1) ورود Hamid با کلید

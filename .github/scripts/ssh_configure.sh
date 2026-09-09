@@ -72,7 +72,16 @@ fi
 echo "[ssh] sshd config test: $(sudo sshd -t >/dev/null 2>&1 && echo OK || echo FAILED)"
 echo "[ssh] listening: $(sudo ss -tlnp 2>/dev/null | grep ':22 ' | head -1 || echo 'port 22 not listening')"
 echo "[ssh] host key fingerprints:"
-sudo ssh-keygen -lf /etc/ssh/ssh_host_*_key 2>/dev/null | sed 's/^/[ssh]   /' || true
+# نکته: ssh-keygen -l دقیقاً «یک» فایل می‌پذیرد؛ پاس دادن چند فایل با glob
+# خطای «Too many arguments» می‌دهد و خروجی خالی می‌ماند (باگ v5.1) — پس تک‌تک.
+FOUND_FP=0
+for _k in /etc/ssh/ssh_host_*_key; do
+  [ -f "$_k" ] || continue
+  _fp=$(sudo ssh-keygen -lf "$_k" 2>/dev/null) || continue
+  echo "[ssh]   ${_fp}"
+  FOUND_FP=1
+done
+[ "$FOUND_FP" = 1 ] || echo "[ssh]   (none)"
 echo "[ssh] authorized_keys (Hamid) lines: $(sudo wc -l < /home/Hamid/.ssh/authorized_keys 2>/dev/null || echo 0)"
 echo "[ssh] authorized_keys (root) lines: $(sudo wc -l < /root/.ssh/authorized_keys 2>/dev/null || echo 0)"
 echo "[ssh] configured."

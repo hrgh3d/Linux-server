@@ -29,12 +29,15 @@ def local_self():
     try:
         out = subprocess.check_output(
             ["sudo", "tailscale", "status", "--json"], stderr=subprocess.DEVNULL)
-        s = json.loads(out.decode()).get("Self", {})
+        body = json.loads(out.decode())
+        # وقتی tailscaled متوقف/بدون-state است، Self یا TailscaleIPs ممکن است
+        # null باشند (باگ v5.1: 'NoneType' object is not iterable) — همه None-safe.
+        s = body.get("Self") or {}
         nodekey = s.get("PublicKey") or s.get("NodeKey") or ""
         return {
             "id": s.get("ID", ""),
             "nodekey": nodekey,
-            "ips": set(s.get("TailscaleIPs", [])),
+            "ips": set(s.get("TailscaleIPs") or []),
             "hostname": s.get("HostName", ""),
             "online": bool(s.get("Online")),
         }
@@ -84,7 +87,7 @@ def main():
         print(f"[ts-clean] warn: cannot list devices: {e}", file=sys.stderr)
         return
 
-    devices = data.get("devices", [])
+    devices = data.get("devices") or []
     deleted, renamed = 0, 0
     online_target = None
     my_device = None

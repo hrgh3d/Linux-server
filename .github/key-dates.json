@@ -1,0 +1,5 @@
+{
+  "tailscale_api_token_expires": "TODO-YYYY-MM-DD",
+  "successor_pat_expires": "TODO-YYYY-MM-DD",
+  "notes": "تاریخ‌ها secret نیستند. از صفحه‌های کنسول بردار و اینجا بگذار؛ با هر تعویض توکن به‌روز کن. هر بوت چک می‌شود (<۱۰ روز = هشدار)."
+}

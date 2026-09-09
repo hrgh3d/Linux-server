@@ -1,24 +1,18 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v5.1]
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.0]
 
 # ============================================================================
-# سرور Ubuntu پایدار روی GitHub Actions — معماری v5.1
+# سرور Ubuntu پایدار روی GitHub Actions — معماری v6.0 (شاخه AI، بدون VPN)
 #
-#  Backup فقط «داده/تنظیمات کاربر» است (نه فایل‌های نصب پکیج‌ها):
-#    - payload.py ریشه‌های داده/کانفیگ (persist.list) را اسکن می‌کند و
-#      کد/کش/ابزارهای نصب را حذف می‌کند → هر فایل جدیدِ پکیج (هر مسیر/نامی)
-#      خودکار ذخیره می‌شود.
-#    - installed.json کاتالوگ نسخه‌دار (apt name=ver / npm name@ver /
-#      pip name==ver) است؛ در Restore همان نسخهٔ ذخیره‌شده نصب می‌شود و سپس
-#      کانفیگ/دیتا روی آن‌ها اعمال می‌شود. اپ‌های سفارشی (9router/Hermes/3x-ui)
-#      installer خودشان را دارند (provision.sh).
-#    - دیتابیس‌های SQLite زنده با sqlite_stage.py به‌صورت consistent اسنپ‌شات
-#      می‌شوند؛ آرشیو پیش از آپلود Validate می‌شود (در خطا، آپلود نمی‌شود و
-#      State سالم قبلی حفظ می‌شود)؛ در پایان Lifetime، save نهایی واقعاً اجرا و
-#      نتیجه‌اش راست‌آزمایی می‌شود.
-#  Root-first: تمام مراحل با shell ریشه اجرا و ورود SSH مستقیم root انجام می‌شود.
-#  همگام‌سازی تک‌نسخه‌ای: concurrency بر اساس نوع trigger جدا شده و یک قدم
-#  هماهنگ‌سازی تضمین می‌کند Dispatch دستی پشت Cron معطل نماند (Cron تسلیم
-#  Manual می‌شود؛ Manual بقیه را Cancel می‌کند؛ Cron فقط Cron قدیمی را جایگزین).
+#  v6.0 نسبت به v5.1 (پورت زیرساخت + autostart ایجنت):
+#    - پورت اصلاحات کپی اول (timeout روی up ها، بازسازی state، fail-fast،
+#      None-safety و fingerprint-loop) — بدون هیچ جزء VPN.
+#    - زنجیره جانشین خودکار (successor self-dispatch با SUCCESSOR_TOKEN؛ گارد
+#      lifetime<60؛ کرون backstop) — قطعی فقط چند دقیقه ریبیلد.
+#    - هشدار انقضای کلیدها در هر بوت (node key + auth key + key-dates.json).
+#    - اجرای خودکار ایجنت بعد از بوت (/root/agent-autostart.sh، غیرfatal).
+#    - بدون Tailscale SSH در ثبت‌های تازه (ورود فقط با کلید؛ بدون تأییدیه).
+#    - لاگ‌های بهداشتی برای ریپوی عمومی + وبهوک Discord/Telegram در notify.sh.
+#
 # ============================================================================
 
 on:
@@ -79,6 +73,9 @@ jobs:
       STATE_TAG: state
       PERSIST_REPO: hrgh3d/Linux-server-state
       PERSIST_TOKEN: ${{ secrets.PERSIST_TOKEN }}
+      SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN }}
+      # نام این node روی تلنت خودش؛ cleanup فقط هم‌نام‌های آفلاین را حذف می‌کند.
+      # تا tailscale_cleanup هیچ‌کدام دیگری را حذف نکند. IP خودکار (ثابت پس از ثبت).
       TS_HOSTNAME: linux-server-vps
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN || 'NOT_SET' }}
@@ -287,6 +284,16 @@ jobs:
       - name: Verify and report
         run: bash .github/scripts/server_report.sh
 
+      - name: Agent autostart (AI resume after boot)
+        run: |
+          if [ -x /root/agent-autostart.sh ]; then
+            echo "[autostart] running /root/agent-autostart.sh ..."
+            timeout 300 bash /root/agent-autostart.sh >/var/log/agent-autostart.log 2>&1 || \
+              echo "[autostart] WARNING: autostart script failed (non-fatal, see /var/log/agent-autostart.log)"
+          else
+            echo "[autostart] no /root/agent-autostart.sh — skipping"
+          fi
+
       - name: Keep server alive (serial auto-sync + verified final save)
         run: |
           SCRIPT_DIR=.github/scripts
@@ -298,6 +305,19 @@ jobs:
           CONSEC=0
           do_save() { # 0=موفق/بی‌تغییر  1=خطا (هرگز skip بی‌صدا وجود ندارد)
             if timeout 300 bash "$SCRIPT_DIR/save.sh"; then return 0; else return 1; fi
+          }
+          dispatch_successor() { # اجرای رانِ جانشین (workflow_dispatch)؛ 0=ok
+            local _tok="${SUCCESSOR_TOKEN:-NOT_SET}" _code
+            if [ -z "$_tok" ] || [ "$_tok" = "NOT_SET" ]; then
+              echo "[successor] no token — skipping (schedule ticks remain as backstop)"
+              return 1
+            fi
+            _code=$(curl -s -o /tmp/successor_resp.json -w "%{http_code}" --max-time 30 -X POST \
+              -H "Authorization: Bearer ${_tok}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/main.yml/dispatches" \
+              -d '{"ref":"main","inputs":{"lifetime_min":"350"}}' 2>/dev/null || echo "000")
+            echo "[successor] dispatch HTTP=${_code} $(head -c 160 /tmp/successor_resp.json 2>/dev/null || true)"
+            [ "$_code" = "204" ]
           }
           final_save() {
             echo "[keepalive] final save..."
@@ -312,10 +332,27 @@ jobs:
           trap 'flush_on_signal || exit 1; exit 0' TERM INT QUIT HUP
           END_TS=$(( $(date +%s) + LIFETIME_MIN * 60 ))
           LAST_AUTO=$(date +%s)
+          SUCCESSOR_AT=$(( END_TS - 600 ))
+          SUCCESSOR_DISPATCHED=0
+          if [ "$LIFETIME_MIN" -lt 60 ]; then
+            SUCCESSOR_DISPATCHED=1  # رانِ تستی کوتاه: جانشین نمی‌خواهد
+            echo "[successor] short test run (lifetime<60) — successor dispatch disabled"
+          fi
           while :; do
             NOW=$(date +%s)
             if [ "$NOW" -ge "$END_TS" ]; then
               break
+            fi
+            if [ "$SUCCESSOR_DISPATCHED" -eq 0 ] && [ "$NOW" -ge "$SUCCESSOR_AT" ]; then
+              SUCCESSOR_DISPATCHED=1
+              echo "[successor] lifetime ends in <10min — dispatching replacement run..."
+              if dispatch_successor; then
+                echo "[successor] replacement dispatched OK — it will take over (this run ends after final save)"
+              else
+                echo "[successor] WARNING: replacement dispatch failed (schedule ticks remain as backstop)"
+                bash "$SCRIPT_DIR/notify.sh" --type server --stage successor-dispatch \
+                  --error "Replacement run dispatch failed — server will stop at lifetime end; next schedule tick is the backstop." || true
+              fi
             fi
             if [ $(( NOW - LAST_AUTO )) -ge "$INTERVAL" ]; then
               echo "[auto-sync $(date -u '+%T')] periodic save..."

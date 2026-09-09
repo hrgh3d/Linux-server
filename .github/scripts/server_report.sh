@@ -28,7 +28,15 @@ echo "---- 3) SSH ----"
 echo "sshd running         : $(pgrep -x sshd >/dev/null && echo yes || echo NO)"
 echo "port 22              : $(sudo ss -tlnp 2>/dev/null | grep -c ':22 ')"
 echo "host key fingerprints:"
-sudo ssh-keygen -lf /etc/ssh/ssh_host_*_key 2>/dev/null | sed 's/^/    /' || echo "    (none)"
+# ssh-keygen -l فقط یک فایل می‌پذیرد (چند فایل = «Too many arguments») — تک‌تک.
+_FOUND_FP=0
+for _k in /etc/ssh/ssh_host_*_key; do
+  [ -f "$_k" ] || continue
+  _fp=$(sudo ssh-keygen -lf "$_k" 2>/dev/null) || continue
+  echo "    ${_fp}"
+  _FOUND_FP=1
+done
+[ "$_FOUND_FP" = 1 ] || echo "    (none)"
 FIXED_SHA=$(sha256sum .github/ssh/id_ed25519.pub 2>/dev/null | cut -d' ' -f1)
 H_SHA=$(sudo sha256sum /home/Hamid/.ssh/authorized_keys 2>/dev/null | cut -d' ' -f1)
 R_SHA=$(sudo sha256sum /root/.ssh/authorized_keys 2>/dev/null | cut -d' ' -f1)
@@ -38,7 +46,12 @@ echo "fixed key present root : $(sudo grep -cF "$(tr -d '\r\n' < .github/ssh/id_
 echo ""
 echo "---- 4) Tailscale ----"
 echo "ip4=${TS_IP:-pending}"
-sudo tailscale status 2>/dev/null | head -5 || echo "(tailscale not running)"
+_TS_SELF_JSON=$(sudo tailscale status --json 2>/dev/null || true)
+if [ -n "$_TS_SELF_JSON" ]; then
+  echo "self: $(echo "$_TS_SELF_JSON" | jq -r '"\(.Self.HostName // "?") \((.Self.TailscaleIPs // []) | join(",")) online=\(.Self.Online // false)"' 2>/dev/null || echo '(parse error)')"
+else
+  echo "(tailscale not running)"
+fi
 
 echo ""
 echo "---- 5) Persistence probe (path/name-agnostic) ----"
@@ -83,7 +96,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "<details><summary>Host SSH key fingerprints</summary>"
     echo ""
     echo '```'
-    sudo ssh-keygen -lf /etc/ssh/ssh_host_*_key 2>/dev/null
+    _FOUND_FP=0
+    for _k in /etc/ssh/ssh_host_*_key; do
+      [ -f "$_k" ] || continue
+      _fp=$(sudo ssh-keygen -lf "$_k" 2>/dev/null) || continue
+      echo "    ${_fp}"
+      _FOUND_FP=1
+    done
+    [ "$_FOUND_FP" = 1 ] || echo "    (none)"
     echo '```'
     echo "</details>"
   } >> "$GITHUB_STEP_SUMMARY"
