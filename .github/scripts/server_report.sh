@@ -48,7 +48,7 @@ done
 if command -v htop >/dev/null 2>&1; then echo "htop installed : yes ($(dpkg -s htop 2>/dev/null | grep Version | awk '{print $2}'))"; else echo "htop installed : no"; fi
 echo "9router  bin : $([ -x /usr/local/bin/9router ] && echo present || echo missing) ($(readlink /usr/local/bin/9router 2>/dev/null || true))"
 echo "hermes   bin : $([ -x /usr/local/bin/hermes ] && echo present || echo missing)"
-echo "hermes   data: $([ -d /root/.hermes ] && echo present || echo missing)"
+echo "hermes   data: $(sudo test -d /root/.hermes && echo present || echo missing)"
 echo "3x-ui    bin : $([ -x /usr/local/x-ui/x-ui ] && echo present || echo missing)"
 echo "3x-ui    etc : $([ -d /etc/x-ui ] && echo present || echo missing)"
 
