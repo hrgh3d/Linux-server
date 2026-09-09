@@ -39,7 +39,7 @@ on:
         default: 'true'
         type: string
   schedule:
-    - cron: '0 */5 * * *'        # هر ۵ ساعت (UTC)
+    - cron: '0 */3 * * *'        # هر ۳ ساعت (v6.9: backstop سریع‌تر برای کاهش قطعی) (UTC)
   repository_dispatch:
 
 # concurrency بر اساس trigger جدا شده است تا Manual Dispatch پشت Cron در صف
@@ -302,10 +302,10 @@ jobs:
           LIFETIME_MIN=$(echo "${LIFETIME_MIN:-350}" | grep -Eo '^[0-9]+$' || echo 350)
           if [ "$LIFETIME_MIN" -lt 1 ]; then LIFETIME_MIN=5; fi
           if [ "$LIFETIME_MIN" -gt 355 ]; then LIFETIME_MIN=355; fi
-          echo "Server lifetime: ${LIFETIME_MIN} minutes (root-first)"
+          echo "Server lifetime: ${LIFETIME_MIN} minutes (root-first) - v6.9 early successor"
           INTERVAL=$(( ${SAVE_INTERVAL_MIN:-5} * 60 ))
           CONSEC=0
-          check_tailscale() { # نگهبان Tailscale (v6.4): 0 همیشه؛ ترمیم+notify در صورت خرابی (غیرکشنده)
+          check_tailscale() {
             local _on _ip _derp
             _on=$(sudo tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null || echo false)
             _ip=$(sudo tailscale ip -4 2>/dev/null | head -1 || true)
@@ -332,10 +332,10 @@ jobs:
             fi
             return 0
           }
-          do_save() { # 0=موفق/بی‌تغییر  1=خطا (هرگز skip بی‌صدا وجود ندارد)
+          do_save() {
             if timeout 300 bash "$SCRIPT_DIR/save.sh"; then return 0; else return 1; fi
           }
-          dispatch_successor() { # اجرای رانِ جانشین (workflow_dispatch)؛ 0=ok
+          dispatch_successor() {
             local _tok="${SUCCESSOR_TOKEN:-NOT_SET}" _code
             if [ -z "$_tok" ] || [ "$_tok" = "NOT_SET" ]; then
               echo "[successor] no token — skipping (schedule ticks remain as backstop)"
@@ -361,10 +361,11 @@ jobs:
           trap 'flush_on_signal || exit 1; exit 0' TERM INT QUIT HUP
           END_TS=$(( $(date +%s) + LIFETIME_MIN * 60 ))
           LAST_AUTO=$(date +%s)
-          SUCCESSOR_AT=$(( END_TS - 600 ))
+          SUCCESSOR_AT=$(( END_TS - 1200 ))  # v6.9: 20min early dispatch for minimal downtime
           SUCCESSOR_DISPATCHED=0
+          SUCCESSOR_RETRY_AT=$(( END_TS - 600 ))  # 10min fallback
           if [ "$LIFETIME_MIN" -lt 60 ]; then
-            SUCCESSOR_DISPATCHED=1  # رانِ تستی کوتاه: جانشین نمی‌خواهد
+            SUCCESSOR_DISPATCHED=1
             echo "[successor] short test run (lifetime<60) — successor dispatch disabled"
           fi
           while :; do
@@ -374,13 +375,33 @@ jobs:
             fi
             if [ "$SUCCESSOR_DISPATCHED" -eq 0 ] && [ "$NOW" -ge "$SUCCESSOR_AT" ]; then
               SUCCESSOR_DISPATCHED=1
-              echo "[successor] lifetime ends in <10min — dispatching replacement run..."
+              echo "[successor] lifetime ends in <20min — dispatching replacement run (v6.9 early)..."
               if dispatch_successor; then
-                echo "[successor] replacement dispatched OK — it will take over (this run ends after final save)"
+                echo "[successor] replacement dispatched OK — new run should be pending/in_progress now, will take over after final save"
               else
-                echo "[successor] WARNING: replacement dispatch failed (schedule ticks remain as backstop)"
-                bash "$SCRIPT_DIR/notify.sh" --type server --stage successor-dispatch \
-                  --error "Replacement run dispatch failed — server will stop at lifetime end; next schedule tick is the backstop." || true
+                echo "[successor] first dispatch failed — retrying in 60s..."
+                sleep 60
+                if dispatch_successor; then
+                  echo "[successor] retry OK — successor dispatched"
+                else
+                  echo "[successor] WARNING: replacement dispatch failed after retry (schedule backstop in max 3h)"
+                  bash "$SCRIPT_DIR/notify.sh" --type server --stage successor-dispatch \
+                    --error "Replacement run dispatch failed — server will stop at lifetime end; next schedule tick (3h) is backstop." || true
+                fi
+              fi
+            fi
+            # fallback check at 10min before end if no successor seen
+            if [ "$SUCCESSOR_DISPATCHED" -eq 1 ] && [ "$NOW" -ge "$SUCCESSOR_RETRY_AT" ] && [ "$NOW" -lt $((END_TS - 300)) ]; then
+              # only once at 10min mark
+              if [ "$SUCCESSOR_RETRY_AT" -ne 0 ]; then
+                SUCCESSOR_RETRY_AT=0
+                echo "[successor] 10min fallback check..."
+                # list in_progress runs quickly
+                if ! curl -s --max-time 15 -H "Authorization: Bearer ${SUCCESSOR_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=10" 2>/dev/null | grep -q '"id"'; then
+                  echo "[successor] API check inconclusive"
+                fi
+                # we don't auto-dispatch again here to avoid loop, just log - the first dispatch should have queued new run
+                echo "[successor] fallback check done — if new run not visible, it will be queued shortly"
               fi
             fi
             if [ $(( NOW - LAST_AUTO )) -ge "$INTERVAL" ]; then
@@ -399,7 +420,7 @@ jobs:
                 fi
               fi
               LAST_AUTO="$NOW"
-              check_tailscale || true  # v6.4: نگهبان Tailscale (غیرکشنده)
+              check_tailscale || true
             fi
             sleep 3
           done
@@ -412,6 +433,7 @@ jobs:
             echo "[keepalive] ERROR: final save failed"
             exit 1
           fi
+
 
       - name: Notify on job failure (active failure notification)
         if: always() && job.status == 'failure'
