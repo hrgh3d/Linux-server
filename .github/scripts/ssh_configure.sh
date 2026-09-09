@@ -14,7 +14,7 @@ if [ ! -f "$REPO_PUB" ]; then
   echo "[ssh] ERROR: fixed public key not found at $REPO_PUB"
   exit 1
 fi
-FIXED_KEY="$(tr -d '\r\n' < "$REPO_PUB")"
+# (v6.7) کلیدها خط‌به‌خط از REPO_PUB خوانده می‌شوند (یک یا چند کلید)
 
 echo "[ssh] installing sshd_config..."
 sudo cp "$SCRIPT_DIR/../config/sshd_config" /etc/ssh/sshd_config
@@ -37,11 +37,21 @@ ensure_key() {
   sudo touch "$home/.ssh/authorized_keys"
   sudo chmod 700 "$home/.ssh"
   sudo chmod 600 "$home/.ssh/authorized_keys"
-  if ! sudo grep -qxF "$FIXED_KEY" "$home/.ssh/authorized_keys" 2>/dev/null; then
-    echo "$FIXED_KEY" | sudo tee -a "$home/.ssh/authorized_keys" >/dev/null
-    echo "[ssh] added fixed key to $user authorized_keys"
+  # v6.7: همه‌ی خطوط REPO_PUB (یک یا چند کلید) merge می‌شوند؛ قدیمی‌ها پاک نمی‌شوند.
+  local _k _added=0
+  while IFS= read -r _k || [ -n "$_k" ]; do
+    _k="${_k%$'\r'}"
+    if [ -z "$_k" ]; then continue; fi
+    case "$_k" in \#*) continue;; esac
+    if ! sudo grep -qxF "$_k" "$home/.ssh/authorized_keys" 2>/dev/null; then
+      echo "$_k" | sudo tee -a "$home/.ssh/authorized_keys" >/dev/null
+      _added=$((_added+1))
+    fi
+  done < "$REPO_PUB"
+  if [ "$_added" -gt 0 ]; then
+    echo "[ssh] added ${_added} fixed key(s) to $user authorized_keys"
   else
-    echo "[ssh] fixed key already present for $user"
+    echo "[ssh] fixed key(s) already present for $user"
   fi
   # حذف خطوط تکراریِ دقیق
   sudo cp "$home/.ssh/authorized_keys" "$home/.ssh/authorized_keys.tmp"
