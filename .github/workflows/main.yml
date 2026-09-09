@@ -219,16 +219,6 @@ jobs:
       - name: Restore — apply (config/data payload over reinstalled packages)
         run: bash .github/scripts/restore.sh apply
 
-      - name: Remove disabled apps (3x-ui) - user request v6.9.2
-        run: |
-          echo "[cleanup] Removing 3x-ui panel permanently (user disabled)..."
-          sudo systemctl stop x-ui >/dev/null 2>&1 || true
-          sudo systemctl disable x-ui >/dev/null 2>&1 || true
-          sudo rm -rf /etc/x-ui /usr/local/x-ui /etc/systemd/system/x-ui.service /etc/systemd/system/multi-user.target.wants/x-ui.service
-          sudo systemctl daemon-reload >/dev/null 2>&1 || true
-          sudo systemctl reset-failed >/dev/null 2>&1 || true
-          echo "[cleanup] 3x-ui removed, will not return in future runs" 
-
       - name: Start persistent apps (Hermes dashboard/tunnel/gateway)
         run: bash .github/scripts/start-services.sh
       - name: Write persistence probe (new paths + second apt pkg)
