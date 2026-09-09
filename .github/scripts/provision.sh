@@ -53,20 +53,22 @@ provision_hermes() {
     note "hermes: present (legacy under /root/.hermes) — skip"
     return 0
   fi
-  log "hermes: not found — running official installer (non-interactive)..."
+  log "hermes: not found — running official installer as root (FHS, non-interactive)..."
   curl -fsSL --max-time 60 https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh \
     || { note "hermes: download of installer FAILED"; return 1; }
-  # غیرتعاملی؛ browser/computer-use نصب نمی‌شوند (سنگین) تا چرخه سریع بماند؛
-  # کاربر می‌تواند بعداً با 'hermes setup' آن‌ها را فعال کند.
-  HERMES_HOME=/root/.hermes \
-  timeout 1500 bash /tmp/hermes-install.sh --non-interactive \
-      --skip-browser --skip-computer-use \
+  # به‌صورت root اجرا می‌شود تا: کد → /usr/local/lib/hermes-agent (در State)،
+  # فرمان → /usr/local/bin/hermes و دیتا → /root/.hermes (همراه /root در State).
+  timeout 1500 $SUDO env HERMES_HOME=/root/.hermes \
+      bash /tmp/hermes-install.sh --non-interactive \
+          --skip-browser --skip-computer-use \
       >"${LOG_DIR}/hermes.log" 2>&1
   rc=$?
-  if [ $rc -eq 0 ] && [ -x /usr/local/bin/hermes ]; then
-    note "hermes: INSTALLED ($(/usr/local/bin/hermes --version 2>/dev/null || echo ok))"
+  if [ $rc -eq 0 ] && { [ -x /usr/local/bin/hermes ] || [ -x /root/.hermes/hermes-agent/hermes ]; }; then
+    note "hermes: INSTALLED (cmd=$(command -v hermes 2>/dev/null || echo /usr/local/bin/hermes))"
   else
     note "hermes: install did not complete (rc=$rc) — see ${LOG_DIR}/hermes.log"
+    echo "----- tail hermes.log -----" | tee -a "${LOG_DIR}/summary.txt"
+    tail -40 "${LOG_DIR}/hermes.log" 2>/dev/null | tee -a "${LOG_DIR}/summary.txt"
   fi
 }
 
