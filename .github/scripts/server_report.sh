@@ -46,7 +46,7 @@ for f in /root/persistence-probe/root.txt /var/lib/persistence-probe-z9x/state.d
   if sudo test -f "$f"; then echo "found: $f -> $(sudo cat "$f" 2>/dev/null | head -1)"; else echo "missing: $f"; fi
 done
 if command -v htop >/dev/null 2>&1; then echo "htop installed : yes"; else echo "htop installed : no"; fi
-if command -v cowsay >/dev/null 2>&1; then echo "cowsay installed : yes"; else echo "cowsay installed : no"; fi
+if dpkg -s cowsay >/dev/null 2>&1; then echo "cowsay installed : yes ($(dpkg-query -W -f='${Version}' cowsay 2>/dev/null))"; else echo "cowsay installed : no"; fi
 echo "9router  bin : $([ -x /usr/local/bin/9router ] && echo present || echo missing)"
 echo "hermes   bin : $([ -x /usr/local/bin/hermes ] && echo present || echo missing)"
 echo "hermes   data: $(sudo test -d /root/.hermes && echo present || echo missing)"

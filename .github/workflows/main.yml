@@ -147,9 +147,10 @@ jobs:
           # (c) فایل کانفیگ با نام جدید در /etc
           [ -f /etc/persistence-probe.conf ] && echo "RESTORED /etc/persistence-probe.conf" || echo "PROBE etc $TS" > /etc/persistence-probe.conf
           cat /etc/persistence-probe.conf 2>/dev/null
-          # (d) پکیج apt تستی دوم (کاتالوگ apt)
-          if command -v cowsay >/dev/null 2>&1; then
-            echo "cowsay ALREADY INSTALLED ($(dpkg-query -W -f='${Version}' cowsay 2>/dev/null))"
+          # (d) پکیج apt تستی دوم (کاتالوگ apt) — cowsay در /usr/games است،
+          #     بنابراین وجود آن با dpkg سنجیده می‌شود نه PATH.
+          if dpkg -s cowsay >/dev/null 2>&1; then
+            echo "cowsay RESTORED by catalog ($(dpkg-query -W -f='${Version}' cowsay 2>/dev/null))"
           else
             DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 cowsay >/dev/null 2>&1 && echo "cowsay INSTALLED fresh" || echo "WARN cowsay"
           fi
