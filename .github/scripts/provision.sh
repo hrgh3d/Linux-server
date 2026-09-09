@@ -1,10 +1,9 @@
 #!/bin/bash
 # ============================================================================
-# provision.sh — v4.5.3 pure Mode 2 + cloudflared + hermes recovery (staged aware)
-#   - حالت ۲: اگر کاربر قبلاً Hermes داشته (/root/.hermes exists) ولی باینری پاک شده، دوباره نصب کن
-#   - اگر کاربر کل /root/.hermes را پاک کرده، نصب نکن
-#   - v4.5.3: چک کردن /tmp/persist-restore هم (چون restore apply بعد از provision است)
-#             در غیر این صورت recovery هرگز تریگر نمی‌شد
+# provision.sh — v4.5.4 pure Mode 2 + staged-aware (fast path if staged exists)
+#   - حالت ۲: اگر کاربر قبلاً Hermes داشته ولی باینری پاک شده، دوباره نصب کن
+#   - v4.5.3: چک کردن /tmp/persist-restore برای data
+#   - v4.5.4: چک کردن staged binary هم تا reinstall بی‌دلیل انجام نشود (سرعت بوت)
 # ============================================================================
 set -uo pipefail
 LOG_DIR=/tmp/provision
@@ -15,17 +14,25 @@ note() { echo "[provision] $*" | tee -a "${LOG_DIR}/summary.txt"; }
 SUDO=""
 [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 
-# محل stage شده‌ی restore (اگر وجود داشته باشد)
 RESTORE_ROOT="/tmp/persist-restore"
 
 has_hermes_data() {
   [ -d /root/.hermes ] || [ -d "$RESTORE_ROOT/root/.hermes" ]
 }
+has_hermes_binary_live() {
+  [ -x /usr/local/bin/hermes ] && [ -d /usr/local/lib/hermes-agent ]
+}
+has_hermes_binary_staged() {
+  [ -x "$RESTORE_ROOT/usr/local/bin/hermes" ] && [ -d "$RESTORE_ROOT/usr/local/lib/hermes-agent" ]
+}
+has_hermes_legacy() {
+  [ -x /root/.hermes/hermes-agent/hermes ] || [ -d /root/.hermes/hermes-agent/.git ] || [ -x "$RESTORE_ROOT/root/.hermes/hermes-agent/hermes" ]
+}
 has_9router_data() {
   [ -d /root/.9router ] || [ -d /home/Hamid/.9router ] || [ -d "$RESTORE_ROOT/root/.9router" ] || [ -d "$RESTORE_ROOT/home/Hamid/.9router" ]
 }
-has_cloudflared_staged() {
-  [ -x "$RESTORE_ROOT/usr/local/bin/cloudflared" ] || [ -x "$RESTORE_ROOT/root/.hermes/bin/cloudflared" ] || has_hermes_data
+has_9router_binary() {
+  [ -x /usr/local/bin/9router ] || [ -x "$RESTORE_ROOT/usr/local/bin/9router" ]
 }
 
 ensure_npm() {
@@ -35,10 +42,9 @@ ensure_npm() {
 }
 
 provision_9router() {
-  if [ -x /usr/local/bin/9router ]; then
+  if has_9router_binary; then
     note "9router: present — kept (Mode 2)"
   else
-    # اگر قبلاً نصب بوده (دیتا موجود در live یا staged) ولی باینری نیست، دوباره نصب کن
     if has_9router_data; then
       log "9router: data exists (live or staged) but binary missing — reinstalling (recovery)..."
       if ensure_npm && timeout 300 $SUDO env PATH="$PATH" npm install -g 9router >"${LOG_DIR}/9router.log" 2>&1; then
@@ -54,17 +60,20 @@ provision_9router() {
 }
 
 provision_hermes() {
-  if [ -x /usr/local/bin/hermes ] && [ -d /usr/local/lib/hermes-agent ]; then
+  if has_hermes_binary_live; then
     note "hermes: present — kept (Mode 2)"
     return 0
   fi
-  if [ -x /root/.hermes/hermes-agent/hermes ] || [ -d /root/.hermes/hermes-agent/.git ]; then
+  if has_hermes_binary_staged; then
+    note "hermes: present staged — kept (will be applied, no reinstall needed) (Mode 2)"
+    return 0
+  fi
+  if has_hermes_legacy; then
     note "hermes: present legacy — kept (Mode 2)"
     return 0
   fi
-  # اگر staged هم داشته باشیم، باید recovery کنیم
   if has_hermes_data; then
-    log "hermes: data exists (live or staged at $RESTORE_ROOT) but binary missing — reinstalling (recovery from old prune)..."
+    log "hermes: data exists (live or staged at $RESTORE_ROOT) but binary missing — reinstalling (recovery)..."
     curl -fsSL --max-time 60 https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh || { note "hermes: download FAILED"; return 1; }
     timeout 1500 $SUDO env HERMES_HOME=/root/.hermes bash /tmp/hermes-install.sh --non-interactive --skip-browser --skip-computer-use >"${LOG_DIR}/hermes.log" 2>&1
     rc=$?
@@ -110,7 +119,7 @@ provision_cloudflared() {
   fi
 }
 
-log "=== provisioning start (Mode 2 + recovery v4.5.3 staged-aware) ==="
+log "=== provisioning start (Mode 2 + recovery v4.5.4 staged-aware fast) ==="
 provision_9router
 provision_hermes
 provision_xui
