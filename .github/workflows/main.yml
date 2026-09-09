@@ -51,9 +51,12 @@ jobs:
     timeout-minutes: 360          # حداکثر مجاز GitHub ≈ ۶ ساعت
 
     # همه‌ی steps با shell ریشه اجرا می‌شوند (root-first؛ بدون نیاز به sudo su)
+    # NOTE: GitHub executes custom shell templates WITHOUT a shell, so no
+    # "$PATH" expansion happens here (that broke with literal PATH=$PATH).
+    # sudo -E already preserves the runner's PATH/env; we only pin HOME=/root.
     defaults:
       run:
-        shell: sudo -E env "PATH=$PATH" HOME=/root bash -e {0}
+        shell: sudo -E env HOME=/root bash -e {0}
 
     permissions:
       contents: read
