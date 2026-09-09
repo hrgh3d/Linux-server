@@ -1,4 +1,4 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.0]
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.3]
 
 # ============================================================================
 # سرور Ubuntu پایدار روی GitHub Actions — معماری v6.0 (شاخه AI، بدون VPN)
@@ -206,6 +206,8 @@ jobs:
       - name: Restore — apply (config/data payload over reinstalled packages)
         run: bash .github/scripts/restore.sh apply
 
+      - name: Start persistent apps (Hermes dashboard/tunnel/gateway)
+        run: bash .github/scripts/start-services.sh
       - name: Write persistence probe (new paths + second apt pkg)
         if: env.PROBE_ENABLED == 'true'
         run: |
