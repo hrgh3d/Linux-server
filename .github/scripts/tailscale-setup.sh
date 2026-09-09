@@ -36,6 +36,14 @@ MARKER=/root/.ts-node-owned
 OWNED=0
 [ -f "$MARKER" ] && OWNED=1
 if [ -s /var/lib/tailscale/tailscaled.state ] && [ "$OWNED" = 0 ]; then
+  # v6.1 مهاجرت از v5.1 (که marker نداشت): اگر این بوت state را restore کرده
+  # (marker رانِ قبلی موجود است)، این هویتِ legacy خودمان است — adopt کن نه wipe.
+  if [ -f /root/persist-marker.txt ] && ! grep -q "run_id=${GITHUB_RUN_ID:-local}" /root/persist-marker.txt 2>/dev/null; then
+    echo "[tailscale] legacy restored identity found (no marker yet) — adopting (v5.1 migration)..."
+    sudo mkdir -p /root
+    sudo touch "$MARKER"
+    OWNED=1
+  else
   echo "[tailscale] leftover/unowned identity found (no ownership marker) — wiping for fresh registration"
   # tailscaled ممکن است هنگام نصب auto-start شده باشد؛ اول باید متوقف شود وگرنه
   # state قدیمی قفل می‌ماند و up بعدی با 500 initMachineKeyLocked شکست می‌خورد.
@@ -48,6 +56,7 @@ if [ -s /var/lib/tailscale/tailscaled.state ] && [ "$OWNED" = 0 ]; then
   #   500 initMachineKeyLocked: ... tailscaled.state.tmp...: no such file or directory
   sudo mkdir -p /var/lib/tailscale
   sudo chmod 700 /var/lib/tailscale
+  fi
 fi
 
 # همیشه پیش از (re)start دیمون از وجود دایرکتوری state مطمئن می‌شویم.
