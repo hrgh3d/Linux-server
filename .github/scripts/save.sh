@@ -104,14 +104,18 @@ cat "$STATS" 2>/dev/null | jq -c '{dirs,files,links,mb,top:.["top"],top2:.["top2
 phase "creating archive..."
 sudo rm -f /tmp/state.tar.gz
 set +e
-sudo tar --use-compress-program='gzip -1' -cf /tmp/state.tar.gz \
+# -v goes to tar.log so on failure we can see the last file tar was working
+# on; inner timeout 300 prevents a stuck read from burning the whole step.
+timeout 300 sudo tar -v --use-compress-program='gzip -1' -cf /tmp/state.tar.gz \
   -C / -T "$LIST" --no-recursion \
   -C "$META" _meta \
   >/tmp/tar.log 2>&1
 RC=$?
 set -e
 if [ $RC -ne 0 ]; then
-  log "ERROR: tar failed (rc=$RC): $(tail -3 /tmp/tar.log | tr '\n' ' ')"
+  log "ERROR: tar failed/timed out (rc=$RC). Last files processed:"
+  tail -15 /tmp/tar.log 2>/dev/null | sed 's/^/    /'
+  sudo rm -f /tmp/state.tar.gz
   exit 1
 fi
 sudo chown "$(id -u):$(id -g)" /tmp/state.tar.gz 2>/dev/null || true
