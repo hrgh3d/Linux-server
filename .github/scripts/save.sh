@@ -83,6 +83,10 @@ GLOBAL_EXCLUDES=(
   --exclude='hostedtoolcache'
   --exclude='containerd'
   --exclude='core'
+  # لاگ‌ها/کش‌های چرخان tailscale نباید در آرشیو بیایند (هویت در tailscaled.state است)
+  --exclude='tailscaled.log*'
+  --exclude='derpmap.cached.json'
+  --exclude='*.sock'
 )
 # الگوهای مختص /etc (فایل‌های گذرای میزبان/image نباید ذخیره/بازگردانی شوند)
 ETC_EXCLUDES=(
