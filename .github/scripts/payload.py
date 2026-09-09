@@ -67,6 +67,9 @@ PRUNE_ABS_DIRS = [
     # "usr/local/lib/hermes-agent",  # REMOVED v4.5.2 - باید بین ران‌ها بماند تا gateway کار کند (Mode 2)
     "usr/local/share/uv",
     "usr/local/x-ui/bin",
+    # v5.2: runner image bulk - never persist (android SDK 7GB caused snapshot timeout)
+    "usr/local/lib/android",
+    "usr/local/lib/heroku",
     # v4.5: root/.hermes/bin (cloudflared etc) را دیگر prune نمی‌کنیم تا بین ران‌ها پاک نشود (درخواست کاربر)
     # "root/.hermes/bin",  # REMOVED - cloudflared باید بماند
     # "root/.hermes/hermes-agent",  # REMOVED - برای حالت Mode 2 خالص
@@ -431,3 +434,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
