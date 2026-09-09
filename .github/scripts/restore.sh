@@ -44,6 +44,8 @@ if [ -f "$RESTORE/user_packages.list" ] && [ -s "$RESTORE/user_packages.list" ];
   while IFS= read -r pkg; do
     [ -n "$pkg" ] || continue
     case "$pkg" in \#*) continue ;; esac
+    # tailscale توسط اسکریپت اختصاصی نصب می‌شود (در زمان restore ریپوی آن موجود نیست)
+    case "$pkg" in tailscale|tailscale-archive-keyring) continue ;; esac
     if ! timeout 300 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=120 "$pkg" >/dev/null 2>&1; then
       # تلاش دوم
       if ! timeout 300 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=120 "$pkg" >/dev/null 2>&1; then

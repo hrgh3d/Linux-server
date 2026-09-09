@@ -202,7 +202,7 @@ jobs:
             --arg ip "${TS_IP:-pending}" \
             --arg host "${TS_HOSTNAME}" \
             --arg hostkey_sha "$(sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | awk '{print $2}' || echo unknown)" \
-            --arg root_marker "$(head -1 /root/persist-marker.txt 2>/dev/null || echo fresh)" \
+            --arg root_marker "$(sudo head -1 /root/persist-marker.txt 2>/dev/null || echo fresh)" \
             '{boot_ts:$boot_ts, run_id:$run_id, attempt:$attempt, ts_ip:$ip, ts_hostname:$host, host_key_fp_ed25519:$hostkey_sha, restored_root_marker:$root_marker}' \
             | sudo tee /root/.server-state.json >/dev/null
           echo "Server identity state recorded: $(sudo cat /root/.server-state.json)"

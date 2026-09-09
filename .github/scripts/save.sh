@@ -42,6 +42,11 @@ if command -v apt-mark &>/dev/null; then
       > "$WORK/user_packages.list" 2>/dev/null || true
   fi
 fi
+# پکیج‌های tailscale جداگانه توسط tailscale-setup مدیریت می‌شوند؛ نباید در لیست بازنصب باشند
+if [ -f "$WORK/user_packages.list" ]; then
+  grep -vxE 'tailscale|tailscale-archive-keyring' "$WORK/user_packages.list" > "$WORK/user_packages.list.tmp" 2>/dev/null || true
+  mv "$WORK/user_packages.list.tmp" "$WORK/user_packages.list"
+fi
 phase "package lists ready"
 
 # ------------------------------------------------------------- 2) markers
