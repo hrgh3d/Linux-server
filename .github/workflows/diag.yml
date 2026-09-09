@@ -1,0 +1,22 @@
+name: diag-audit (temporary)
+on:
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Biggest dirs audit
+        run: |
+          echo "=== /etc top dirs ==="
+          sudo du -h -d 1 /etc 2>/dev/null | sort -h | tail -25
+          echo "=== /usr/local/bin contents by size ==="
+          sudo du -h --max-depth=1 /usr/local/bin 2>/dev/null | sort -h | tail -15
+          echo "=== /usr/local/bin regular-file count ==="
+          sudo find /usr/local/bin -type f | wc -l
+          echo "=== /usr/local/bin biggest 15 files ==="
+          sudo find /usr/local/bin -type f -printf '%s %p\n' 2>/dev/null | sort -rn | head -15 | awk '{printf "%.1fMB %s\n", $1/1048576, $2}'
+          echo "=== /etc biggest 25 files ==="
+          sudo find /etc -type f -printf '%s %p\n' 2>/dev/null | sort -rn | head -25 | awk '{printf "%.1fMB %s\n", $1/1048576, $2}'
+          echo "=== /opt (top-level sizes, all) ==="
+          sudo du -h --max-depth=1 /opt 2>/dev/null | sort -h | tail -20

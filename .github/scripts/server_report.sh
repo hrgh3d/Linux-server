@@ -10,9 +10,9 @@ echo "boot_ts=${BOOT_TS:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')} run_id=${GITHUB_RUN_I
 
 echo ""
 echo "---- 1) Persistence markers ----"
-echo "Hamid marker : $(cat /home/Hamid/persist-marker.txt 2>/dev/null || echo '(absent — fresh boot)')"
-echo "root  marker : $(cat /root/persist-marker.txt 2>/dev/null || echo '(absent — fresh boot)')"
-echo "server-state : $(cat /root/.server-state.json 2>/dev/null | head -c 600 || echo '(absent)')"
+echo "Hamid marker : $(sudo cat /home/Hamid/persist-marker.txt 2>/dev/null || echo '(absent — fresh boot)')"
+echo "root  marker : $(sudo cat /root/persist-marker.txt 2>/dev/null || echo '(absent — fresh boot)')"
+echo "server-state : $(sudo cat /root/.server-state.json 2>/dev/null | head -c 600 || echo '(absent)')"
 echo "root files   : $(sudo find /root -maxdepth 1 -type f 2>/dev/null | wc -l)"
 echo "Hamid files  : $(sudo find /home/Hamid -maxdepth 1 -type f 2>/dev/null | wc -l)"
 
@@ -42,8 +42,8 @@ sudo tailscale status 2>/dev/null | head -5 || echo "(tailscale not running)"
 
 echo ""
 echo "---- 5) Persistence probe ----"
-for f in /root/persistence-probe.txt /home/Hamid/persistence-probe.txt /opt/persistence-probe.txt; do
-  [ -f "$f" ] && echo "found: $f -> $(cat "$f" 2>/dev/null | head -1)" || echo "missing: $f"
+for f in /root/persistence-probe.txt /home/Hamid/persistence-probe.txt /opt/persistence-probe/app.cfg; do
+  if sudo test -f "$f"; then echo "found: $f -> $(sudo cat "$f" 2>/dev/null | head -1)"; else echo "missing: $f"; fi
 done
 if command -v htop >/dev/null 2>&1; then echo "htop installed : yes ($(dpkg -s htop 2>/dev/null | grep Version | awk '{print $2}'))"; else echo "htop installed : no"; fi
 
@@ -64,8 +64,8 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "| MagicDNS | \`${TS_HOSTNAME:-linux-server-vps}\` |"
     echo "| SSH | \`ssh -i <private-key> Hamid@${TS_IP:-<ip>}\` |"
     echo "| Root access | \`sudo su\` (passwordless) |"
-    echo "| Hamid marker | \`$(head -1 /home/Hamid/persist-marker.txt 2>/dev/null || echo fresh)\` |"
-    echo "| Root marker | \`$(head -1 /root/persist-marker.txt 2>/dev/null || echo fresh)\` |"
+    echo "| Hamid marker | \`$(sudo head -1 /home/Hamid/persist-marker.txt 2>/dev/null || echo fresh)\` |"
+    echo "| Root marker | \`$(sudo head -1 /root/persist-marker.txt 2>/dev/null || echo fresh)\` |"
     echo ""
     echo "<details><summary>Host SSH key fingerprints</summary>"
     echo ""
