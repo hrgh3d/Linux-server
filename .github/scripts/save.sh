@@ -107,13 +107,17 @@ sudo rm -f /tmp/state.tar.gz
 # Placed after "-T file" GNU tar treats it as positional ("has no effect")
 # and then recurses into every directory member — silently re-archiving the
 # whole /etc,/root,/opt,/var/lib trees incl. runner caches (GBs, minutes).
+# Consequence: with --no-recursion we must list _meta FILES explicitly
+# (a bare "_meta" would archive only the empty dir).
 V=""; [ -n "${TAR_VERBOSE:-}" ] && V="-v"
+META_FILES=()
+for _f in "$META"/_meta/*; do [ -e "$_f" ] && META_FILES+=("${_f#"$META"/}"); done
 set +e
 # inner timeout 300 prevents a stuck read from burning the whole step.
 timeout 300 sudo tar -c $V -f /tmp/state.tar.gz \
   --no-recursion --use-compress-program='gzip -1' \
   -C / -T "$LIST" \
-  -C "$META" _meta \
+  -C "$META" "${META_FILES[@]}" \
   >/tmp/tar.log 2>&1
 RC=$?
 set -e
