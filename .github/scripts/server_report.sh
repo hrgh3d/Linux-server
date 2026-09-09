@@ -41,12 +41,13 @@ echo "ip4=${TS_IP:-pending}"
 sudo tailscale status 2>/dev/null | head -5 || echo "(tailscale not running)"
 
 echo ""
-echo "---- 5) Persistence probe ----"
-for f in /root/persistence-probe.txt /home/Hamid/persistence-probe.txt /opt/persistence-probe/app.cfg; do
+echo "---- 5) Persistence probe (path/name-agnostic) ----"
+for f in /root/persistence-probe/root.txt /var/lib/persistence-probe-z9x/state.data /etc/persistence-probe.conf /home/Hamid/persistence-probe.txt /opt/persistence-probe/app.cfg; do
   if sudo test -f "$f"; then echo "found: $f -> $(sudo cat "$f" 2>/dev/null | head -1)"; else echo "missing: $f"; fi
 done
-if command -v htop >/dev/null 2>&1; then echo "htop installed : yes ($(dpkg -s htop 2>/dev/null | grep Version | awk '{print $2}'))"; else echo "htop installed : no"; fi
-echo "9router  bin : $([ -x /usr/local/bin/9router ] && echo present || echo missing) ($(readlink /usr/local/bin/9router 2>/dev/null || true))"
+if command -v htop >/dev/null 2>&1; then echo "htop installed : yes"; else echo "htop installed : no"; fi
+if command -v cowsay >/dev/null 2>&1; then echo "cowsay installed : yes"; else echo "cowsay installed : no"; fi
+echo "9router  bin : $([ -x /usr/local/bin/9router ] && echo present || echo missing)"
 echo "hermes   bin : $([ -x /usr/local/bin/hermes ] && echo present || echo missing)"
 echo "hermes   data: $(sudo test -d /root/.hermes && echo present || echo missing)"
 echo "3x-ui    bin : $([ -x /usr/local/x-ui/x-ui ] && echo present || echo missing)"
@@ -64,11 +65,11 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "|---|---|"
     echo "| Run | \`${GITHUB_RUN_ID:-?}\` (attempt ${GITHUB_RUN_ATTEMPT:-1}) |"
     echo "| Boot TS | \`${BOOT_TS:-?}\` |"
-    echo "| User | \`Hamid\` |"
+    echo "| User | \`root\` (primary) / \`Hamid\` |"
     echo "| Tailscale IPv4 | \`${TS_IP:-pending}\` |"
     echo "| MagicDNS | \`${TS_HOSTNAME:-linux-server-vps}\` |"
-    echo "| SSH | \`ssh -i <private-key> Hamid@${TS_IP:-<ip>}\` |"
-    echo "| Root access | \`sudo su\` (passwordless) |"
+    echo "| SSH | \`ssh -i <private-key> root@${TS_IP:-<ip>}\` |"
+    echo "| Root access | direct root login (passwordless) |"
     echo "| Hamid marker | \`$(sudo head -1 /home/Hamid/persist-marker.txt 2>/dev/null || echo fresh)\` |"
     echo "| Root marker | \`$(sudo head -1 /root/persist-marker.txt 2>/dev/null || echo fresh)\` |"
     echo ""

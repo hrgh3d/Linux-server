@@ -1,17 +1,13 @@
 #!/bin/bash
 # ============================================================================
-# save.sh — ساخت اسنپ‌شات وضعیت پایدار سرور و همگام‌سازی امن با مخزن state (v4.2)
+# save.sh (v5) — اسنپ‌شات «داده/تنظیمات کاربر» + کاتالوگ پکیج‌ها
 #
-# نکات طراحی:
-#  - tar مستقیم از فایل‌سیستم (بدون کپی استیجینگ) => یک‌بار خواندن، سریع.
-#  - فشرده‌سازی gzip -1 برای سرعت؛ لیست‌های پکیج به‌صورت فایل‌های مستقل در
-#    ریشه‌ی آرشیو اضافه می‌شوند.
-#  - فیلترهای حذفِ محتوای سنگین image-runner (hostedtoolcache و ...) تا حجم
-#    اسنپ‌شات همیشه بسیار پایین‌تر از سقف ۲GB آپلود GitHub Release بماند.
-#  - قفل (flock) برای جلوگیری از تداخل دو ذخیره‌سازی هم‌زمان.
-#  - آپلود فقط در صورت تغییر sha256 (state_sync.py)؛ در غیر این صورت رد می‌شود.
+#   payload  = فقط Configuration/Data در ریشه‌های persist.list (payload.py)
+#              فایل‌های نصب پکیج‌ها (node_modules/venv/binary/…) شامل نیستند.
+#   catalog  = installed.json شامل پکیج‌های apt/npm/pip کاربر برای بازنصب.
+#   آرشیو    = _meta/… + درخت payload؛ آپلود rolling تک‌نسخه‌ای (skip بی‌تغییر).
 # ============================================================================
-set -euo pipefail
+set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
 
@@ -22,142 +18,95 @@ if ! flock -n 9; then
   exit 0
 fi
 
-WORK="/tmp/persist-meta"
-META="/tmp/persist-meta"
-sudo rm -rf "$WORK"
-mkdir -p "$WORK"
+META=/tmp/persist-meta
+LIST=/tmp/payload.list
+STATS=/tmp/payload.stats.json
+sudo rm -rf "$META"; mkdir -p "$META/_meta"; rm -f "$LIST" "$STATS"
 
 T0=$(date +%s)
-log "Starting fast persistent state snapshot (direct tar)..."
 phase() { echo "[persist $(date -u '+%T') +$(( $(date +%s) - T0 ))s] $*"; }
+log "Starting v5 payload snapshot..."
 
-# ------------------------------------------------------------- 1) lists
-if command -v dpkg &>/dev/null; then
-  timeout 90 dpkg --get-selections > "$WORK/packages.list" 2>/dev/null || true
+# ----------------------------------------------------------- 1) package data
+if command -v dpkg >/dev/null 2>&1; then
+  timeout 90 dpkg --get-selections > "$META/_meta/packages.list" 2>/dev/null || true
 fi
-if command -v apt-mark &>/dev/null; then
-  timeout 60 apt-mark showmanual > "$WORK/manual_packages.list" 2>/dev/null || true
-  if [ -f /tmp/base_manual_packages.list ]; then
-    comm -23 <(timeout 60 apt-mark showmanual | sort) <(sort /tmp/base_manual_packages.list) \
-      > "$WORK/user_packages.list" 2>/dev/null || true
-  fi
+if command -v apt-mark >/dev/null 2>&1; then
+  timeout 60 apt-mark showmanual > "$META/_meta/manual_packages.list" 2>/dev/null || true
 fi
-# پکیج‌های tailscale جداگانه توسط tailscale-setup مدیریت می‌شوند؛ نباید در لیست بازنصب باشند
-if [ -f "$WORK/user_packages.list" ]; then
-  grep -vxE 'tailscale|tailscale-archive-keyring' "$WORK/user_packages.list" > "$WORK/user_packages.list.tmp" 2>/dev/null || true
-  mv "$WORK/user_packages.list.tmp" "$WORK/user_packages.list"
-fi
-phase "package lists ready"
-
-# ------------------------------------------------------------- 2) markers
-RUN_INFO="run_id=${GITHUB_RUN_ID:-local} run_attempt=${GITHUB_RUN_ATTEMPT:-1} boot_ts=${BOOT_TS:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
-if [ -d /home/Hamid ]; then
-  if [ ! -f /home/Hamid/persist-marker.txt ] || ! grep -q "run_id=${GITHUB_RUN_ID:-local}" /home/Hamid/persist-marker.txt 2>/dev/null; then
-    echo "$RUN_INFO saved_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" | \
-      sudo tee /home/Hamid/persist-marker.txt >/dev/null
-    sudo chown Hamid:Hamid /home/Hamid/persist-marker.txt 2>/dev/null || true
-  fi
-fi
-if [ -d /root ]; then
-  if [ ! -f /root/persist-marker.txt ] || ! grep -q "run_id=${GITHUB_RUN_ID:-local}" /root/persist-marker.txt 2>/dev/null; then
-    echo "$RUN_INFO saved_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" | \
-      sudo tee /root/persist-marker.txt >/dev/null
-  fi
+# پکیج‌های apt کاربر = manual فعلی منهای پایه‌ی image
+if [ -f /tmp/base_manual_packages.list ]; then
+  comm -23 <(sort "$META/_meta/manual_packages.list" 2>/dev/null) \
+            <(sort /tmp/base_manual_packages.list 2>/dev/null) \
+    | grep -vxE 'tailscale|tailscale-archive-keyring' \
+    > "$META/_meta/user_packages.list" 2>/dev/null || true
 fi
 
-# ------------------------------------------------------------- 3) excludes
-# الگوهای سراسری (در همه‌ی مسیرها)
-GLOBAL_EXCLUDES=(
-  --exclude='.cache'
-  --exclude='__pycache__'
-  --exclude='*.pyc'
-  --exclude='.npm'
-  --exclude='.nvm'
-  --exclude='.bun'
-  --exclude='.rustup'
-  --exclude='.cargo'
-  --exclude='.dotnet'
-  --exclude='.bash_history'
-  --exclude='.zsh_history'
-  --exclude='.wget-hsts'
-  --exclude='hostedtoolcache'
-  --exclude='containerd'
-  --exclude='core'
-  # لاگ‌ها/کش‌های چرخان tailscale نباید در آرشیو بیایند (هویت در tailscaled.state است)
-  --exclude='tailscaled.log*'
-  --exclude='derpmap.cached.json'
-  --exclude='*.sock'
-)
-# الگوهای مختص /etc (فایل‌های گذرای میزبان/image نباید ذخیره/بازگردانی شوند)
-ETC_EXCLUDES=(
-  --exclude='etc/resolv.conf'
-  --exclude='etc/resolvconf'
-  --exclude='etc/hostname'
-  --exclude='etc/hosts'
-  --exclude='etc/machine-id'
-  --exclude='etc/mtab'
-  --exclude='etc/fstab'
-  --exclude='etc/network'
-  --exclude='etc/netplan'
-  --exclude='etc/cloud'
-  --exclude='etc/apt'
-  --exclude='etc/ssl'
-  --exclude='etc/alternatives'
-  --exclude='etc/ld.so.cache'
-  --exclude='etc/sudoers'
-  --exclude='etc/sudoers.d'
-  --exclude='etc/shadow*'
-  --exclude='etc/gshadow*'
-  --exclude='etc/passwd*'
-  --exclude='etc/group*'
-  --exclude='etc/subuid*'
-  --exclude='etc/subgid*'
-  --exclude='etc/ssh/sshd_config.d'
-  # /etc/skel روی تصویر runner شامل toolchainهای dotnet/rust (~800MB) است؛
-  # این محتوای image است، نه state کاربر.
-  --exclude='etc/skel'
-)
+# کاتالوگ پکیج‌ها (apt/npm/pip) به‌صورت JSON
+APT_LIST="$META/_meta/user_packages.list"
+NPM_CUR="$META/_meta/npm.cur.txt"; PIP_CUR="$META/_meta/pip.cur.txt"
+: > "$NPM_CUR"; : > "$PIP_CUR"
+if command -v npm >/dev/null 2>&1; then
+  timeout 60 npm ls -g --depth=0 --json 2>/dev/null \
+    | jq -r '.dependencies | keys[]' 2>/dev/null | sort > "$NPM_CUR" || true
+fi
+if command -v pip3 >/dev/null 2>&1; then
+  timeout 60 pip3 list --format=freeze 2>/dev/null | cut -d= -f1 | sort > "$PIP_CUR" || true
+fi
+# diff با پایه‌ی image ثبت‌شده در ابتدای Boot
+comm -13 <(sort /tmp/base_npm.list 2>/dev/null) <(sort "$NPM_CUR") > "$META/_meta/user_npm.list" 2>/dev/null || true
+comm -13 <(sort /tmp/base_pip.list 2>/dev/null) <(sort "$PIP_CUR") > "$META/_meta/user_pip.list" 2>/dev/null || true
 
-# محتوای پیش‌فرض image در /opt و /usr/local/{bin,sbin} باید حذف شود تا فقط
-# فایل‌های افزوده‌شده توسط کاربر در آرشیو بمانند (حجم تصویر ~۱۲GB است).
-IMAGE_DIR_EXCLUDES=()
-add_image_excludes() {
-  local relroot="$1" listfile="$2"
-  [ -f "$listfile" ] || return 0
-  local name
-  while IFS= read -r name; do
-    [ -n "$name" ] || continue
-    IMAGE_DIR_EXCLUDES+=(--exclude="${relroot}/${name}")
-  done < "$listfile"
+python3 - "$META/_meta" <<'PY'
+import datetime, json, os, sys
+meta = sys.argv[1]
+def read(name):
+    p = os.path.join(meta, name)
+    return [l.strip() for l in open(p) if l.strip()] if os.path.exists(p) else []
+catalog = {
+    "schema": "v5",
+    "apt":   read("user_packages.list"),
+    "npm":   read("user_npm.list"),
+    "pip":   read("user_pip.list"),
 }
-add_image_excludes "opt"            /tmp/base_opt_entries.list
-add_image_excludes "usr/local/bin"  /tmp/base_usrlocalbin.list
-add_image_excludes "usr/local/sbin" /tmp/base_usrlocalsbin.list
-# پکیج‌های npm که از ابتدا روی image هستند حذف شوند تا فقط پکیج‌های کاربر ذخیره شوند
-add_image_excludes "usr/local/lib/node_modules" /tmp/base_npm_globals.list
-if [ "${#IMAGE_DIR_EXCLUDES[@]}" -gt 0 ]; then
-  phase "excluding ${#IMAGE_DIR_EXCLUDES[@]} image-baseline entries"
-fi
+catalog["meta"] = {
+    "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+    "boot_ts": os.environ.get("BOOT_TS", ""),
+    "saved_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+open(os.path.join(meta, "installed.json"), "w").write(json.dumps(catalog, indent=2))
+print("[persist] catalog: apt=%d npm=%d pip=%d" % (len(catalog["apt"]), len(catalog["npm"]), len(catalog["pip"])))
+PY
 
-# مسیرهای انتخابی از persist.list
-PATHS=()
-while IFS= read -r p; do
-  [ -n "$p" ] || continue
-  case "$p" in \#*) continue ;; esac
-  rel="${p#/}"
-  if [ -d "$p" ]; then
-    PATHS+=("$rel")
+# ----------------------------------------------------------- 2) markers
+RUN_INFO="run_id=${GITHUB_RUN_ID:-local} run_attempt=${GITHUB_RUN_ATTEMPT:-1} boot_ts=${BOOT_TS:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+for marker in /root/persist-marker.txt /home/Hamid/persist-marker.txt; do
+  d="${marker%/*}"
+  [ -d "$d" ] || continue
+  if [ ! -f "$marker" ] || ! grep -q "run_id=${GITHUB_RUN_ID:-local}" "$marker" 2>/dev/null; then
+    echo "$RUN_INFO saved_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" | tee "$marker" >/dev/null 2>&1 || true
+    [ "$d" = "/home/Hamid" ] && chown Hamid:Hamid "$marker" 2>/dev/null || true
   fi
-done < "$SCRIPT_DIR/persist.list"
+done
 
-# ------------------------------------------------------------- 4) tar مستقیم
-phase "tar: ${PATHS[*]} ..."
+# ----------------------------------------------------------- 3) payload list
+phase "scanning payload roots..."
+python3 "$SCRIPT_DIR/payload.py" list --roots "$SCRIPT_DIR/persist.list" \
+  --out "$LIST" --base /tmp --stats "$STATS"
+RC=$?
+if [ $RC -ne 0 ] || [ ! -s "$LIST" ]; then
+  log "ERROR: payload scan failed"
+  exit 1
+fi
+cat "$STATS" 2>/dev/null | jq -c '{dirs,files,links,mb,top:.["top"]}' | sed 's/^/[persist] stats /' || true
+
+# ----------------------------------------------------------- 4) tar
+phase "creating archive..."
 sudo rm -f /tmp/state.tar.gz
 set +e
 sudo tar --use-compress-program='gzip -1' -cf /tmp/state.tar.gz \
-  -C / "${GLOBAL_EXCLUDES[@]}" "${ETC_EXCLUDES[@]}" "${IMAGE_DIR_EXCLUDES[@]}" \
-  "${PATHS[@]}" \
-  -C "$META" . \
+  -C / -T "$LIST" --no-recursion \
+  -C "$META" _meta \
   >/tmp/tar.log 2>&1
 RC=$?
 set -e
@@ -171,20 +120,19 @@ SIZEH=$(du -h /tmp/state.tar.gz | cut -f1)
 DIGEST=$(sha256sum /tmp/state.tar.gz | cut -d' ' -f1)
 phase "archive created: ${SIZEH} (${SIZE} bytes) sha256=${DIGEST:0:16}"
 
-# سقف حجم GitHub Release = 2GB؛ اگر بزرگ شد خطای واضح بدهیم
 if [ "$SIZE" -gt 1900000000 ]; then
-  log "ERROR: archive too large (${SIZEH}) — will NOT upload. Reduce persisted paths/excludes."
+  log "ERROR: archive too large (${SIZEH}) — aborting upload."
   sudo rm -f /tmp/state.tar.gz
   exit 1
 fi
 
-# ------------------------------------------------------------- 5) upload (skip if unchanged)
+# ----------------------------------------------------------- 5) upload
 if upload_state /tmp/state.tar.gz; then
   STATUS=0
 else
   STATUS=$?
-  log "ERROR: state upload failed (will be retried on next sync / final save)"
+  log "ERROR: state upload failed"
 fi
-sudo rm -rf "$WORK" /tmp/state.tar.gz
+sudo rm -rf "$META" /tmp/state.tar.gz
 phase "snapshot attempt finished (exit=$STATUS)"
 exit $STATUS

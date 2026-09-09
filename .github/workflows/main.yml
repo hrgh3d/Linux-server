@@ -1,42 +1,39 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v4]
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v5]
 
 # ============================================================================
-# سرور Ubuntu پایدار روی GitHub Actions — معماری v4
+# سرور Ubuntu پایدار روی GitHub Actions — معماری v5
 #
-# اصل معماری:
-#   Runner هر ~۶ ساعت از بین می‌رود؛ هیچ داده‌ای فقط روی Filesystem موقت
-#   Runner نمی‌ماند. State کاربر (فایل‌ها، /root، پکیج‌ها، کانفیگ‌ها، هویت
-#   Tailscale، کلیدهای Host) به‌صورت Rolling روی Release مخزن
-#   Linux-server-state همگام‌سازی می‌شود و هر چرخه‌ی جدید آن را بازمی‌گرداند.
-#
-# تضمین‌های کلیدی v4:
-#   - یک اسنپ‌شاتِ واحد (بدون بکاپ تکراری)؛ آپلود فقط وقتی محتوا عوض شده باشد.
-#   - Cancel/Re-run → بدون تولید state اضافی؛ آخرین وضعیت حفظ و بازگردانی می‌شود.
-#   - کلید SSH ثابت (کلید عمومی در مخزن) و کلیدهای Host پایدار در State.
-#   - هویت Tailscale بازیابی می‌شود => IP قبلی ثابت می‌ماند (+ pin اختیاری).
-#   - root بدون پسورد و `sudo su` بدون درخواست Password.
+#  Backup فقط «داده/تنظیمات کاربر» است (نه فایل‌های نصب پکیج‌ها):
+#    - payload.py ریشه‌های داده/کانفیگ (persist.list) را اسکن می‌کند و
+#      کد/کش/ابزارهای نصب را حذف می‌کند → هر فایل جدیدِ پکیج (هر مسیر/نامی)
+#      خودکار ذخیره می‌شود.
+#    - installed.json کاتالوگ پکیج‌های apt/npm/pip کاربر است؛ در Restore
+#      پکیج‌ها ابتدا با دستور نصب خودشان بازنصب و سپس کانفیگ/دیتا روی آن‌ها
+#      اعمال می‌شود. اپ‌های سفارشی (9router/Hermes/3x-ui) هم installer خودشان
+#      را دارند (provision.sh).
+#  Root-first: تمام مراحل با shell ریشه اجرا و ورود SSH مستقیم root انجام می‌شود.
 # ============================================================================
 
 on:
   workflow_dispatch:
     inputs:
       lifetime_min:
-        description: 'طول عمر سرور در این Run به دقیقه (پیش‌فرض 330 ≈ 5.5 ساعت؛ حداکثر 340)'
+        description: 'طول عمر سرور به دقیقه. برای تست خیلی کم بگذارید (مثلا 5)؛ پیش‌فرض نهایی 350 ≈ 5.8h (سقف 355)'
         required: false
-        default: '330'
+        default: '350'
         type: string
       probe:
-        description: 'نوشتن فایل/نصب نرم‌افزار تستی برای راستی‌آزمایی Persistence'
+        description: 'نوشتن فایل تست در مسیرهای گوناگون + نصب پکیج apt تستی (راستی‌آزمایی مسیر/نام-آگنوستیک و کاتالوگ)'
         required: false
         default: 'false'
         type: string
       selftest:
-        description: 'اجرای تست محلی SSH (sudo بدون رمز، sudo su، ورود root با کلید)'
+        description: 'تست محلی SSH (ورود root با کلید، sudo بدون رمز)'
         required: false
         default: 'true'
         type: string
       provision:
-        description: 'نصب خودکار نرم‌افزارها در صورت نبود: 9router / Hermes agent / 3x-ui'
+        description: 'نصب خودکار اپ‌ها در صورت نبود: 9router / Hermes / 3x-ui'
         required: false
         default: 'true'
         type: string
@@ -46,12 +43,17 @@ on:
 
 concurrency:
   group: linux-server-persistent
-  cancel-in-progress: false       # Run جدید در صف می‌ماند تا Run قبلی تمام/ذخیره شود
+  cancel-in-progress: false
 
 jobs:
   server:
     runs-on: ubuntu-24.04
-    timeout-minutes: 345          # کمی کمتر از ۶ ساعت؛ ذخیره‌سازی دوره‌ای در همین بازه انجام می‌شود
+    timeout-minutes: 360          # حداکثر مجاز GitHub ≈ ۶ ساعت
+
+    # همه‌ی steps با shell ریشه اجرا می‌شوند (root-first؛ بدون نیاز به sudo su)
+    defaults:
+      run:
+        shell: sudo -E env "PATH=$PATH" HOME=/root bash -e {0}
 
     permissions:
       contents: read
@@ -65,8 +67,8 @@ jobs:
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN || 'NOT_SET' }}
       TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP || '' }}
       HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
-      SAVE_INTERVAL_MIN: '5'      # همگام‌سازی خودکار هر ۵ دقیقه (فقط در صورت تغییر واقعی)
-      LIFETIME_MIN: ${{ inputs.lifetime_min || '330' }}
+      SAVE_INTERVAL_MIN: '5'      # همگام‌سازی دوره‌ای (فقط در صورت تغییر)
+      LIFETIME_MIN: ${{ inputs.lifetime_min || '350' }}
       PROBE_ENABLED: ${{ inputs.probe || 'false' }}
       SS_SELFTEST: ${{ inputs.selftest || 'true' }}
       PROVISION_ENABLED: ${{ inputs.provision || 'true' }}
@@ -80,122 +82,82 @@ jobs:
           BOOT_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
           echo "BOOT_TS=${BOOT_TS}" >> "$GITHUB_ENV"
           echo "Boot started: ${BOOT_TS} (run ${GITHUB_RUN_ID}, attempt ${GITHUB_RUN_ATTEMPT:-1})"
-          sudo mkdir -p /root /home/Hamid 2>/dev/null || true
-          echo "boot_ts=${BOOT_TS} run_id=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT:-1} event=${GITHUB_EVENT_NAME}" | sudo tee -a /root/server.log >/dev/null
+          mkdir -p /root /home/Hamid
+          echo "boot_ts=${BOOT_TS} run_id=${GITHUB_RUN_ID} attempt=${GITHUB_RUN_ATTEMPT:-1} event=${GITHUB_EVENT_NAME}" >> /root/server.log
+          echo "Running as: $(id -un) (uid $(id -u)) — root-first mode"
           echo "BOOT_ID=${BOOT_TS}" >> "$GITHUB_ENV"
 
-      - name: Setup base system
+      - name: Setup base system + image baselines
         run: |
-          set -euo pipefail
-          sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            openssh-server sudo curl wget git tar rsync jq python3 ca-certificates \
-            || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          apt-get update -y
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 \
+            openssh-server sudo curl wget git tar rsync jq python3 ca-certificates nodejs npm \
+            || DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 \
             openssh-server sudo curl wget git tar rsync jq python3 ca-certificates
-          # لیست پکیج‌های manual پایه‌ی image برای محاسبه‌ی پکیج‌های کاربر در save
+          # baseline های image برای محاسبه‌ی «آنچه کاربر اضافه کرده» در save
           timeout 60 apt-mark showmanual | sort > /tmp/base_manual_packages.list || true
-          # لیست محتوای image در مسیرهایی که با image مشترک‌اند؛ save.sh اینها را حذف می‌کند
-          # تا فقط داده‌های افزوده‌شده توسط کاربر ذخیره شود (حجم image-runner ~۱۲GB نباید آرشیو شود)
-          ls -A1 /opt 2>/dev/null | grep -v '^$' > /tmp/base_opt_entries.list || true
-          ls -A1 /usr/local/bin 2>/dev/null | grep -v '^$' > /tmp/base_usrlocalbin.list || true
-          ls -A1 /usr/local/sbin 2>/dev/null | grep -v '^$' > /tmp/base_usrlocalsbin.list || true
-          ls -A1 /usr/local/lib/node_modules 2>/dev/null | grep -v '^$' > /tmp/base_npm_globals.list || true
-          echo "base image manifests recorded: opt=$(wc -l < /tmp/base_opt_entries.list 2>/dev/null || echo 0) bin=$(wc -l < /tmp/base_usrlocalbin.list 2>/dev/null || echo 0) sbin=$(wc -l < /tmp/base_usrlocalsbin.list 2>/dev/null || echo 0) npm_globals=$(wc -l < /tmp/base_npm_globals.list 2>/dev/null || echo 0)"
-          # در حالت تست (probe)، نرم‌افزار را همین‌جا و بدون درگیری با قفل dpkg نصب می‌کنیم
-          if [ "${PROBE_ENABLED:-false}" = "true" ]; then
-            timeout 180 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 htop >/dev/null 2>&1 \
-              && echo "htop installed (probe) OK" || echo "WARN: htop install failed"
-          fi
+          npm ls -g --depth=0 --json 2>/dev/null | jq -r '.dependencies | keys[]' | sort > /tmp/base_npm.list || true
+          pip3 list --format=freeze 2>/dev/null | cut -d= -f1 | sort > /tmp/base_pip.list || true
+          ls -A1 /opt 2>/dev/null > /tmp/base_opt_entries.list || true
+          ls -A1 /usr/local/bin 2>/dev/null > /tmp/base_usrlocalbin.list || true
+          ls -A1 /usr/local/sbin 2>/dev/null > /tmp/base_usrlocalsbin.list || true
+          echo "baselines: apt=$(wc -l < /tmp/base_manual_packages.list 2>/dev/null || echo 0) npm=$(wc -l < /tmp/base_npm.list 2>/dev/null || echo 0) pip=$(wc -l < /tmp/base_pip.list 2>/dev/null || echo 0) opt=$(wc -l < /tmp/base_opt_entries.list 2>/dev/null || echo 0)"
           echo "Base system ready"
 
-      - name: Create user Hamid and configure sudo
+      - name: Create root/Hamid accounts (root-first)
         run: |
-          set -euo pipefail
-          if ! id Hamid &>/dev/null; then
-            sudo useradd -m -s /bin/bash Hamid
-          fi
-          sudo usermod -aG sudo Hamid
-          # در صورت تعریف Secret پسورد، برای Hamid ست می‌شود (اختیاری)
-          if [ -n "${HAMID_PASSWORD:-}" ]; then
-            echo "Hamid:${HAMID_PASSWORD}" | sudo chpasswd
-          fi
-          # دسترسی sudo بدون رمز
-          echo 'Hamid ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/hamid >/dev/null
-          sudo chmod 0440 /etc/sudoers.d/hamid
-          sudo chown 0:0 /etc/sudoers.d/hamid
-          # root بدون پسورد (فقط ورود با کلید SSH)
-          sudo passwd -d root || true
-          sudo mkdir -p /home/Hamid
-          sudo chown -R Hamid:Hamid /home/Hamid
-          echo "User Hamid created; root passwordless; Hamid NOPASSWD sudo"
+          # root: بدون پسورد، ورود فقط با کلید
+          passwd -d root || true
+          # کاربر Hamid (اختیاری) با sudo بدون رمز
+          if ! id Hamid &>/dev/null; then useradd -m -s /bin/bash Hamid; fi
+          usermod -aG sudo Hamid
+          if [ -n "${HAMID_PASSWORD:-}" ]; then echo "Hamid:${HAMID_PASSWORD}" | chpasswd; fi
+          echo 'Hamid ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/hamid
+          chmod 0440 /etc/sudoers.d/hamid
+          mkdir -p /home/Hamid && chown -R Hamid:Hamid /home/Hamid
+          echo "root passwordless; Hamid NOPASSWD sudo; job runs as root"
 
-      - name: Restore persistent state (from state repo)
-        run: bash .github/scripts/restore.sh
+      - name: Restore — prep (download state + reinstall catalog packages)
+        run: bash .github/scripts/restore.sh prep
 
       - name: Provision persistent apps (9router / Hermes / 3x-ui if missing)
         if: env.PROVISION_ENABLED == 'true'
         run: bash .github/scripts/provision.sh
 
-      - name: Audit persisted paths (diagnostic)
-        run: |
-          echo "==== size audit of persisted paths (runner image) ===="
-          for p in /home/Hamid /root /var/lib/tailscale /etc /usr/local/bin /usr/local/sbin /usr/local/lib/node_modules /usr/local/lib/hermes-agent /usr/local/share/uv /usr/local/x-ui /srv /var/www /var/spool/cron /opt; do
-            echo "--- $p ---"
-            sudo du -sh --exclude='hostedtoolcache' "$p" 2>/dev/null || echo "  (n/a)"
-          done
-          echo "==== end audit ===="
+      - name: Restore — apply (config/data payload over reinstalled packages)
+        run: bash .github/scripts/restore.sh apply
 
-      - name: Write persistence probe (test artifact — idempotent, verifies restore)
+      - name: Write persistence probe (new paths + second apt pkg)
         if: env.PROBE_ENABLED == 'true'
         run: |
           TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-          # --- /root probe (ماندگاری /root) ---
-          if sudo test -f /root/persistence-probe.txt; then
-            echo "== /root probe ALREADY PRESENT (restored from state) =="
-            sudo cat /root/persistence-probe.txt
+          echo "== run=${GITHUB_RUN_ID} boot=${BOOT_TS} =="
+          # (a) /root — مسیر آشنا
+          mkdir -p /root/persistence-probe
+          [ -f /root/persistence-probe/root.txt ] && echo "RESTORED /root/persistence-probe/root.txt" || echo "PROBE root.txt $TS" > /root/persistence-probe/root.txt
+          cat /root/persistence-probe/root.txt 2>/dev/null
+          # (b) مسیر و نام کاملاً جدید در /var/lib (Path/Name-agnostic)
+          mkdir -p /var/lib/persistence-probe-z9x
+          [ -f /var/lib/persistence-probe-z9x/state.data ] && echo "RESTORED /var/lib/...z9x/state.data" || echo "PROBE state.data $TS" > /var/lib/persistence-probe-z9x/state.data
+          cat /var/lib/persistence-probe-z9x/state.data 2>/dev/null
+          # (c) فایل کانفیگ با نام جدید در /etc
+          [ -f /etc/persistence-probe.conf ] && echo "RESTORED /etc/persistence-probe.conf" || echo "PROBE etc $TS" > /etc/persistence-probe.conf
+          cat /etc/persistence-probe.conf 2>/dev/null
+          # (d) پکیج apt تستی دوم (کاتالوگ apt)
+          if command -v cowsay >/dev/null 2>&1; then
+            echo "cowsay ALREADY INSTALLED ($(dpkg-query -W -f='${Version}' cowsay 2>/dev/null))"
           else
-            echo "PROBE created at $TS run=${GITHUB_RUN_ID}" | sudo tee /root/persistence-probe.txt >/dev/null
-            echo "== /root probe created fresh =="
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 cowsay >/dev/null 2>&1 && echo "cowsay INSTALLED fresh" || echo "WARN cowsay"
           fi
-          # --- /home/Hamid probe ---
-          if sudo test -f /home/Hamid/persistence-probe.txt; then
-            echo "== Hamid probe ALREADY PRESENT (restored from state) =="
-            sudo cat /home/Hamid/persistence-probe.txt
-          else
-            echo "PROBE created at $TS run=${GITHUB_RUN_ID}" | sudo tee /home/Hamid/persistence-probe.txt >/dev/null
-            sudo chown Hamid:Hamid /home/Hamid/persistence-probe.txt
-            echo "== Hamid probe created fresh =="
-          fi
-          # --- /opt probe ---
-          if sudo test -f /opt/persistence-probe/app.cfg; then
-            echo "== /opt probe ALREADY PRESENT (restored from state) =="
-            sudo cat /opt/persistence-probe/app.cfg
-          else
-            sudo mkdir -p /opt/persistence-probe
-            echo "probe app config v=1" | sudo tee /opt/persistence-probe/app.cfg >/dev/null
-            echo "== /opt probe created fresh =="
-          fi
-          # --- htop (نرم‌افزار تستی) — در base نصب شده؛ فقط بررسی/تلاش امن
-          if command -v htop >/dev/null 2>&1; then
-            echo "== htop ALREADY INSTALLED ($(dpkg-query -W -f='${Version}' htop 2>/dev/null)) =="
-          else
-            if timeout 180 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 htop >/dev/null 2>&1; then
-              echo "== htop installed (fallback) =="
-            else
-              echo "== WARN: htop install failed =="
-            fi
-          fi
-          echo "Probe step finished."
 
-      - name: Configure SSH (fixed key + host keys)
+      - name: Configure SSH (fixed key + host keys) — root login
         run: bash .github/scripts/ssh_configure.sh
 
-      - name: SSH local self-test (sudo, sudo su, root key login)
+      - name: SSH local self-test (root key login, passwordless sudo/su)
         if: env.SS_SELFTEST == 'true'
         run: |
           bash .github/scripts/ssh_selftest.sh || {
             echo "WARN: SSH self-test reported a problem — see logs above."
-            echo "SSH_SELFTEST=FAIL" >> "$GITHUB_ENV"
           }
 
       - name: Setup Tailscale (persistent identity)
@@ -203,21 +165,20 @@ jobs:
 
       - name: Record server identity state
         run: |
-          sudo jq -n \
+          jq -n \
             --arg boot_ts "${BOOT_TS}" \
             --arg run_id "${GITHUB_RUN_ID:-?}" \
             --arg attempt "${GITHUB_RUN_ATTEMPT:-1}" \
             --arg ip "${TS_IP:-pending}" \
             --arg host "${TS_HOSTNAME}" \
-            --arg hostkey_sha "$(sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | awk '{print $2}' || echo unknown)" \
-            --arg root_marker "$(sudo head -1 /root/persist-marker.txt 2>/dev/null || echo fresh)" \
+            --arg hostkey_sha "$(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | awk '{print $2}' || echo unknown)" \
+            --arg root_marker "$(head -1 /root/persist-marker.txt 2>/dev/null || echo fresh)" \
             '{boot_ts:$boot_ts, run_id:$run_id, attempt:$attempt, ts_ip:$ip, ts_hostname:$host, host_key_fp_ed25519:$hostkey_sha, restored_root_marker:$root_marker}' \
-            | sudo tee /root/.server-state.json >/dev/null
-          echo "Server identity state recorded: $(sudo cat /root/.server-state.json)"
+            > /root/.server-state.json
+          echo "identity recorded: $(cat /root/.server-state.json)"
 
       - name: Initial state snapshot (early persistence)
         run: |
-          echo "Creating initial persistent snapshot for this boot..."
           if timeout 420 bash .github/scripts/save.sh; then
             echo "Initial state snapshot OK"
           else
@@ -229,52 +190,38 @@ jobs:
 
       - name: Keep server alive (periodic auto-sync + final save on lifetime end / signal)
         run: |
-          set -uo pipefail
-          LIFETIME_MIN=$(echo "${LIFETIME_MIN:-330}" | grep -Eo '^[0-9]+$' || echo 330)
-          if [ "$LIFETIME_MIN" -lt 1 ] || [ "$LIFETIME_MIN" -gt 340 ]; then LIFETIME_MIN=330; fi
-          echo "Server lifetime: ${LIFETIME_MIN} minutes"
-          echo "Auto-sync every ${SAVE_INTERVAL_MIN} min (upload only when data changed)"
+          LIFETIME_MIN=$(echo "${LIFETIME_MIN:-350}" | grep -Eo '^[0-9]+$' || echo 350)
+          if [ "$LIFETIME_MIN" -lt 1 ]; then LIFETIME_MIN=5; fi
+          if [ "$LIFETIME_MIN" -gt 355 ]; then LIFETIME_MIN=355; fi
+          echo "Server lifetime: ${LIFETIME_MIN} minutes (root-first)"
           FLUSHED=0
           SYNC_PID=""
           do_save() {
-            # هر ذخیره‌سازی با timeout تا هرگز باعث قفل/حلق‌آویز step نشود
-            if timeout 420 bash .github/scripts/save.sh; then
-              echo "[save] OK"
-            else
-              local rc=$?
-              echo "[save] WARN: save failed (rc=$rc)"
-            fi
+            if timeout 420 bash .github/scripts/save.sh; then echo "[save] OK"; else echo "[save] WARN rc=$?"; fi
           }
           flush_sync() {
             if [ "$FLUSHED" = "0" ]; then
               FLUSHED=1
               [ -n "$SYNC_PID" ] && kill -9 "$SYNC_PID" 2>/dev/null || true
-              echo "[keepalive] termination received — executing immediate final state save..."
+              echo "[keepalive] termination — final save..."
               do_save
             fi
           }
           trap 'flush_sync; exit 0' SIGTERM SIGINT SIGQUIT SIGHUP
-
-          # همگام‌سازی دوره‌ای در پس‌زمینه
           (
             INTERVAL=$(( ${SAVE_INTERVAL_MIN:-5} * 60 ))
             while true; do
               sleep "$INTERVAL"
-              echo "[auto-sync $(date -u '+%T')] periodic state save..."
-              if timeout 420 bash .github/scripts/save.sh; then
-                echo "[auto-sync] OK"
-              else
-                echo "[auto-sync] WARN: save failed (will retry next interval)"
-              fi
+              echo "[auto-sync $(date -u '+%T')] periodic save..."
+              timeout 420 bash .github/scripts/save.sh && echo "[auto-sync] OK" || echo "[auto-sync] WARN"
             done
           ) &
           SYNC_PID=$!
-
           END_TS=$(( $(date +%s) + LIFETIME_MIN * 60 ))
           while [ "$(date +%s)" -lt "$END_TS" ]; do
-            sleep 3 || { echo "[keepalive] sleep interrupted"; break; }
+            sleep 3 || break
           done
           kill -9 "$SYNC_PID" 2>/dev/null || true
-          echo "[keepalive] lifetime reached — executing final state save (in this step)..."
+          echo "[keepalive] lifetime reached — final save (in this step)..."
           do_save
-          echo "[keepalive] done — run ending normally."
+          echo "[keepalive] done."
