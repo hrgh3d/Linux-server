@@ -1,10 +1,11 @@
-# payload_keepbig.list — v4.5.1: keep binaries like cloudflared
+# payload_keepbig.list — v5.3: keep binaries like cloudflared + hermes venv + uv
 root/.hermes/bin
 root/.hermes
 root
 usr/local/bin
 usr/local/sbin
 usr/local/lib/hermes-agent
+usr/local/share/uv
 opt
 srv
 var/lib
