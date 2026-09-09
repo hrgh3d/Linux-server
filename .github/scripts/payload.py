@@ -155,8 +155,16 @@ def big_keep_under(rel):
 
 
 def prune_dir(rel):
+    # v5.3: hermes-agent venv must persist (gateway needs it), so exempt it from venv prune
+    if rel.startswith("usr/local/lib/hermes-agent/venv") or rel.startswith("usr/local/lib/hermes-agent/.venv"):
+        return False
+    if rel == "usr/local/lib/hermes-agent/venv" or rel == "usr/local/lib/hermes-agent/.venv":
+        return False
     name = rel.rstrip("/").rsplit("/", 1)[-1]
     if name in PRUNE_DIR_NAMES:
+        # extra check: if parent is hermes-agent, keep venv
+        if "hermes-agent" in rel and name in ("venv", ".venv"):
+            return False
         return True
     if rel in PRUNE_ABS_DIRS or any(rel.startswith(d + "/") for d in PRUNE_ABS_DIRS):
         return True
@@ -434,4 +442,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
