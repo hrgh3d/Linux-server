@@ -80,6 +80,7 @@ ETC_EXCLUDES=(
   --exclude='group*'
   --exclude='subuid*'
   --exclude='subgid*'
+  --exclude='skel'
 )
 
 restore_path() {

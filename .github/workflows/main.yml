@@ -88,6 +88,12 @@ jobs:
             openssh-server sudo curl wget git tar rsync jq python3 ca-certificates
           # لیست پکیج‌های manual پایه‌ی image برای محاسبه‌ی پکیج‌های کاربر در save
           timeout 60 apt-mark showmanual | sort > /tmp/base_manual_packages.list || true
+          # لیست محتوای image در مسیرهایی که با image مشترک‌اند؛ save.sh اینها را حذف می‌کند
+          # تا فقط داده‌های افزوده‌شده توسط کاربر ذخیره شود (حجم image-runner ~۱۲GB نباید آرشیو شود)
+          ls -A1 /opt 2>/dev/null | grep -v '^$' > /tmp/base_opt_entries.list || true
+          ls -A1 /usr/local/bin 2>/dev/null | grep -v '^$' > /tmp/base_usrlocalbin.list || true
+          ls -A1 /usr/local/sbin 2>/dev/null | grep -v '^$' > /tmp/base_usrlocalsbin.list || true
+          echo "base image manifests recorded: opt=$(wc -l < /tmp/base_opt_entries.list 2>/dev/null || echo 0) bin=$(wc -l < /tmp/base_usrlocalbin.list 2>/dev/null || echo 0) sbin=$(wc -l < /tmp/base_usrlocalsbin.list 2>/dev/null || echo 0)"
           # در حالت تست (probe)، نرم‌افزار را همین‌جا و بدون درگیری با قفل dpkg نصب می‌کنیم
           if [ "${PROBE_ENABLED:-false}" = "true" ]; then
             timeout 180 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 htop >/dev/null 2>&1 \

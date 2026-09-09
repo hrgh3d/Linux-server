@@ -71,6 +71,7 @@ GLOBAL_EXCLUDES=(
   --exclude='.bun'
   --exclude='.rustup'
   --exclude='.cargo'
+  --exclude='.dotnet'
   --exclude='.bash_history'
   --exclude='.zsh_history'
   --exclude='.wget-hsts'
@@ -103,7 +104,29 @@ ETC_EXCLUDES=(
   --exclude='etc/subuid*'
   --exclude='etc/subgid*'
   --exclude='etc/ssh/sshd_config.d'
+  # /etc/skel روی تصویر runner شامل toolchainهای dotnet/rust (~800MB) است؛
+  # این محتوای image است، نه state کاربر.
+  --exclude='etc/skel'
 )
+
+# محتوای پیش‌فرض image در /opt و /usr/local/{bin,sbin} باید حذف شود تا فقط
+# فایل‌های افزوده‌شده توسط کاربر در آرشیو بمانند (حجم تصویر ~۱۲GB است).
+IMAGE_DIR_EXCLUDES=()
+add_image_excludes() {
+  local relroot="$1" listfile="$2"
+  [ -f "$listfile" ] || return 0
+  local name
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    IMAGE_DIR_EXCLUDES+=(--exclude="${relroot}/${name}")
+  done < "$listfile"
+}
+add_image_excludes "opt"            /tmp/base_opt_entries.list
+add_image_excludes "usr/local/bin"  /tmp/base_usrlocalbin.list
+add_image_excludes "usr/local/sbin" /tmp/base_usrlocalsbin.list
+if [ "${#IMAGE_DIR_EXCLUDES[@]}" -gt 0 ]; then
+  phase "excluding ${#IMAGE_DIR_EXCLUDES[@]} image-baseline entries"
+fi
 
 # مسیرهای انتخابی از persist.list
 PATHS=()
@@ -121,7 +144,7 @@ phase "tar: ${PATHS[*]} ..."
 sudo rm -f /tmp/state.tar.gz
 set +e
 sudo tar --use-compress-program='gzip -1' -cf /tmp/state.tar.gz \
-  -C / "${GLOBAL_EXCLUDES[@]}" "${ETC_EXCLUDES[@]}" \
+  -C / "${GLOBAL_EXCLUDES[@]}" "${ETC_EXCLUDES[@]}" "${IMAGE_DIR_EXCLUDES[@]}" \
   "${PATHS[@]}" \
   -C "$META" . \
   >/tmp/tar.log 2>&1
