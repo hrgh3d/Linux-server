@@ -1,4 +1,4 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.7]
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.8]
 
 # ============================================================================
 # سرور Ubuntu پایدار روی GitHub Actions — معماری v6.0 (شاخه AI، بدون VPN)
@@ -80,6 +80,7 @@ jobs:
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN || 'NOT_SET' }}
       TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP || '' }}
+      HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
       NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || '' }}
       SAVE_INTERVAL_MIN: '5'      # همگام‌سازی دوره‌ای (فقط در صورت تغییر)
       LIFETIME_MIN: ${{ inputs.lifetime_min || '350' }}
@@ -184,12 +185,12 @@ jobs:
 
       - name: Create root/Hamid accounts (root-first)
         run: |
-          # v6.5: root دوباره بدون پسورد (ورود فقط با کلید) — درخواست کاربر
-          passwd -d root || true
+          # v6.8: پسورد قوی برای root (درخواست کاربر)
+          if [ -n "${HAMID_PASSWORD:-}" ]; then echo "root:${HAMID_PASSWORD}" | chpasswd; else passwd -d root || true; fi
           # کاربر Hamid (اختیاری) با sudo بدون رمز
           if ! id Hamid &>/dev/null; then useradd -m -s /bin/bash Hamid; fi
           usermod -aG sudo Hamid
-          passwd -d Hamid || true; passwd -l Hamid || true  # v6.6: حذف کامل پسورد کاربر
+          if [ -n "${HAMID_PASSWORD:-}" ]; then echo "Hamid:${HAMID_PASSWORD}" | chpasswd; fi  # v6.8: برگشت پسورد
           echo 'Hamid ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/hamid
           chmod 0440 /etc/sudoers.d/hamid
           mkdir -p /home/Hamid && chown -R Hamid:Hamid /home/Hamid
