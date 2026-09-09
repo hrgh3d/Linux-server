@@ -93,7 +93,8 @@ jobs:
           ls -A1 /opt 2>/dev/null | grep -v '^$' > /tmp/base_opt_entries.list || true
           ls -A1 /usr/local/bin 2>/dev/null | grep -v '^$' > /tmp/base_usrlocalbin.list || true
           ls -A1 /usr/local/sbin 2>/dev/null | grep -v '^$' > /tmp/base_usrlocalsbin.list || true
-          echo "base image manifests recorded: opt=$(wc -l < /tmp/base_opt_entries.list 2>/dev/null || echo 0) bin=$(wc -l < /tmp/base_usrlocalbin.list 2>/dev/null || echo 0) sbin=$(wc -l < /tmp/base_usrlocalsbin.list 2>/dev/null || echo 0)"
+          ls -A1 /usr/local/lib/node_modules 2>/dev/null | grep -v '^$' > /tmp/base_npm_globals.list || true
+          echo "base image manifests recorded: opt=$(wc -l < /tmp/base_opt_entries.list 2>/dev/null || echo 0) bin=$(wc -l < /tmp/base_usrlocalbin.list 2>/dev/null || echo 0) sbin=$(wc -l < /tmp/base_usrlocalsbin.list 2>/dev/null || echo 0) npm_globals=$(wc -l < /tmp/base_npm_globals.list 2>/dev/null || echo 0)"
           # در حالت تست (probe)، نرم‌افزار را همین‌جا و بدون درگیری با قفل dpkg نصب می‌کنیم
           if [ "${PROBE_ENABLED:-false}" = "true" ]; then
             timeout 180 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 htop >/dev/null 2>&1 \

@@ -21,6 +21,9 @@
 /opt
 /srv
 
+# پکیج‌های سراسری نصب‌شده با npm (کد واقعی؛ bin ها symlink در /usr/local/bin هستند)
+/usr/local/lib/node_modules
+
 # وب‌سرورها، سرویس‌ها و زمان‌بندی‌های Cron
 /var/www
 /var/spool/cron

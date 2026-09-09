@@ -133,6 +133,8 @@ add_image_excludes() {
 add_image_excludes "opt"            /tmp/base_opt_entries.list
 add_image_excludes "usr/local/bin"  /tmp/base_usrlocalbin.list
 add_image_excludes "usr/local/sbin" /tmp/base_usrlocalsbin.list
+# پکیج‌های npm که از ابتدا روی image هستند حذف شوند تا فقط پکیج‌های کاربر ذخیره شوند
+add_image_excludes "usr/local/lib/node_modules" /tmp/base_npm_globals.list
 if [ "${#IMAGE_DIR_EXCLUDES[@]}" -gt 0 ]; then
   phase "excluding ${#IMAGE_DIR_EXCLUDES[@]} image-baseline entries"
 fi

@@ -109,6 +109,7 @@ restore_path "var/lib/tailscale"  "/var/lib/tailscale"
 restore_path "etc"                "/etc"
 restore_path "usr/local/bin"      "/usr/local/bin"
 restore_path "usr/local/sbin"     "/usr/local/sbin"
+restore_path "usr/local/lib/node_modules" "/usr/local/lib/node_modules"
 restore_path "opt"                "/opt"
 restore_path "srv"                "/srv"
 restore_path "var/www"            "/var/www"
@@ -121,7 +122,7 @@ sudo chown -R 0:0 /etc/sudoers.d 2>/dev/null || true
 sudo chmod 0750 /etc/sudoers.d 2>/dev/null || true
 
 # مسیرهای سیستمی بازگردانی‌شده باید root-owned باشند
-for d in /etc/ssh /usr/local/bin /usr/local/sbin /opt /srv /var/www /var/spool/cron; do
+for d in /etc/ssh /usr/local/bin /usr/local/sbin /usr/local/lib/node_modules /opt /srv /var/www /var/spool/cron; do
   [ -e "$d" ] && sudo chown -R 0:0 "$d" 2>/dev/null || true
 done
 
