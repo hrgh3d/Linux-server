@@ -324,6 +324,11 @@ def validate(members_file):
                 continue
             payload += 1
             clean = rel.rstrip("/")
+            # v5.4: hermes-agent venv is explicitly allowed (gateway needs it)
+            if clean.startswith("usr/local/lib/hermes-agent/venv") or clean.startswith("usr/local/lib/hermes-agent/.venv"):
+                continue
+            if clean == "usr/local/lib/hermes-agent/venv" or clean == "usr/local/lib/hermes-agent/.venv":
+                continue
             name = clean.rsplit("/", 1)[-1]
             if name in PRUNE_FILE_NAMES or name.endswith(PRUNE_FILE_SUFFIXES):
                 bad.append((rel, "pruned-file"))
@@ -334,8 +339,12 @@ def validate(members_file):
                 continue
             segs = clean.split("/")
             if any(s in PRUNE_DIR_NAMES for s in segs):
-                bad.append((rel, "pruned-dir-name"))
-                continue
+                # allow venv under hermes-agent
+                if "hermes-agent" in clean and any(x in ("venv", ".venv") for x in segs):
+                    pass
+                else:
+                    bad.append((rel, "pruned-dir-name"))
+                    continue
             if clean.startswith("etc/"):
                 if clean in PRUNE_ETC or any(
                         clean == d or clean.startswith(d + "/") for d in PRUNE_ETC):
@@ -359,7 +368,7 @@ def validate(members_file):
     if payload == 0:
         print("[validate] FAIL: archive contains no payload members")
         sys.exit(1)
-    print("[validate] PASS")
+    print(f"[validate] PASS (total={total} payload={payload})")
 
 
 def selftest():
@@ -442,5 +451,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
