@@ -1,7 +1,9 @@
-# payload_keepbig.list — override برای سقف اندازهٔ فایل (پیش‌فرض ۳۲MiB).
-# v4.5: برای اینکه باینری‌های Hermes مثل cloudflared بین ران‌ها پاک نشوند
+# payload_keepbig.list — v4.5.1: keep binaries like cloudflared
 root/.hermes/bin
 root/.hermes
+root
+usr/local/bin
+usr/local/sbin
 usr/local/lib/hermes-agent
 opt
 srv
