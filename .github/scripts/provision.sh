@@ -1,9 +1,9 @@
 #!/bin/bash
 # ============================================================================
-# provision.sh — v4.5.4 pure Mode 2 + staged-aware (fast path if staged exists)
-#   - حالت ۲: اگر کاربر قبلاً Hermes داشته ولی باینری پاک شده، دوباره نصب کن
-#   - v4.5.3: چک کردن /tmp/persist-restore برای data
-#   - v4.5.4: چک کردن staged binary هم تا reinstall بی‌دلیل انجام نشود (سرعت بوت)
+# provision.sh — v4.5.5 hermes venv symlink fix
+#   - v4.5.4: fast path if staged binary exists
+#   - v4.5.5: check venv python validity - symlink to uv may be broken if uv not persisted
+#             if venv/bin/python missing or broken -> reinstall
 # ============================================================================
 set -uo pipefail
 LOG_DIR=/tmp/provision
@@ -19,11 +19,37 @@ RESTORE_ROOT="/tmp/persist-restore"
 has_hermes_data() {
   [ -d /root/.hermes ] || [ -d "$RESTORE_ROOT/root/.hermes" ]
 }
+is_venv_valid() {
+  local venv_python="/usr/local/lib/hermes-agent/venv/bin/python"
+  local staged_venv="$RESTORE_ROOT/usr/local/lib/hermes-agent/venv/bin/python"
+  # check live venv
+  if [ -x "$venv_python" ] && [ -e "$venv_python" ]; then
+    # check if symlink target exists (if it's symlink)
+    if [ -L "$venv_python" ]; then
+      local target=$(readlink -f "$venv_python" 2>/dev/null || true)
+      [ -n "$target" ] && [ -e "$target" ] && return 0
+      return 1
+    fi
+    return 0
+  fi
+  # check staged venv
+  if [ -x "$staged_venv" ] && [ -e "$staged_venv" ]; then
+    if [ -L "$staged_venv" ]; then
+      # staged symlink may point to staged uv path
+      local staged_target="$RESTORE_ROOT/usr/local/share/uv/python"
+      [ -d "$staged_target" ] || [ -d "$RESTORE_ROOT/usr/local/share/uv" ] && return 0
+      # also check if target exists in staged
+      return 0
+    fi
+    return 0
+  fi
+  return 1
+}
 has_hermes_binary_live() {
-  [ -x /usr/local/bin/hermes ] && [ -d /usr/local/lib/hermes-agent ]
+  [ -x /usr/local/bin/hermes ] && [ -d /usr/local/lib/hermes-agent ] && is_venv_valid
 }
 has_hermes_binary_staged() {
-  [ -x "$RESTORE_ROOT/usr/local/bin/hermes" ] && [ -d "$RESTORE_ROOT/usr/local/lib/hermes-agent" ]
+  [ -x "$RESTORE_ROOT/usr/local/bin/hermes" ] && [ -d "$RESTORE_ROOT/usr/local/lib/hermes-agent" ] && [ -e "$RESTORE_ROOT/usr/local/lib/hermes-agent/venv/bin/python" ]
 }
 has_hermes_legacy() {
   [ -x /root/.hermes/hermes-agent/hermes ] || [ -d /root/.hermes/hermes-agent/.git ] || [ -x "$RESTORE_ROOT/root/.hermes/hermes-agent/hermes" ]
@@ -73,12 +99,23 @@ provision_hermes() {
     return 0
   fi
   if has_hermes_data; then
-    log "hermes: data exists (live or staged at $RESTORE_ROOT) but binary missing — reinstalling (recovery)..."
+    # check if venv is broken
+    if [ -d /usr/local/lib/hermes-agent ] && ! is_venv_valid; then
+      log "hermes: venv broken (symlink to uv missing) — will reinstall to fix..."
+    else
+      log "hermes: data exists (live or staged at $RESTORE_ROOT) but binary missing — reinstalling (recovery)..."
+    fi
     curl -fsSL --max-time 60 https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh || { note "hermes: download FAILED"; return 1; }
     timeout 1500 $SUDO env HERMES_HOME=/root/.hermes bash /tmp/hermes-install.sh --non-interactive --skip-browser --skip-computer-use >"${LOG_DIR}/hermes.log" 2>&1
     rc=$?
     if [ $rc -eq 0 ] && { [ -x /usr/local/bin/hermes ] || [ -x /root/.hermes/hermes-agent/hermes ] || [ -d /usr/local/lib/hermes-agent ]; }; then
       note "hermes: REINSTALLED (recovery, binary restored)"
+      # verify venv now valid
+      if is_venv_valid; then
+        log "hermes: venv valid after reinstall"
+      else
+        log "hermes: WARNING venv still invalid after reinstall"
+      fi
     else
       note "hermes: recovery FAILED (rc=$rc)"
       tail -30 "${LOG_DIR}/hermes.log" 2>/dev/null | tee -a "${LOG_DIR}/summary.txt"
@@ -119,7 +156,7 @@ provision_cloudflared() {
   fi
 }
 
-log "=== provisioning start (Mode 2 + recovery v4.5.4 staged-aware fast) ==="
+log "=== provisioning start (Mode 2 + recovery v4.5.5 venv-valid check) ==="
 provision_9router
 provision_hermes
 provision_xui
