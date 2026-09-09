@@ -1,10 +1,11 @@
 #!/bin/bash
 # ============================================================================
-# ssh_configure.sh — پیکربندی SSH با کلید ثابت (v4)
+# ssh_configure.sh — پیکربندی SSH با کلید ثابت (v4) + پاکسازی کلیدهای packer
 #  - نصب sshd_config استاندارد مخزن
 #  - تضمین وجود کلیدهای Host و چاپ اثرانگشت آن‌ها (ثبات هویت سرور)
 #  - افزودن (merge) کلید عمومی ثابت به authorized_keys کاربر Hamid و root
 #    بدون حذف کلیدهای اضافی‌ای که کاربر قبلاً مجاز کرده است.
+#  - پاکسازی خودکار کلیدهای آلوده packer/Azure که از image پایه باقی مانده
 # ============================================================================
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +38,13 @@ ensure_key() {
   sudo touch "$home/.ssh/authorized_keys"
   sudo chmod 700 "$home/.ssh"
   sudo chmod 600 "$home/.ssh/authorized_keys"
+  # v6.9: پاکسازی کلیدهای packer/Azure آلوده (از image پایه) که مانع لاگین root می‌شدند
+  if sudo grep -q "packer\|Azure Deployment\|Please login as the user" "$home/.ssh/authorized_keys" 2>/dev/null; then
+    echo "[ssh] cleaning polluted packer keys from $user authorized_keys..."
+    sudo sed -i '/packer/d' "$home/.ssh/authorized_keys" 2>/dev/null || true
+    sudo sed -i '/Azure Deployment/d' "$home/.ssh/authorized_keys" 2>/dev/null || true
+    sudo sed -i '/Please login as the user/d' "$home/.ssh/authorized_keys" 2>/dev/null || true
+  fi
   # v6.7: همه‌ی خطوط REPO_PUB (یک یا چند کلید) merge می‌شوند؛ قدیمی‌ها پاک نمی‌شوند.
   local _k _added=0
   while IFS= read -r _k || [ -n "$_k" ]; do
