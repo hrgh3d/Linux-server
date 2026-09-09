@@ -46,6 +46,11 @@ for f in /root/persistence-probe.txt /home/Hamid/persistence-probe.txt /opt/pers
   if sudo test -f "$f"; then echo "found: $f -> $(sudo cat "$f" 2>/dev/null | head -1)"; else echo "missing: $f"; fi
 done
 if command -v htop >/dev/null 2>&1; then echo "htop installed : yes ($(dpkg -s htop 2>/dev/null | grep Version | awk '{print $2}'))"; else echo "htop installed : no"; fi
+echo "9router  bin : $([ -x /usr/local/bin/9router ] && echo present || echo missing) ($(readlink /usr/local/bin/9router 2>/dev/null || true))"
+echo "hermes   bin : $([ -x /usr/local/bin/hermes ] && echo present || echo missing)"
+echo "hermes   data: $([ -d /root/.hermes ] && echo present || echo missing)"
+echo "3x-ui    bin : $([ -x /usr/local/x-ui/x-ui ] && echo present || echo missing)"
+echo "3x-ui    etc : $([ -d /etc/x-ui ] && echo present || echo missing)"
 
 echo ""
 echo "==================== END BOOT REPORT ===================="

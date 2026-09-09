@@ -35,6 +35,11 @@ on:
         required: false
         default: 'true'
         type: string
+      provision:
+        description: 'نصب خودکار نرم‌افزارها در صورت نبود: 9router / Hermes agent / 3x-ui'
+        required: false
+        default: 'true'
+        type: string
   schedule:
     - cron: '0 */5 * * *'        # هر ۵ ساعت (UTC)
   repository_dispatch:
@@ -64,6 +69,7 @@ jobs:
       LIFETIME_MIN: ${{ inputs.lifetime_min || '330' }}
       PROBE_ENABLED: ${{ inputs.probe || 'false' }}
       SS_SELFTEST: ${{ inputs.selftest || 'true' }}
+      PROVISION_ENABLED: ${{ inputs.provision || 'true' }}
 
     steps:
       - name: Checkout repository
@@ -126,16 +132,17 @@ jobs:
       - name: Restore persistent state (from state repo)
         run: bash .github/scripts/restore.sh
 
+      - name: Provision persistent apps (9router / Hermes / 3x-ui if missing)
+        if: env.PROVISION_ENABLED == 'true'
+        run: bash .github/scripts/provision.sh
+
       - name: Audit persisted paths (diagnostic)
         run: |
           echo "==== size audit of persisted paths (runner image) ===="
-          for p in /home/Hamid /root /var/lib/tailscale /etc /usr/local/bin /usr/local/sbin /srv /var/www /var/spool/cron /opt; do
+          for p in /home/Hamid /root /var/lib/tailscale /etc /usr/local/bin /usr/local/sbin /usr/local/lib/node_modules /usr/local/lib/hermes-agent /usr/local/share/uv /usr/local/x-ui /srv /var/www /var/spool/cron /opt; do
             echo "--- $p ---"
             sudo du -sh --exclude='hostedtoolcache' "$p" 2>/dev/null || echo "  (n/a)"
           done
-          echo "--- /opt components (hostedtoolcache excluded from recursion) ---"
-          sudo ls -la /opt 2>/dev/null | head -20
-          sudo du -sh --exclude='hostedtoolcache' /opt/* 2>/dev/null | sort -h | tail -10 || true
           echo "==== end audit ===="
 
       - name: Write persistence probe (test artifact — idempotent, verifies restore)

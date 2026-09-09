@@ -24,6 +24,14 @@
 # پکیج‌های سراسری نصب‌شده با npm (کد واقعی؛ bin ها symlink در /usr/local/bin هستند)
 /usr/local/lib/node_modules
 
+# Hermes Agent (Nous Research) — کد و uv-python نصب‌شده برای root (FHS layout)
+# دیتای آن در /root/.hermes است که همراه /root خودکار ذخیره می‌شود.
+/usr/local/lib/hermes-agent
+/usr/local/share/uv
+
+# 3x-ui — باینری/پنل (دیتابیس و تنظیمات در /etc/x-ui است که همراه /etc ذخیره می‌شود)
+/usr/local/x-ui
+
 # وب‌سرورها، سرویس‌ها و زمان‌بندی‌های Cron
 /var/www
 /var/spool/cron
