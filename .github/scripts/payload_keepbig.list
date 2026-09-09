@@ -1,16 +1,9 @@
 # payload_keepbig.list — override برای سقف اندازهٔ فایل (پیش‌فرض ۳۲MiB).
-#
-# فایل‌های بزرگ‌تر از سقف به‌صورت پیش‌فرض در Backup قرار نمی‌گیرند (زیرا
-# معمولاً binary/runtime پکیج هستند که با نصب مجدد برمی‌گردند) و در لاگ
-# با «WARN big-file-skip» گزارش می‌شوند؛ هرگز بی‌سروصدا حذف نمی‌شوند.
-#
-# اگر دیتای بزرگِ مشروع کاربر در دایرکتوری مشخصی است و باید حتماً در Backup
-# بماند، پیشوند (نسبت به ریشهٔ /) همان دایرکتوری را یک‌خط این‌جا اضافه کنید؛
-# فایل‌های داخل آن بدون اعمال سقف ذخیره می‌شوند:
-#
-#   root/.hermes/data
-#   srv/big-app/storage
-#   var/lib/myapp-large-store
-#
-# برای تغییر سراسری سقف نیز می‌توانید env جریان را تنظیم کنید:
-#   PAYLOAD_MAX_FILE_BYTES=<bytes>   (مثلاً 536870912 برای 512MiB)
+# v4.5: برای اینکه باینری‌های Hermes مثل cloudflared بین ران‌ها پاک نشوند
+root/.hermes/bin
+root/.hermes
+usr/local/lib/hermes-agent
+opt
+srv
+var/lib
+var/opt
