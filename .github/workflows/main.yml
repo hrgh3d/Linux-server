@@ -104,7 +104,8 @@ jobs:
           ls -A1 /opt 2>/dev/null > /tmp/base_opt_entries.list || true
           ls -A1 /usr/local/bin 2>/dev/null > /tmp/base_usrlocalbin.list || true
           ls -A1 /usr/local/sbin 2>/dev/null > /tmp/base_usrlocalsbin.list || true
-          echo "baselines: apt=$(wc -l < /tmp/base_manual_packages.list 2>/dev/null || echo 0) npm=$(wc -l < /tmp/base_npm.list 2>/dev/null || echo 0) pip=$(wc -l < /tmp/base_pip.list 2>/dev/null || echo 0) opt=$(wc -l < /tmp/base_opt_entries.list 2>/dev/null || echo 0)"
+          ls -A1 /var/lib 2>/dev/null > /tmp/base_varlib_entries.list || true
+          echo "baselines: apt=$(wc -l < /tmp/base_manual_packages.list 2>/dev/null || echo 0) npm=$(wc -l < /tmp/base_npm.list 2>/dev/null || echo 0) pip=$(wc -l < /tmp/base_pip.list 2>/dev/null || echo 0) opt=$(wc -l < /tmp/base_opt_entries.list 2>/dev/null || echo 0) varlib=$(wc -l < /tmp/base_varlib_entries.list 2>/dev/null || echo 0)"
           echo "Base system ready"
 
       - name: Create root/Hamid accounts (root-first)

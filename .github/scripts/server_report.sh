@@ -54,6 +54,13 @@ echo "3x-ui    bin : $([ -x /usr/local/x-ui/x-ui ] && echo present || echo missi
 echo "3x-ui    etc : $([ -d /etc/x-ui ] && echo present || echo missing)"
 
 echo ""
+echo "---- 6) Payload root sizes (diagnostic) ----"
+echo "var/lib largest:"
+sudo du -sh /var/lib/* 2>/dev/null | sort -rh | head -6 | sed 's/^/    /'
+echo "root top:"
+sudo du -sh /root/.[!.]* /root/* 2>/dev/null | sort -rh | head -6 | sed 's/^/    /'
+
+echo ""
 echo "==================== END BOOT REPORT ===================="
 
 # ---- Step Summary (GITHUB_STEP_SUMMARY)
