@@ -386,7 +386,7 @@ def selftest():
     assert prune_dir("root/.config/.android/cache") is True
     # user-created/edited skills must NOT be pruned
     assert prune_dir("root/.hermes/skills") is False
-    assert prune_dir("root/.hermes/bin") is True
+    assert prune_dir("root/.hermes/bin") is False  # v4.5: keep cloudflared
     assert prune_file("var/lib/customx/data.db") is False
     assert prune_file("usr/local/lib/node_modules/9router/cli.js") is True
     assert prune_file("etc/x-ui/x-ui.db-wal") is True
