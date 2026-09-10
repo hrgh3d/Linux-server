@@ -1,4 +1,4 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.8]
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.10]
 
 # ============================================================================
 # سرور Ubuntu پایدار روی GitHub Actions — معماری v6.0 (شاخه AI، بدون VPN)
@@ -84,6 +84,10 @@ jobs:
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN || 'NOT_SET' }}
       TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP || '' }}
       HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
+      # v6.10: secretهای خارج‌شده از آرشیو state (تزریق در secrets_inject.sh)
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '' }}
+      # v6.10: رمز داشبورد Hermes (nginx basic-auth در dashboard_guard.sh)
+      DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD || '' }}
       NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || '' }}
       SAVE_INTERVAL_MIN: '5'      # همگام‌سازی دوره‌ای (فقط در صورت تغییر)
       LIFETIME_MIN: ${{ inputs.lifetime_min || '350' }}
@@ -255,6 +259,15 @@ jobs:
         timeout-minutes: 30
         run: bash .github/scripts/restore.sh apply
 
+      - name: Inject externalized secrets (Telegram bot token)
+        # v6.10: secretها در آرشیو state خالی‌اند؛ مقدار واقعی از Secrets تزریق می‌شود
+        run: bash .github/scripts/secrets_inject.sh
+
+      - name: Dashboard auth guard (nginx basic-auth front)
+        # v6.10: داشبورد پشت Basic Auth می‌رود (nginx :9119 -> dashboard :9120)
+        timeout-minutes: 10
+        run: bash .github/scripts/dashboard_guard.sh
+
       - name: Start persistent apps (Hermes dashboard/tunnel/gateway)
         timeout-minutes: 10
         run: bash .github/scripts/start-services.sh
@@ -384,7 +397,8 @@ jobs:
               sudo nohup tailscaled --state=/var/lib/tailscale/tailscaled.state >/var/log/tailscaled.log 2>&1 &
             fi
             sleep 12
-            timeout 60 sudo tailscale up --hostname="${TS_HOSTNAME:-linux-server-vps}" --accept-routes >/dev/null 2>&1 || true
+            # v6.10: بدون --accept-routes (ادعای ساب‌نت داخلی runner به tailnet لازم نبود)
+            timeout 60 sudo tailscale up --hostname="${TS_HOSTNAME:-linux-server-vps}" >/dev/null 2>&1 || true
             sleep 5
             _on=$(timeout 30 sudo tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null || echo false)
             if [ "$_on" = "true" ]; then
@@ -399,7 +413,11 @@ jobs:
             if timeout 300 bash "$SCRIPT_DIR/save.sh"; then return 0; else return 1; fi
           }
           dispatch_successor() {
-            local _tok="${SUCCESSOR_TOKEN:-NOT_SET}" _code
+            # v6.10: اولویت با GITHUB_TOKEN خودِ ران (لو نمی‌رود، rotate لازم
+            # ندارد؛ job permission actions:write دارد). SUCCESSOR_TOKEN فقط
+            # به‌عنوان fallback می‌ماند.
+            local _tok="${GITHUB_TOKEN:-}" _code
+            [ -n "$_tok" ] || _tok="${SUCCESSOR_TOKEN:-NOT_SET}"
             if [ -z "$_tok" ] || [ "$_tok" = "NOT_SET" ]; then
               echo "[successor] no token — skipping (schedule ticks remain as backstop)"
               return 1
@@ -471,8 +489,8 @@ jobs:
               if [ "$SUCCESSOR_RETRY_AT" -ne 0 ]; then
                 SUCCESSOR_RETRY_AT=0
                 echo "[successor] 10min fallback check..."
-                # list in_progress runs quickly
-                if ! curl -s --max-time 15 -H "Authorization: Bearer ${SUCCESSOR_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=10" 2>/dev/null | grep -q '"id"'; then
+                # list in_progress runs quickly (v6.10: GITHUB_TOKEN preferred)
+                if ! curl -s --max-time 15 -H "Authorization: Bearer ${GITHUB_TOKEN:-${SUCCESSOR_TOKEN}}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=10" 2>/dev/null | grep -q '"id"'; then
                   echo "[successor] API check inconclusive"
                 fi
                 # we don't auto-dispatch again here to avoid loop, just log - the first dispatch should have queued new run

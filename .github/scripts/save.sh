@@ -185,6 +185,27 @@ for _f in "$META"/_meta/*; do [ -e "$_f" ] && META_FILES+=("${_f#"$META"/}"); do
 META_N=${#META_FILES[@]}
 EXPECTED=$(( PAYLOAD_N + META_N ))
 
+# ---- v6.10: خارج‌سازی secret از آرشیو ---------------------------------------
+# TELEGRAM_BOT_TOKEN هرگز در آرشیو state ذخیره نمی‌شود: قبل از tar خط آن در
+# فایل زنده خالی می‌شود و بلافاصله بعد از tar برمی‌گردد (trap: حتی در خطا).
+# تزریق مقدار واقعی در هر بوت توسط secrets_inject.sh انجام می‌شود.
+TS_ENV=/root/.hermes/.env
+ENV_BACKUP=""
+if [ -f "$TS_ENV" ] && grep -q '^TELEGRAM_BOT_TOKEN=.\{4,\}' "$TS_ENV" 2>/dev/null; then
+  ENV_BACKUP="/tmp/.ts-env.keep.$$"
+  cp -p "$TS_ENV" "$ENV_BACKUP"
+  sed -i 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=/' "$TS_ENV"
+  log "secret: TELEGRAM_BOT_TOKEN blanked for archive (restored after tar)"
+fi
+restore_env_secret() {
+  if [ -n "$ENV_BACKUP" ] && [ -f "$ENV_BACKUP" ]; then
+    cp -p "$ENV_BACKUP" "$TS_ENV" 2>/dev/null || true
+    rm -f "$ENV_BACKUP"
+    log "secret: live .env restored after tar"
+  fi
+}
+trap 'restore_env_secret' EXIT
+
 phase "creating archive..."
 V=""; [ -n "${TAR_VERBOSE:-}" ] && V="-v"
 set +e

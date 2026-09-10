@@ -1,62 +1,70 @@
 # Linux-server
 
-سرور Ubuntu پایدار مبتنی بر GitHub Actions با **داده‌های ماندگار، کلید SSH ثابت و IP پایدار Tailscale** — معماری v4.
+سرور Ubuntu پایدار روی GitHub Actions: **داده ماندگار، هویت Tailscale ثابت (IP ثابت)، SSH با کلید، داشبورد رمزدار**. معماری فعلی: **v6.10**.
 
-Runner هر ~۶ ساعت از بین می‌رود و دوباره ساخته می‌شود؛ اما هیچ‌کدام از اطلاعات زیر روی Filesystem موقت Runner نمی‌مانند و در مخزن جداگانه‌ی state نگهداری می‌شوند:
+## چطور کار می‌کند
+- هر Run یک runner موقت است (~۵.۸ ساعت عمر). ۲۰ دقیقه قبل از پایان، خودِ Run، Run جانشین را dispatch می‌کند (زنجیره؛ قطعی هر دست‌به‌دست‌سازی = فقط چند دقیقه بوت).
+- تیک ساعته کرون فقط **backstop** است (اگر زنجیره پاره شود).
+- در ابتدای هر بوت: دانلود state از ریپوی خصوصی `Linux-server-state` → بازنصب پکیج‌های کاربر (کاتالوگ نسخه‌دقیق) → اعمال داده/تنظیمات → تزریق secretها → استارت سرویس‌ها.
+- هر ۵ دقیقه state در صورت تغییر ذخیره می‌شود (rolling؛ ۲ نسخه‌ی آخر نگه داشته می‌شود برای rollback).
 
-- فایل‌های شخصی (`/home/Hamid`) و اطلاعات `/root`
-- پکیج‌ها/نرم‌افزارهای نصب‌شده (لیست + بازنصب خودکار)
-- تنظیمات و کانفیگ‌های سیستم (`/etc`)، برنامه‌ها (`/opt`, `/srv`, `/usr/local`, `/var/www`)، Cron
-- هویت Node تیل‌اسکیل (`/var/lib/tailscale`) برای ثبات IP
-- کلیدهای Host سرور (`/etc/ssh/ssh_host_*`) تا fingerprint سرور تغییر نکند
+## چه چیزهایی ماندگار است
+- `/root` ،`/home/Hamid` ،`/opt` ،`/srv` ،`/etc` ،`/usr/local/bin|sbin` ،`/var/www` ،`/var/lib` ،`/var/opt` ،cron
+- پکیج‌های apt/npm/pip کاربر با **نسخه دقیق** (کاتالوگ در `installed.json`)
+- هویت Tailscale (`/var/lib/tailscale`) → **IP ثابت `100.70.83.2`** (node غیر-ephemeral + pin API به‌عنوان پشت‌بند)
+- کلیدهای Host SSH (فingerprint ثابت)
+- دیتابیس‌های SQLite به‌صورت snapshot سازگار (online backup)
 
-## ویژگی‌های کلیدی (v4)
-
-- **یک اسنپ‌شاتِ واحدِ Rolling** روی Release مخزن `Linux-server-state`؛ آپلود فقط وقتی محتوا واقعاً تغییر کرده باشد → Cancel و Run مجدد **بکاپ اضافی نمی‌سازد**.
-- **Restore خودکار** در ابتدای هر Run: فایل‌ها، پکیج‌ها، هویت Tailscale و کلیدهای Host.
-- **کلید SSH ثابت**: کلید عمومی `ed25519` در `.github/ssh/id_ed25519.pub`؛ در هر Boot به `authorized_keys` کاربر `Hamid` و `root` اضافه می‌شود (بدون حذف کلیدهای اضافه‌ی مجاز قبلی).
-- **مدیریت بدون رمز**: `root` بدون پسورد؛ کاربر `Hamid` دارای `NOPASSWD` و `sudo su` بدون درخواست Password.
-- **IP ثابت Tailscale**: بازیابی هویت قبلی (همان Node Key) → همان IP؛ در صورت نیاز `TAILSCALE_FIXED_IP` از طریق Tailscale API تثبیت می‌شود.
-- **نتیجه‌ی هر Boot** (markerها، IP، fingerprint کلیدها و …) در `server_report` و Step Summary چاپ می‌شود.
-
-## نحوه اتصال به سرور
-
-پس از اجرای Workflow، اطلاعات اتصال در Step Summary نمایش داده می‌شود:
-
+## اتصال SSH
 ```bash
-ssh -i ~/.ssh/id_ed25519 Hamid@<TAILSCALE_IP>
-# یا با MagicDNS (در صورت فعال بودن):
-ssh -i ~/.ssh/id_ed25519 Hamid@linux-server-vps
+# کلید (پیشنهادی؛ فایل private key در اختیار شماست — hamid@windows-powershell)
+ssh -i ~/.ssh/linux-server root@100.70.83.2
+# یا از ویندوز با PowerShell:
+#   ssh -i $env:USERPROFILE\.ssh\linux-server root@100.70.83.2
+# فیلتر کلیدهای مجاز: فقط root و Hamid (AllowUsers)
 ```
+فingerprint کلید host سرور (برای تأیید هویت در اتصال اول):
+`SHA256:kdsQ9FkMfUVWwaLckY3/yb2vEq0faMwUFtgID8eEl4w`
 
-- کاربر: `Hamid` — پورت: `22` — دسترسی ریشه: `sudo su` (بدون پسورد)
+## داشبورد Hermes (با رمز)
+آدرس تونل هر بوت به تلگرام ارسال می‌شود (trycloudflare.com). داشبورد پشت **Basic Auth** است:
+- کاربر: `hamid` — رمز: secret `DASHBOARD_PASSWORD` (در اختیار شما)
+- زنجیره: tunnel → nginx :9119 (auth) → dashboard :9120 (loopback فقط)
 
-## ساختار و چرخه‌ی حیات
+## امنیتی (v6.10)
+- **Secretها وارد آرشیو state نمی‌شوند**: `TELEGRAM_BOT_TOKEN` قبل از archive خالی می‌شود و در هر بوت از GitHub Secrets تزریق می‌شود (`secrets_inject.sh`).
+- آرشیو state فقط **hash یک‌طرفه** رمز داشبورد را می‌بیند (htpasswd SHA-512؛ خود رمز فقط در GitHub Secrets است).
+- Tailscale بدون `--accept-routes` (ساب‌نت داخلی runner به tailnet route نمی‌شود).
+- dispatch زنجیره با `GITHUB_TOKEN` خودِ ران (توکن لو‌رفته لازم نیست).
+- ریپوی state **private** است؛ کلیدهای Tailscale/SSH و داده‌ها فقط در آن‌جا.
+- هشدار انقضای کلیدها در هر بوت (`tailscale_expiry_check.py` + `key-dates.json`).
 
-1. **Run جدید** روی `ubuntu-24.04` شروع می‌شود (هر ۵ ساعت توسط `schedule` یا دستی `workflow_dispatch`).
-2. **restore.sh** جدیدترین state را دانلود و بازمی‌گرداند (پکیج‌ها، فایل‌ها، هویت Tailscale، کلیدهای Host).
-3. SSH و Tailscale خودکار پیکربندی/اتصال می‌شوند.
-4. سرور تا `lifetime_min` (پیش‌فرض ۳۳۰ دقیقه) زنده است؛ هر `SAVE_INTERVAL_MIN` دقیقه (۵) اگر تغییری رخ داده باشد، state همگام می‌شود.
-5. با Cancel، Timeout یا پایان عمر، آخرین وضعیت ذخیره و برای چرخه‌ی بعد آماده می‌شود.
+## ⚠️ مصرف دقیقه Actions (مهم)
+- این ریپو **public** و اکانت **Free** است → سقف رایگان **۲۰۰۰ دقیقه/ماه** (private روی Free = ۰ دقیقه).
+- مصرف فعلی ≈ **۱۴۵۰ دقیقه/روز** (~۴۴٬۰۰۰/ماه) — یعنی سقف ماهانه در ~۱.۴ روز پر می‌شود؛ بعد از پر شدن، Runهای **جدید** (شامل dispatch جانشین!) تا ریست ماهانه رد می‌شوند و سرور می‌ایستد.
+- پایش: Settings → Billing and plans → Usage → Actions. گزینه‌های پایدار: پلن Team (۵۰هزار دقیقه/ماه) یا مهاجرت به VPS.
 
-### پارامترهای Run دستی
-| Input | پیش‌فرض | توضیح |
-|---|---|---|
-| `lifetime_min` | `330` | طول عمر سرور (برای تست می‌توانید کم کنید) |
-| `probe` | `false` | نوشتن فایل تستی در `/root`,`/home/Hamid`,`/opt` + نصب `htop` برای راستی‌آزمایی ماندگاری |
-| `selftest` | `true` | تست محلی SSH (sudo بدون رمز، `sudo su`، ورود root با کلید) |
-
-## Secrets مورد نیاز (مخزن اصلی)
-| Secret | توضیح |
-|---|---|
-| `PERSIST_TOKEN` | دسترسی نوشتن به مخزن `Linux-server-state` |
-| `TAILSCALE_AUTH_KEY` | کلید Auth تیل‌اسکیل (ترجیحاً reusable) |
-| `TAILSCALE_API_TOKEN` | (اختیاری) برای پاک‌سازی Node مرده و تثبیت IP |
-| `TAILSCALE_FIXED_IP` | (اختیاری) IP دلخواه ثابت مثل `100.x.y.z` |
-| `HAMID_PASSWORD` | (اختیاری) در صورت نیاز به پسورد برای کاربر Hamid |
-
-## امنیت
-- هر دو مخزن را **Private** نگه دارید.
-- کلید خصوصی SSH را هرگز Commit نکنید؛ فقط روی سیستم شخصی.
-- برای تغییر کلید SSH، کلید عمومی جدید را در `.github/ssh/id_ed25519.pub` قرار دهید.
-- بعد از اولین Boot معماری v4 ممکن است fingerprint میزبان SSH یک‌بار عوض شود (کلید Host جدید تولید و سپس برای همیشه در State ذخیره می‌شود). مقدار جدید در Step Summary چاپ می‌شود.
+## ساختار ریپو
+```
+.github/
+  workflows/main.yml          # کل چرخه بوت + keepalive + زنجیره جانشین
+  scripts/
+    save.sh / restore.sh      # اسنپ‌شات و بازیابی (rolling 2 نسخه)
+    state_sync.py             # آپلود/دانلود اتمیک + verify + keep-2
+    payload.py                # فیلتر مسیرها (چه چیزی بکاپ می‌شود)
+    sqlite_stage.py           # snapshot سازگار دیتابیس‌های زنده
+    tailscale-setup.sh        # اتصال/بازاتصال Tailscale (bounded)
+    tailscale_cleanup.py      # حذف نودهای یتیم هم‌نام آفلاین + rename
+    tailscale_expiry_check.py # هشدار انقضای کلیدها
+    ssh_configure.sh          # sshd + merge کلید ثابت (بدون حذف کلیدهای مجاز)
+    secrets_inject.sh         # تزریق secretهای خارج‌شده از آرشیو (v6.10)
+    dashboard_guard.sh        # nginx basic-auth جلوی داشبورد (v6.10)
+    provision.sh              # نصب خودکار 9router/Hermes/cloudflared در صورت نبود
+    start-services.sh         # استارت سرویس‌های ماندگار
+    server_report.sh          # گزارش بوت (Step Summary)
+    notify.sh                 # اعلان failure (webhook اختیاری + marker)
+  config/sshd_config          # کانفیگ ثابت sshd
+  ssh/id_ed25519.pub          # کلید(های) ثابت SSH
+  key-dates.json              # تاریخ انقضای توکن‌ها (چک هر بوت)
+README.md / OPS.md            # این فایل + راهنمای عملیاتی
+```

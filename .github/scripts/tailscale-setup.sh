@@ -89,8 +89,12 @@ do_tailscale_up() {
   # reconnect hung 15m until the step timeout, killing a healthy restore).
   # Bound it, then verify via 'tailscale status' — the node may be online
   # even if 'up' itself is stuck.
+  # v6.10: WITHOUT --accept-routes: the node must NOT advertise the GitHub
+  # runner's internal (172.x) subnets to the tailnet — that gave every
+  # tailnet device routes into GitHub infrastructure and was never needed
+  # for SSH. Plain node-to-node connectivity is unaffected.
   # shellcheck disable=SC2086
-  if timeout 150 sudo tailscale up --hostname="$TS_HOSTNAME" --accept-routes $extra_args >"$logfile" 2>&1; then
+  if timeout 150 sudo tailscale up --hostname="$TS_HOSTNAME" $extra_args >"$logfile" 2>&1; then
     log "tailscale up OK"
     cat "$logfile"
     return 0

@@ -256,9 +256,18 @@ def upload(repo, tag, src_file, token):
             delete_asset(repo, new_id, token)  # best effort cleanup
         return False
 
-    # 3) Purge every older/other state asset (keep exactly the newest one).
+    # 3) Purge old state assets — keep the newest (just uploaded) PLUS the
+    #    previous one as a rollback safety net (v6.10: keep-2 instead of
+    #    keep-1; a corrupted/undesired latest state can still be recovered).
+    keep_ids = {new_id}
+    older = [a for a in assets
+             if a.get("id") != new_id and _asset_is_state(a) and a.get("id")]
+    older.sort(key=lambda a: a.get("created_at", ""), reverse=True)
+    if older:
+        keep_ids.add(older[0].get("id"))
+        print(f"[persist] keeping previous asset '{older[0]['name']}' as rollback copy")
     for a in assets:
-        if a.get("id") == new_id or not _asset_is_state(a):
+        if a.get("id") in keep_ids or not _asset_is_state(a):
             continue
         # never delete an asset whose digest matches ours (already covered by skip)
         print(f"[persist] purging stale asset '{a['name']}' (id {a['id']})")

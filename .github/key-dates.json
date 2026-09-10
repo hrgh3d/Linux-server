@@ -1,5 +1,5 @@
 {
-  "tailscale_api_token_expires": "TODO-YYYY-MM-DD",
+  "tailscale_api_token_expires": "2026-09-11",
   "successor_pat_expires": "TODO-YYYY-MM-DD",
-  "notes": "تاریخ‌ها secret نیستند. از صفحه‌های کنسول بردار و اینجا بگذار؛ با هر تعویض توکن به‌روز کن. هر بوت چک می‌شود (<۱۰ روز = هشدار)."
+  "notes": "تاریخ‌ها secret نیستند. با هر تعویض توکن به‌روز کن؛ هر بوت چک می‌شود (<۱۰ روز = هشدار). وضعیت فعلی (۲۰۲۶-09-10): Tailscale API token فعلی ۲۴ ساعته است و ۲۰۲۶-09-11T16:55:42Z منقضی می‌شود → حتماً قبل از آن توکن تازه (طولانی‌تر) بساز و secret TAILSCALE_API_TOKEN را عوض کن. Tailscale auth key فعلی (k4UYytR33T11CNTRL) ۹۰ روزه تا 2026-12-09 است (سقف API)؛ از آن‌جایی که node غیر-ephemeral است، بعد از اولین اتصال موفق، reconnect با node key در state انجام می‌شود و auth key فقط برای bootstrap لازم است — قبل از انقضا با هشدار key-expiry key تازه ساخته می‌شود."
 }
