@@ -293,7 +293,7 @@ jobs:
           }
 
       - name: Setup Tailscale (persistent identity)
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: bash .github/scripts/tailscale-setup.sh
 
       - name: Record server identity state
@@ -423,6 +423,18 @@ jobs:
           }
           trap 'flush_on_signal || exit 1; exit 0' TERM INT QUIT HUP
           END_TS=$(( $(date +%s) + LIFETIME_MIN * 60 ))
+          # v6.9.3: clamp END_TS so the run ALWAYS finishes before the 360m job
+          # timeout, even when boot steps take longer than usual (2026-09-10:
+          # a slow/hung boot pushed the 350m lifetime past the 360m timeout and
+          # GitHub killed the run with no final save). BOOT_TS ≈ job start.
+          BOOT_EPOCH=$(date -d "${BOOT_TS:-invalid}" +%s 2>/dev/null || echo 0)
+          if [ "$BOOT_EPOCH" -gt 0 ]; then
+            MAX_END=$(( BOOT_EPOCH + 355 * 60 ))
+            if [ "$END_TS" -gt "$MAX_END" ]; then
+              echo "[keepalive] boot took long — END_TS clamped to BOOT+355m (job timeout=360m)"
+              END_TS=$MAX_END
+            fi
+          fi
           LAST_AUTO=$(date +%s)
           SUCCESSOR_AT=$(( END_TS - 1200 ))  # v6.9: 20min early dispatch for minimal downtime
           SUCCESSOR_DISPATCHED=0

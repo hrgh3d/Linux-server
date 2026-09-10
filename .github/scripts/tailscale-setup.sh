@@ -83,15 +83,27 @@ sleep 2
 do_tailscale_up() {
   local extra_args="$1"
   local logfile="/tmp/ts_up_$(date +%s).log"
-  log "running: tailscale up $extra_args (log $logfile)"
+  log "running: tailscale up $extra_args (log $logfile, bounded 150s)"
+  # v6.9.3: 'tailscale up' blocks INDEFINITELY when the node needs re-auth,
+  # waits on admin approval, or hits a name-collision (seen 2026-09-10: a
+  # reconnect hung 15m until the step timeout, killing a healthy restore).
+  # Bound it, then verify via 'tailscale status' — the node may be online
+  # even if 'up' itself is stuck.
   # shellcheck disable=SC2086
-  if sudo tailscale up --hostname="$TS_HOSTNAME" --accept-routes $extra_args >"$logfile" 2>&1; then
+  if timeout 150 sudo tailscale up --hostname="$TS_HOSTNAME" --accept-routes $extra_args >"$logfile" 2>&1; then
     log "tailscale up OK"
     cat "$logfile"
     return 0
   else
-    log "tailscale up failed:"
-    cat "$logfile" | tail -20
+    local rc=$?
+    log "tailscale up did not return cleanly (rc=$rc):"
+    tail -20 "$logfile" 2>/dev/null || true
+    if timeout 30 sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online == true' >/dev/null 2>&1; then
+      log "'up' blocked but node IS online per status — proceeding"
+      return 0
+    fi
+    log "diagnostics — tailscale status while offline:"
+    timeout 30 sudo tailscale status 2>&1 | head -20 || true
     return 1
   fi
 }
