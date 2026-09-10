@@ -75,7 +75,11 @@ def _request(method, url, token, body=None, headers=None, accept=None):
                     return {}
                 return json.loads(raw.decode())
         except urllib.error.HTTPError as e:
-            if e.code in (403, 429, 500, 502, 503, 504):
+            # v4.1: 401 is retried too — on 2026-09-10 the API returned
+            # transient 401s for ~15 min on a VALID token and three
+            # consecutive save failures aborted a healthy server. A truly
+            # bad token still fails after all retries (no behavior change).
+            if e.code in (401, 403, 429, 500, 502, 503, 504):
                 last = e
                 print(f"[persist] transient HTTP {e.code} (attempt {attempt}/{RETRIES}), retrying...",
                       file=sys.stderr)

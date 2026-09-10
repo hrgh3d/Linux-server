@@ -39,7 +39,10 @@ on:
         default: 'true'
         type: string
   schedule:
-    - cron: '0 */3 * * *'        # هر ۳ ساعت (v6.9: backstop سریع‌تر برای کاهش قطعی) (UTC)
+    # v6.9.2: backstop ساعته. تیک‌های 06:00 و 12:00 (2026-09-10) اصلاً اجرا
+    # نشدند و تیک 09:00 با ۱:۴۷ تأخیر رسید؛ با backstop ۳ ساعته قطعی می‌تواند
+    # ساعت‌ها طول بکشد. هر تیک extra فقط ~1-2 دقیقه runner مصرف می‌کند (yield).
+    - cron: '0 * * * *'          # هر ساعت (UTC)
   repository_dispatch:
 
 # concurrency بر اساس trigger جدا شده است تا Manual Dispatch پشت Cron در صف
@@ -97,7 +100,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - "$GH_TOKEN" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" "$GITHUB_REPOSITORY" <<'PY'
-          import json, os, sys, time, urllib.request, urllib.error
+          import json, os, sys, time, urllib.request, urllib.error, datetime
           tok, run_id, event, repo = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
           api = "https://api.github.com"
           def req(method, path):
@@ -123,6 +126,17 @@ jobs:
                       break
                   page += 1
               return runs
+          def run_age_minutes(r):
+              """Minutes since the run started (or was created). None if unknown."""
+              for k in ("run_started_at", "created_at"):
+                  v = r.get(k)
+                  if v:
+                      try:
+                          ts = datetime.datetime.fromisoformat(v.replace("Z", "+00:00"))
+                          return (datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds() / 60.0
+                      except Exception:
+                          return None
+              return None
           others = []
           for st in ("in_progress", "queued"):
               for r in list_runs(st):
@@ -138,7 +152,25 @@ jobs:
                   req("POST", f"/repos/{repo}/actions/runs/{r['id']}/cancel")
           else:
               manuals = [r for r in others if r.get("event") == "workflow_dispatch"]
-              if manuals:
+              # v6.9.2: zombie protection. A healthy manual run always finishes
+              # well before the 360m job timeout (lifetime <=355m + final save).
+              # An in_progress manual older than that is STUCK (e.g. hung inside
+              # a step) — yielding to it would keep the server down for hours
+              # (see 2026-09-10 incident: 07:51 run hung, blocked all auto runs,
+              # 7h+ outage). Cancel zombies, only yield to young/queued manuals.
+              ZOMBIE_MIN = 375
+              zombies, alive = [], []
+              for r in manuals:
+                  if r.get("status") == "in_progress":
+                      age = run_age_minutes(r)
+                      if age is not None and age > ZOMBIE_MIN:
+                          zombies.append((r, age))
+                          continue
+                  alive.append(r)
+              for r, age in zombies:
+                  print(f"[coord] manual run {r['id']} stuck {int(age)}min (> {ZOMBIE_MIN}) — zombie, cancelling", flush=True)
+                  req("POST", f"/repos/{repo}/actions/runs/{r['id']}/cancel")
+              if alive:
                   print("[coord] auto run yields to manual — self-cancelling", flush=True)
                   req("POST", f"/repos/{repo}/actions/runs/{run_id}/cancel")
                   for _ in range(20):
@@ -166,6 +198,7 @@ jobs:
           echo "BOOT_ID=${BOOT_TS}" >> "$GITHUB_ENV"
 
       - name: Setup base system + image baselines
+        timeout-minutes: 30
         run: |
           # v6.9.1: resilient apt with retries (fixes transient mirror failures)
           for i in 1 2 3 4 5; do
@@ -210,16 +243,20 @@ jobs:
           echo "root passwordless; Hamid NOPASSWD sudo; job runs as root"
 
       - name: Restore — prep (download state + reinstall catalog packages)
+        timeout-minutes: 60
         run: bash .github/scripts/restore.sh prep
 
       - name: Provision persistent apps (9router / Hermes / 3x-ui if missing)
         if: env.PROVISION_ENABLED == 'true'
+        timeout-minutes: 40
         run: bash .github/scripts/provision.sh
 
       - name: Restore — apply (config/data payload over reinstalled packages)
+        timeout-minutes: 30
         run: bash .github/scripts/restore.sh apply
 
       - name: Start persistent apps (Hermes dashboard/tunnel/gateway)
+        timeout-minutes: 10
         run: bash .github/scripts/start-services.sh
       - name: Write persistence probe (new paths + second apt pkg)
         if: env.PROBE_ENABLED == 'true'
@@ -256,6 +293,7 @@ jobs:
           }
 
       - name: Setup Tailscale (persistent identity)
+        timeout-minutes: 15
         run: bash .github/scripts/tailscale-setup.sh
 
       - name: Record server identity state
@@ -273,6 +311,7 @@ jobs:
           echo "identity recorded: $(cat /root/.server-state.json)"
 
       - name: Initial state snapshot (early persistence)
+        timeout-minutes: 20
         run: |
           run_snapshot() {
             if timeout 420 bash .github/scripts/save.sh; then
@@ -297,6 +336,7 @@ jobs:
           fi
 
       - name: Verify and report
+        timeout-minutes: 5
         run: bash .github/scripts/server_report.sh
 
       - name: Agent autostart (AI resume after boot)
@@ -310,6 +350,10 @@ jobs:
           fi
 
       - name: Keep server alive (serial auto-sync + verified final save)
+        # v6.9.2: step-level safety net — even if the loop ever stalls, the step
+        # dies at 358m (successor is already dispatched at ~330m / END-20min,
+        # so the handoff is unaffected) instead of eating the whole 360m budget.
+        timeout-minutes: 358
         run: |
           SCRIPT_DIR=.github/scripts
           LIFETIME_MIN=$(echo "${LIFETIME_MIN:-350}" | grep -Eo '^[0-9]+$' || echo 350)
@@ -320,23 +364,29 @@ jobs:
           CONSEC=0
           check_tailscale() {
             local _on _ip _derp
-            _on=$(sudo tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null || echo false)
-            _ip=$(sudo tailscale ip -4 2>/dev/null | head -1 || true)
+            # v6.9.2: EVERY command is bounded with `timeout`.
+            # Root-cause fix (2026-09-10): a hung `systemctl restart tailscaled`
+            # blocked this function — and therefore the whole keepalive loop —
+            # for 5h52m until the 360m job timeout killed the run
+            # ("canceled by @github-actions[bot]"). Worst-case duration of a
+            # heal cycle is now ~6 min, so the loop always keeps progressing.
+            _on=$(timeout 30 sudo tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null || echo false)
+            _ip=$(timeout 30 sudo tailscale ip -4 2>/dev/null | head -1 || true)
             if [ "$_on" = "true" ] && [ -n "$_ip" ]; then
-              _derp=$(sudo tailscale netcheck --format=json 2>/dev/null | jq -r '[.DERPLatency // {} | to_entries[] | select(.value > 0)] | length' 2>/dev/null || echo 1)
+              _derp=$(timeout 90 sudo tailscale netcheck --format=json 2>/dev/null | jq -r '[.DERPLatency // {} | to_entries[] | select(.value > 0)] | length' 2>/dev/null || echo 1)
               if [ "${_derp:-1}" -ge 1 ] 2>/dev/null; then return 0; fi
               echo "[watchdog] Tailscale online (${_ip}) but no DERP reachable — healing..."
             else
               echo "[watchdog] Tailscale unhealthy (online=${_on} ip=${_ip:-none}) — healing..."
             fi
-            if ! sudo systemctl restart tailscaled >/dev/null 2>&1; then
-              sudo pkill -x tailscaled >/dev/null 2>&1 || true; sleep 1
+            if ! timeout 90 sudo systemctl restart tailscaled >/dev/null 2>&1; then
+              timeout 15 sudo pkill -x tailscaled >/dev/null 2>&1 || true; sleep 1
               sudo nohup tailscaled --state=/var/lib/tailscale/tailscaled.state >/var/log/tailscaled.log 2>&1 &
             fi
             sleep 12
-            sudo tailscale up --hostname="${TS_HOSTNAME:-linux-server-vps}" --accept-routes >/dev/null 2>&1 || true
+            timeout 60 sudo tailscale up --hostname="${TS_HOSTNAME:-linux-server-vps}" --accept-routes >/dev/null 2>&1 || true
             sleep 5
-            _on=$(sudo tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null || echo false)
+            _on=$(timeout 30 sudo tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null || echo false)
             if [ "$_on" = "true" ]; then
               echo "[watchdog] healed (online again)"
             else
