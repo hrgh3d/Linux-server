@@ -22,26 +22,23 @@ fi
 
 SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/known_hosts -o PreferredAuthentications=password \
          -o PubkeyAuthentication=no -o ConnectTimeout=15 -o ServerAliveInterval=15)
-SSHRUN() { sshpass -p "$1" ssh "${SSHOPTS[@]}" root@"${TARGET_IP}" "${@:2}"; }
-
-# رمزِ root ممکن است بین SSH_PASS و HAMID_PASSWORD جابه‌جا شود (بازگردانیِ state رمز را برمی‌گرداند)
-SSH_PASS_OK=""
-for attempt in 1 2 3 4 5 6 7 8; do
-  for cand in "${SSH_PASS:-}" "${HAMID_PASSWORD:-}"; do
-    [ -n "$cand" ] || continue
-    if SSHRUN "$cand" 'echo OK' 2>/dev/null | grep -q OK; then SSH_PASS_OK="$cand"; break 2; fi
-  done
+SSHRUN() { sshpass -p "${ROOT_PASS}" ssh "${SSHOPTS[@]}" root@"${TARGET_IP}" "$@"; }
+# تنها منبع رمز root: سکرت HAMID_PASSWORD (SSH_PASS حذف شد تا دوگانگی پیش نیاید)
+ROOT_PASS="${HAMID_PASSWORD:?HAMID_PASSWORD تنظیم نشده است}"
+SSH_OK=0
+for attempt in $(seq 1 12); do
+  if SSHRUN 'echo OK' 2>/dev/null | grep -q OK; then SSH_OK=1; break; fi
   echo "[backup] waiting ssh ($attempt)"; sleep 6
 done
-if [ -z "$SSH_PASS_OK" ]; then
-  echo "[backup] SSH FAILED (no password worked)"
+if [ "$SSH_OK" != "1" ]; then
+  echo "[backup] SSH FAILED (HAMID_PASSWORD accepted نشد)"
   curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
     -d "chat_id=${NOTIFY_CHAT_ID}" --data-urlencode "text=سیستم ${VPS_NAME} قطع شد ❌
 (بکاپ نگرفت: ورود SSH برقرار نشد)" >/dev/null 2>&1 || true
   exit 1
 fi
-SSH_PASS="$SSH_PASS_OK"; echo "[backup] ssh auth OK"
-SSH() { SSHRUN "${SSH_PASS}" "$@"; }
+echo "[backup] ssh auth OK (single secret: HAMID_PASSWORD)"
+SSH() { SSHRUN "$@"; }
 
 # ---------- اسکریپت ساخت بکاپ (روی سرور hrgh3d) ----------
 SSH 'cat > /tmp/bkbuild.sh' <<'REMOTE'
@@ -96,7 +93,7 @@ echo "[backup] remote: $(printf '%s' "$RES" | tr '\n' ' ')"
 OUT="$(printf '%s' "$RES" | sed -n 's/^BACKUP_FILE=//p' | tail -1)"
 [ -n "$OUT" ] || { echo "[backup] build failed"; exit 1; }
 
-sshpass -p "${SSH_PASS}" scp "${SSHOPTS[@]}" "root@${TARGET_IP}:${OUT}" /tmp/backup.tar.gz >/dev/null 2>&1 \
+sshpass -p "${ROOT_PASS}" scp "${SSHOPTS[@]}" "root@${TARGET_IP}:${OUT}" /tmp/backup.tar.gz >/dev/null 2>&1 \
   || { echo "[backup] scp failed"; exit 1; }
 LOCAL_SIZE=$(stat -c%s /tmp/backup.tar.gz 2>/dev/null || echo 0)
 echo "[backup] local size = ${LOCAL_SIZE} bytes"
