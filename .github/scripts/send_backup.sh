@@ -21,8 +21,25 @@ fi
 
 SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/known_hosts -o PreferredAuthentications=password \
          -o PubkeyAuthentication=no -o ConnectTimeout=15 -o ServerAliveInterval=15)
-SSH() { sshpass -p "${SSH_PASS}" ssh "${SSHOPTS[@]}" root@"${TARGET_IP}" "$@"; }
-for i in $(seq 1 24); do SSH 'echo OK' 2>/dev/null | grep -q OK && break || { echo "[backup] waiting ssh ($i)"; sleep 5; }; done
+# رمز SSH ممکن است بینِ SSH_PASS و HAMID_PASSWORD جابه‌جا شود (بازگردانی state رمز را عوض می‌کند) → هر دو امتحان می‌شوند
+SSH_PASS_OK=""
+SSHRUN() { sshpass -p "$1" ssh "${SSHOPTS[@]}" root@"${TARGET_IP}" "${@:2}"; }
+for cand in "${SSH_PASS:-}" "${HAMID_PASSWORD:-}"; do
+  [ -n "$cand" ] || continue
+  if SSHRUN "$cand" 'echo OK' 2>/dev/null | grep -q OK; then SSH_PASS_OK="$cand"; break; fi
+  echo "[backup] password candidate failed — trying next"
+done
+if [ -z "$SSH_PASS_OK" ]; then
+  for i in $(seq 1 10); do
+    for cand in "${SSH_PASS:-}" "${HAMID_PASSWORD:-}"; do
+      [ -n "$cand" ] || continue
+      SSHRUN "$cand" 'echo OK' 2>/dev/null | grep -q OK && { SSH_PASS_OK="$cand"; break 2; }
+    done
+    echo "[backup] waiting ssh ($i)"; sleep 6
+  done
+fi
+if [ -n "$SSH_PASS_OK" ]; then SSH_PASS="$SSH_PASS_OK"; echo "[backup] ssh auth OK (${#SSH_PASS_OK} chars)"; fi
+SSH() { SSHRUN "${SSH_PASS}" "$@"; }
 if ! SSH 'echo OK' >/dev/null 2>&1; then
   echo "[backup] SSH FAILED"
   curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
