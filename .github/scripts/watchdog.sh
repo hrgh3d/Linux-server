@@ -1,12 +1,13 @@
 #!/bin/bash
-# watchdog.sh — منطق نگهبان «همیشه فعال» (هم توسط watchdog.yml و هم watchdog-b.yml اجرا می‌شود).
-#   ۱) اگر هیچ رانی از main.yml زنده/در صف نبود → خودش یکی روشن می‌کند.
-#   ۲) اگر رانی زنده است ولی state بیش از STALE_MIN دقیقه آپلود نشده → هشدار تلگرام.
-#   ۳) اگر dispatch شکست بخورد → هشدار تلگرام با متن دقیق.
+# watchdog.sh — منطق نگهبان «همیشه فعال» (توسط watchdog.yml و watchdog-b.yml اجرا می‌شود).
+#   ۱) اگر توکن state از کار افتاده → هشدار (همان علت خرابی قبلی، ولی این بار فوری دیده می‌شود).
+#   ۲) اگر هیچ رانی از main.yml زنده/در صف نبود → خودش یکی روشن می‌کند (اول با PAT، بعد با GITHUB_TOKEN).
+#   ۳) اگر رانی زنده است ولی state بیش از STALE_MIN دقیقه آپلود نشده → هشدار تلگرام.
+#   ۴) اگر هر دو مسیر dispatch شکست بخورد → هشدار بحرانی با کد خطا.
 # هیچ‌وقت ران زنده را کنسل نمی‌کند (هندآف جانشین دست‌نخورده می‌ماند).
 #
-# env ورودی: REPO, STATE_REPO, STATE_TAG, STALE_MIN, TELEGRAM_BOT_TOKEN, NOTIFY_CHAT_ID,
-#            SUCCESSOR_TOKEN (اختیاری), GITHUB_TOKEN (همیشه موجود), TEST_ALERT, TEST_DISPATCH
+# env: REPO, STATE_REPO, STATE_TAG, STALE_MIN, TELEGRAM_BOT_TOKEN, NOTIFY_CHAT_ID,
+#      SUCCESSOR_TOKEN (اختیاری), GITHUB_TOKEN (همیشه موجود), TEST_ALERT, TEST_DISPATCH
 set -uo pipefail
 
 REPO="${REPO:?}"
@@ -47,6 +48,7 @@ if [ "${TEST_ALERT:-false}" = "true" ]; then
   alert "تست کانال هشدار (درخواستی) — همه‌چیز مرتب است."
 fi
 
+# ── ۱) وضعیت ران‌های main.yml ────────────────────────────────────────────────
 RUNS="$(api "$TOK" "https://api.github.com/repos/${REPO}/actions/runs?per_page=50")"
 live=$(printf '%s' "$RUNS" | jq -r --arg p "$MAIN_PATH" '[.workflow_runs[] | select(.path==$p)
         | select(.status=="in_progress" or .status=="queued" or .status=="waiting"
@@ -55,14 +57,22 @@ live_id=$(printf '%s' "$RUNS" | jq -r --arg p "$MAIN_PATH" '[.workflow_runs[] | 
         | select(.status=="in_progress" or .status=="queued")] | .[0].id // ""' 2>/dev/null)
 live="${live:-0}"
 
-last=$(api "$TOK" "https://api.github.com/repos/${STATE_REPO}/releases/tags/${STATE_TAG}" 2>/dev/null \
-       | jq -r '.assets[0].updated_at // "none"' 2>/dev/null)
+# ── ۲) توکن state + تازگی state ─────────────────────────────────────────────
+stcode=$(api "$TOK" -o /tmp/st.json -w '%{http_code}' \
+         "https://api.github.com/repos/${STATE_REPO}/releases/tags/${STATE_TAG}" 2>/dev/null)
+stcode="${stcode:-000}"
+last=$(jq -r '.assets[0].updated_at // "none"' /tmp/st.json 2>/dev/null); [ -n "$last" ] || last=none
 age_min=-1
-if [ -n "$last" ] && [ "$last" != "none" ]; then
+if [ "$last" != "none" ]; then
   age_min=$(( ( $(date -u +%s) - $(date -u -d "$last" +%s 2>/dev/null || echo 0) ) / 60 ))
 fi
-echo "[watchdog] live=${live} live_id=${live_id} last_state=${last} age_min=${age_min}"
+echo "[watchdog] live=${live} live_id=${live_id} state_http=${stcode} last_state=${last} age_min=${age_min}"
 
+if [ "$stcode" = "401" ] || [ "$stcode" = "403" ]; then
+  alert "توکن دسترسی به state از کار افتاده (http=${stcode} روی ${STATE_REPO}) — هم saveها و هم جانشین از کار می‌افتند. PERSIST_TOKEN را با توکن معتبر عوض کن. (تا آن موقع سرور با state قبلی بالای می‌ماند)"
+fi
+
+# ── ۳) تصمیم ────────────────────────────────────────────────────────────────
 if [ "$live" -gt 0 ]; then
   if [ "$age_min" -ge 0 ] && [ "$age_min" -gt "$STALE_MIN" ]; then
     alert "ران ${live_id} زنده است ولی ${age_min} دقیقه است state آپلود نشده (سقف ${STALE_MIN} دقیقه) — saveها شکست می‌خورند. احتمالاً PERSIST_TOKEN منقضی/باطل شده؛ تا تعویض نشود، سرور بعد از پایان این ران بدون state تازه بالا می‌آید."
@@ -78,11 +88,21 @@ if [ "$live" -gt 0 ]; then
   exit 0
 fi
 
-code=$(api "$TOK" -X POST -o /tmp/resp.json -w '%{http_code}' -d '{"ref":"main"}' \
-       "https://api.github.com/repos/${REPO}/actions/workflows/main.yml/dispatches")
-echo "[watchdog] nothing live → dispatched main.yml (http=${code})"
+# ── ۴) هیچ رانی زنده نیست → روشن کن (PAT، و اگر نشد GITHUB_TOKEN) ───────────
+dispatch() {
+  api "$1" -X POST -o /tmp/resp.json -w '%{http_code}' -d '{"ref":"main"}' \
+      "https://api.github.com/repos/${REPO}/actions/workflows/main.yml/dispatches"
+}
+code=$(dispatch "$TOK")
+used=$([ "$TOK" = "${GITHUB_TOKEN:-}" ] && echo github_token || echo pat)
+if [ "$code" != "204" ] && [ -n "${GITHUB_TOKEN:-}" ] && [ "$TOK" != "${GITHUB_TOKEN}" ]; then
+  echo "[watchdog] dispatch with ${used} failed (http=${code}) → retry with GITHUB_TOKEN"
+  code=$(dispatch "$GITHUB_TOKEN"); used=github_token
+fi
+echo "[watchdog] nothing live → dispatched main.yml via ${used} (http=${code})"
+
 if [ "$code" != "204" ]; then
-  alert "هیچ رانی زنده نبود و dispatch هم شکست خورد (http=${code}). سرور خاموش است و خودکار بالا نمی‌آید. پاسخ: $(head -c 200 /tmp/resp.json 2>/dev/null)"
+  alert "هیچ رانی زنده نبود و هیچ‌کدام از دو توکن نتوانستند dispatch کنند (آخرین http=${code}). سرور خاموش است و خودکار بالا نمی‌آید. پاسخ: $(head -c 200 /tmp/resp.json 2>/dev/null)"
   exit 1
 fi
 echo "[watchdog] recovered — a fresh run was dispatched"
