@@ -1,0 +1,28 @@
+name: ops-emg7
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  emg2b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          SSH_PASS: ${{ secrets.HAMID_PASSWORD }}
+          TARGET_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
+        run: |
+          set -uo pipefail
+          echo "::add-mask::$SSH_PASS"
+          sudo apt-get update -y >/dev/null 2>&1
+          DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
+          curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
+          sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --hostname=mrp-emg7 --accept-routes --ssh=false >/tmp/tsup.log 2>&1 || { tail -5 /tmp/tsup.log; exit 1; }
+          for i in {1..15}; do sudo tailscale status --json | jq -e '.Self.Online == true' >/dev/null 2>&1 && break || sleep 2; done
+          SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/kh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=15)
+          for i in 1 2 3 4 5 6; do sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'echo SSH_OK' 2>/dev/null | grep -q SSH_OK && break || { echo "wait ssh ($i)"; sleep 5; }; done
+          sshpass -p "$SSH_PASS" scp "${SSHOPTS[@]}" .github/scripts/emg7.py root@"$TARGET_IP":/tmp/emg7.py 2>&1 | tail -1
+          sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'python3 /tmp/emg7.py 2>&1 | tail -260'
+          echo "=== EMG7 DONE ==="
