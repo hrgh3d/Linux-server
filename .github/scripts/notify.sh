@@ -73,6 +73,24 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
 fi
 
+# --- direct Telegram (no webhook needed) -------------------------------------
+# اگر وبهوک ست نشده باشد ولی توکن ربات و chat_id موجود باشند، مستقیم به تلگرام می‌فرستد.
+if [ -z "${NOTIFY_WEBHOOK_URL:-}" ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${NOTIFY_CHAT_ID:-}" ]; then
+  _MSG="🔴 Linux-server failure
+type: ${TYPE}
+stage: ${STAGE}
+run: ${RUN}#${ATT}
+time: ${TS}
+error: ${ERR}"
+  if curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+       -d "chat_id=${NOTIFY_CHAT_ID}" -d "disable_web_page_preview=true" \
+       --data-urlencode "text=${_MSG}" >/dev/null 2>&1; then
+    echo "[notify] telegram alert sent (direct, no webhook)"
+  else
+    echo "[notify] WARN: telegram direct send failed"
+  fi
+fi
+
 # --- optional webhook --------------------------------------------------------
 if [ -n "${NOTIFY_WEBHOOK_URL:-}" ]; then
   _MSG="Linux-server ${TYPE} failure at ${STAGE} (run ${RUN}#${ATT}): ${ERR}"
@@ -100,7 +118,7 @@ PY
     echo "[notify] webhook notification sent"
   fi
 else
-  echo "[notify] NOTIFY_WEBHOOK_URL not set — notification recorded locally "
+  echo "[notify] no NOTIFY_WEBHOOK_URL and no direct telegram (TELEGRAM_BOT_TOKEN+NOTIFY_CHAT_ID) — notification recorded locally "
   echo "        (GitHub failure email/notification will also fire if the job fails)"
 fi
 exit 0
