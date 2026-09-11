@@ -4,11 +4,10 @@
 set -u
 ADMIN_ID="${ADMIN_ID:-7262486406}"
 ENVF=/root/.hermes/.env
-TOK="$(grep -m1 'TELEGRAM_BOT_TOKEN=' "$ENVF" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'\''
-\r' | xargs)"
+TOK="$(awk -F'=' '/^[[:space:]]*TELEGRAM_BOT_TOKEN=/{v=$0; sub(/^[^=]*=/,"",v); gsub(/[\r"'"'"']/,"",v); if (length(v)>20){print v; exit}}' "$ENVF" 2>/dev/null)"
 if [ -z "${TOK:-}" ]; then echo "RESULT: NO_TOKEN"; exit 0; fi
 echo "token_len: ${#TOK}"
-ALLOWED="$(grep -m1 'TELEGRAM_ALLOWED_USERS=' "$ENVF" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'\'' \r' | cut -d, -f1)"
+ALLOWED="$(awk -F'=' '/^[[:space:]]*TELEGRAM_ALLOWED_USERS=/{v=$0; sub(/^[^=]*=/,"",v); gsub(/[\r"'"'"' ]/,"",v); if (length(v)>4){print v; exit}}' "$ENVF" 2>/dev/null | cut -d, -f1)"
 if [ "${ALLOWED:-}" = "$ADMIN_ID" ]; then echo "allowed_users matches ADMIN_ID: yes"; else echo "allowed_users matches ADMIN_ID: no (len=${#ALLOWED})"; fi
 R="$(curl -s -m 20 -X POST "https://api.telegram.org/bot${TOK}/sendMessage" \
      -d "chat_id=${ADMIN_ID}" -d "disable_web_page_preview=true" \
