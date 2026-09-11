@@ -1,0 +1,32 @@
+name: ops-check-notify
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      SSH_PASS: ${{ secrets.HAMID_PASSWORD }}
+      TARGET_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
+      TG_SECRET: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: "check-notify: is the telegram secret set, and does the server have it?"
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ -n "${TG_SECRET:-}" ]; then echo "repo secret TELEGRAM_BOT_TOKEN: present (len=${#TG_SECRET})"; else echo "repo secret TELEGRAM_BOT_TOKEN: EMPTY — injection at boot is skipped"; fi
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
+          curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
+          sudo tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname=mrp-cn --accept-routes --ssh=false >/tmp/tsup.log 2>&1 || { tail -5 /tmp/tsup.log; exit 1; }
+          for i in $(seq 1 10); do sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online==true' >/dev/null && break || sleep 2; done
+          SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/kh -o ConnectTimeout=10 \
+                   -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+                   -o 'ProxyCommand=sudo tailscale nc %h %p')
+          sshpass -p "$SSH_PASS" scp "${SSHOPTS[@]}" .github/scripts/check_notify.sh root@"$TARGET_IP":/tmp/
+          sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" "bash /tmp/check_notify.sh; rm -f /tmp/check_notify.sh" || echo "SSH FAILED"
