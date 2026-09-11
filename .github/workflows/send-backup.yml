@@ -47,8 +47,7 @@ jobs:
           SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN }}
         run: |
           set -uo pipefail
-          for v in "$HAMID_PASSWORD" "$PERSIST_TOKEN" "$STATE_TOKEN" "$SUCCESSOR_TOKEN" "$TAILSCALE_AUTH_KEY" \
-                   "$TAILSCALE_API_TOKEN" "$MIRZABOT_TOKEN" "$TELEGRAM_BOT_TOKEN"; do
+          for v in "${HAMID_PASSWORD:-}" "${PERSIST_TOKEN:-}" "${STATE_TOKEN:-}" "${SUCCESSOR_TOKEN:-}" "${TAILSCALE_AUTH_KEY:-}" "${TAILSCALE_API_TOKEN:-}" "${TAILSCALE_FIXED_IP:-}" "${TELEGRAM_BOT_TOKEN:-}" "${NOTIFY_CHAT_ID:-}" "${DASHBOARD_PASSWORD:-}"; do
             [ -n "$v" ] && echo "::add-mask::$v"
           done
           bash .github/scripts/send_backup.sh
