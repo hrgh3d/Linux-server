@@ -1,0 +1,46 @@
+name: ops-server-check
+
+# چک سلامت سرور از بیرون: وضعیت دستگاه در tailnet (با API token) + وضعیت سرویس‌ها از داخل سرور.
+# هیچ سکرتی چاپ نمی‌شود.
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    env:
+      TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN }}
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      SSH_PASS: ${{ secrets.HAMID_PASSWORD }}
+      TARGET_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
+    steps:
+      - name: "check: tailnet device status + in-server service status"
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "=== [1] tailnet device status (API) ==="
+          code=$(curl -s -o /tmp/ts.json -w '%{http_code}' -m 30 -H "Authorization: Bearer ${TAILSCALE_API_TOKEN:-none}" \
+                 "https://api.tailscale.com/api/v2/tailnet/-/devices" || echo 000)
+          echo "api http=$code"
+          jq -r '.devices[] | select(.hostname|test("^linux-server")) | "  \(.hostname) online=\(.online) lastSeen=\(.lastSeen) ip=\(.addresses[0])"' /tmp/ts.json 2>/dev/null || head -c 200 /tmp/ts.json
+
+          echo "=== [2] checks on the server itself ==="
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
+          curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
+          sudo tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname=mrp-check --accept-routes --ssh=false >/tmp/tsup.log 2>&1 || { echo "tailscale up failed:"; tail -5 /tmp/tsup.log; exit 1; }
+          for i in $(seq 1 12); do sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online==true' >/dev/null && break || sleep 2; done
+          SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/kh -o ConnectTimeout=12 \
+                   -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+                   -o 'ProxyCommand=sudo tailscale nc %h %p')
+          sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" "bash -s" <<'REMOTE' || echo "SSH FAILED (server may be down)"
+          set -u
+          echo "  uptime: $(uptime -p) | since $(uptime -s)"
+          echo "  tailscale: $(tailscale ip -4 2>/dev/null | head -1)"
+          echo "  services:"; for s in nginx 3x-ui x-ui hermes hermes-agent 9router dashboard; do st=$(systemctl is-active $s 2>/dev/null); [ -n "$st" ] && echo "    $s=$st"; done
+          echo "  local ports: $(ss -ltn 2>/dev/null | awk 'NR>1{print $4}' | awk -F: '{print $NF}' | sort -un | tr '\n' ' ')"
+          echo "  dashboard http: $(curl -s -o /dev/null -w '%{http_code}' -m 8 http://127.0.0.1/ 2>/dev/null)"
+          echo "  disk: $(df -h / | tail -1 | awk '{print $3"/"$2" "$5}')"
+          REMOTE
