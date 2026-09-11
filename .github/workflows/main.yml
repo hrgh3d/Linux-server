@@ -343,10 +343,11 @@ jobs:
             if run_snapshot; then
               :
             else
+              # v6.11: غیرکشنده — اگر توکن state مرده باشد، سرور باید بالای بماند و
+              # زنجیرهٔ جانشین ادامه پیدا کند؛ فقط هشدار می‌دهیم و بوت را ادامه می‌دهیم.
               bash .github/scripts/notify.sh --type backup --stage initial-snapshot \
-                --error "initial state snapshot failed after retry (upload skipped; previous state kept)" || true
-              echo "ERROR: initial state snapshot failed twice"
-              exit 1
+                --error "initial state snapshot failed twice (upload skipped; previous state kept). اگر خطا 401/Unauthorized بود توکن PERSIST_TOKEN منقضی/باطل شده — سکرت را با توکن معتبر عوض کن. سرور بالای می‌ماند تا آن موقع." || true
+              echo "WARN: initial state snapshot failed twice — continuing boot WITHOUT persistence (server stays up; rotates token needed)"
             fi
           fi
 
@@ -508,10 +509,12 @@ jobs:
                 CONSEC=$(( CONSEC + 1 ))
                 echo "[auto-sync] FAILED (consecutive=${CONSEC})"
                 if [ "$CONSEC" -ge 3 ]; then
+                  # v6.11: سرور خاموش نمی‌شود — در دسترس بودن مهم‌تر از snapshot تازه است.
+                  # هر ۳ شکست یک بار هشدار می‌دهیم (ضد اسپم) و ادامه می‌دهیم.
                   bash "$SCRIPT_DIR/notify.sh" --type backup --stage auto-sync \
-                    --error "3 consecutive periodic saves failed — aborting server (last healthy state kept)" || true
-                  echo "[keepalive] too many consecutive save failures — ending run as failure"
-                  exit 1
+                    --error "${CONSEC} consecutive periodic saves FAILED — state is NOT being updated (server kept ONLINE). اگر خطا 401/Unauthorized بود توکن PERSIST_TOKEN را عوض کن." || true
+                  echo "[keepalive] ${CONSEC} consecutive save failures — keeping server ONLINE, will retry"
+                  CONSEC=0
                 fi
               fi
               LAST_AUTO="$NOW"
@@ -524,7 +527,7 @@ jobs:
             echo "[keepalive] done."
           else
             bash "$SCRIPT_DIR/notify.sh" --type backup --stage final-save \
-              --error "final save at lifetime end FAILED (last healthy state kept)" || true
+              --error "final save at lifetime end FAILED (last healthy state kept). اگر 401/Unauthorized بود توکن PERSIST_TOKEN را عوض کن — جانشین از state قدیمی‌تر بالا می‌آید." || true
             echo "[keepalive] ERROR: final save failed"
             exit 1
           fi
