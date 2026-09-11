@@ -15,12 +15,13 @@ if [ -f /root/.hermes/.env ]; then
 else
   echo "  (file missing)"
 fi
-echo "--- any TELEGRAM_BOT_TOKEN elsewhere? ---"
-for d in /root /etc /opt /srv /var/www; do
-  grep -rl '^TELEGRAM_BOT_TOKEN=' "$d" 2>/dev/null | head -4
-done
+echo "--- any TELEGRAM_BOT_TOKEN elsewhere? (limited dirs, 45s cap) ---"
+timeout 45 grep -rl --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.cache --exclude-dir=snapshots \
+  --exclude-dir=backup-stage --exclude-dir=confmirza '^TELEGRAM_BOT_TOKEN=' \
+  /root/.hermes /root/hermes /root/.config /etc /opt /srv /var/www 2>/dev/null | head -5 || true
+echo "(scan done)"
 echo "--- hermes-related services/units ---"
 systemctl list-units --all --no-legend 2>/dev/null | grep -iE 'hermes|9router|agent' | head -6 || echo "(none)"
 echo "--- is anything polling the bot? (processes) ---"
-ps -eo pid,etime,cmd 2>/dev/null | grep -iE 'hermes|telegram|9router' | grep -v grep | head -6 || echo "(none)"
+timeout 15 ps -eo pid,etime,cmd 2>/dev/null | grep -iE 'hermes|telegram|9router' | grep -v grep | head -6 || echo "(none)"
 echo "DONE"
