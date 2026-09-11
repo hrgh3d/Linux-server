@@ -42,7 +42,7 @@ on:
     # v6.9.2: backstop ساعته. تیک‌های 06:00 و 12:00 (2026-09-10) اصلاً اجرا
     # نشدند و تیک 09:00 با ۱:۴۷ تأخیر رسید؛ با backstop ۳ ساعته قطعی می‌تواند
     # ساعت‌ها طول بکشد. هر تیک extra فقط ~1-2 دقیقه runner مصرف می‌کند (yield).
-    - cron: '0 * * * *'          # هر ساعت (UTC)
+    - cron: '7 * * * *'          # هر ساعت (UTC)
   repository_dispatch:
 
 # concurrency بر اساس trigger جدا شده است تا Manual Dispatch پشت Cron در صف
