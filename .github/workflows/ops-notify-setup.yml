@@ -1,7 +1,7 @@
 name: ops-notify-setup
 
-# کشف کانال اعلان: توکن ربات تلگرام روی سرور هست (/root/.hermes/.env).
-# فقط طول توکن/یوزرنیم ربات/چت‌آی‌دی چاپ می‌شود — خود توکن هرگز.
+# کشف کانال اعلان: توکن ربات تلگرام روی سرور است (/root/.hermes/.env).
+# خود توکن هرگز چاپ نمی‌شود؛ فقط طول/یوزرنیم/chat_id.
 on:
   workflow_dispatch:
 
@@ -15,9 +15,9 @@ jobs:
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       SSH_PASS: ${{ secrets.HAMID_PASSWORD }}
       TARGET_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
-      ADMIN_ID: "7262486406"
     steps:
-      - name: "notify-setup: find bot + chat and send a test alert"
+      - uses: actions/checkout@v4
+      - name: "notify-setup: discover bot + chat and send a test alert"
         shell: bash
         run: |
           set -uo pipefail
@@ -28,31 +28,5 @@ jobs:
           SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/kh -o ConnectTimeout=10 \
                    -o PreferredAuthentications=password -o PubkeyAuthentication=no \
                    -o 'ProxyCommand=sudo tailscale nc %h %p')
-          sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" "ADMIN_ID=$ADMIN_ID bash -s" <<'REMOTE' || echo "SSH FAILED"
-          set -u
-          ENVF=/root/.hermes/.env
-          if [ -f "$ENVF" ]; then
-            TOK=$(grep -m1 '^TELEGRAM_BOT_TOKEN=' "$ENVF" | cut -d= -f2- | tr -d '"'"'"' \r')
-          else
-            TOK=""
-          fi
-          if [ -z "${TOK:-}" ]; then echo "NO TOKEN in $ENVF"; exit 0; fi
-          echo "token: len=${#TOK}"
-          echo "getMe: $(curl -s -m 20 "https://api.telegram.org/bot${TOK}/getMe" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("ok=%s user=%s id=%s"%(d.get("ok"),(d.get("result") or {}).get("username"),(d.get("result") or {}).get("id")))' 2>/dev/null)"
-          WH=$(curl -s -m 20 "https://api.telegram.org/bot${TOK}/getWebhookInfo" | python3 -c 'import sys,json;d=json.load(sys.stdin);r=d.get("result") or {};print("webhook_set=%s pending=%s"%(bool(r.get("url")),r.get("pending_update_count")))' 2>/dev/null)
-          echo "webhook: $WH"
-          UPD=$(curl -s -m 20 "https://api.telegram.org/bot${TOK}/getUpdates?limit=20" | python3 -c '
-import sys,json
-d=json.load(sys.stdin)
-ids=set()
-for u in d.get("result",[]) or []:
-    m=u.get("message") or u.get("edited_message") or {}
-    c=(m.get("chat") or {}).get("id")
-    if c: ids.add(c)
-print("ok=%s chat_ids=%s"%(d.get("ok"), sorted(ids)))' 2>/dev/null)
-          echo "getUpdates: $UPD"
-          for CID in $ADMIN_ID $(echo "$UPD" | sed -n 's/.*chat_ids=\[\(.*\)\]/\1/p' | tr ',' ' '); do
-            R=$(curl -s -m 20 -X POST "https://api.telegram.org/bot${TOK}/sendMessage" -d "chat_id=${CID}" --data-urlencode "text=🔔 تست اعلان‌های سیستمی Linux-server (این پیام یعنی مسیر هشدار سالم است)" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("ok=%s %s"%(d.get("ok"),(d.get("description") or "")[:60]))' 2>/dev/null)
-            echo "send to ${CID}: $R"
-          done
-          REMOTE
+          sshpass -p "$SSH_PASS" scp "${SSHOPTS[@]}" .github/scripts/notify_setup.sh root@"$TARGET_IP":/tmp/
+          sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" "chmod 700 /tmp/notify_setup.sh; ADMIN_ID='7262486406' bash /tmp/notify_setup.sh; rm -f /tmp/notify_setup.sh" || echo "SSH FAILED"
