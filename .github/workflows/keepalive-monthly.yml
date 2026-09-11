@@ -1,0 +1,38 @@
+name: keepalive-monthly
+
+# اگر ریپو ۶۰ روز هیچ فعالیتی نداشته باشد، GitHub همهٔ scheduleها (از جمله watchdog)
+# را خودکار غیرفعال می‌کند. این ورک‌فلوی کوچک ماهی یک‌بار یک خط به فایل timestamp
+# اضافه و کامیت می‌کند تا ریپو همیشه «فعال» بماند و نگهبان‌ها خاموش نشوند.
+on:
+  schedule:
+    - cron: '23 4 1 * *'      # اول هر ماه، ۰۴:۲۳ UTC (دقیقهٔ شلوغ :00 را استفاده نمی‌کنیم)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive-monthly
+  cancel-in-progress: false
+
+jobs:
+  touch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: "keepalive: commit a timestamp so scheduled workflows stay enabled"
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$(date -u +%FT%TZ) keepalive" >> .keepalive.txt
+          tail -5 .keepalive.txt
+          git config user.name  "keepalive-bot"
+          git config user.email "keepalive-bot@users.noreply.github.com"
+          git add .keepalive.txt
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "keepalive: $(date -u +%F) (prevents 60-day schedule disable)"
+            git push
+          fi
