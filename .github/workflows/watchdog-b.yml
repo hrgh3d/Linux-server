@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 concurrency:
@@ -21,6 +21,7 @@ env:
   STATE_REPO: ${{ github.repository }}-state
   STATE_TAG: state
   STALE_MIN: '45'
+  VPS_NAME: hrgh3d
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '' }}
   NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
   SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN || '' }}
