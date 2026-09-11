@@ -1,0 +1,34 @@
+name: send-backup
+
+# بکاپ فشردهٔ کل سیستم → ارسال به ربات گزارش تلگرام (روزانه + دستی)
+on:
+  schedule:
+    - cron: '47 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: send-backup
+  cancel-in-progress: false
+
+env:
+  REPO: ${{ github.repository }}
+  VPS_NAME: hrgh3d
+  TARGET_IP: 100.70.83.2
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
+
+jobs:
+  backup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: "backup: build on server + send to telegram"
+        shell: bash
+        env:
+          SSH_PASS: ${{ secrets.SSH_PASS }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: bash .github/scripts/send_backup.sh
