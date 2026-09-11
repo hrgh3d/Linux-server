@@ -61,7 +61,8 @@ live="${live:-0}"
 stcode=$(api "$TOK" -o /tmp/st.json -w '%{http_code}' \
          "https://api.github.com/repos/${STATE_REPO}/releases/tags/${STATE_TAG}" 2>/dev/null)
 stcode="${stcode:-000}"
-last=$(jq -r '.assets[0].updated_at // "none"' /tmp/st.json 2>/dev/null); [ -n "$last" ] || last=none
+# نکته: assets[0] قدیمی‌ترین asset نگه‌داشته‌شده است، نه تازه‌ترین → max می‌گیریم تا سن state کم‌برآورد نشود.
+last=$(jq -r '[.assets[].updated_at] | max // "none"' /tmp/st.json 2>/dev/null); [ -n "$last" ] || last=none
 age_min=-1
 if [ "$last" != "none" ]; then
   age_min=$(( ( $(date -u +%s) - $(date -u -d "$last" +%s 2>/dev/null || echo 0) ) / 60 ))
