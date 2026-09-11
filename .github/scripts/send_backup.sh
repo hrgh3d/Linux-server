@@ -22,8 +22,14 @@ fi
 SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/known_hosts -o PreferredAuthentications=password \
          -o PubkeyAuthentication=no -o ConnectTimeout=15 -o ServerAliveInterval=15)
 SSH() { sshpass -p "${SSH_PASS}" ssh "${SSHOPTS[@]}" root@"${TARGET_IP}" "$@"; }
-for i in 1 2 3 4 5; do SSH 'echo OK' 2>/dev/null | grep -q OK && break || { echo "[backup] waiting ssh ($i)"; sleep 5; }; done
-SSH 'echo OK' >/dev/null 2>&1 || { echo "[backup] SSH FAILED — abort (no message)"; exit 1; }
+for i in $(seq 1 24); do SSH 'echo OK' 2>/dev/null | grep -q OK && break || { echo "[backup] waiting ssh ($i)"; sleep 5; }; done
+if ! SSH 'echo OK' >/dev/null 2>&1; then
+  echo "[backup] SSH FAILED"
+  curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    -d "chat_id=${NOTIFY_CHAT_ID}" --data-urlencode "text=سیستم ${VPS_NAME} قطع شد ❌
+(بکاپ نگرفت: سرور از طریق tailscale جواب نداد)" >/dev/null 2>&1 || true
+  exit 1
+fi
 
 REMOTE_SCRIPT='
 set -u
