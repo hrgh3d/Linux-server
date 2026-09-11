@@ -1,0 +1,46 @@
+name: watchdog
+
+# نگهبان «همیشه فعال»: هر ۱۰ دقیقه چک می‌کند اگر هیچ رانی از main.yml
+# در حال اجرا یا در صف نبود، خودش یکی روشن می‌کند. اگر رانی زنده باشد هیچ کاری
+# نمی‌کند (هیچ‌وقت ران زنده را کنسل/جایگزین نمی‌کند).
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+jobs:
+  ensure-running:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: "watchdog: dispatch main.yml only when nothing is live"
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then echo "[watchdog] ERROR: no token (SUCCESSOR_TOKEN/PERSIST_TOKEN empty)"; exit 1; fi
+          api() { curl -sS -m 30 -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
+          live=$(api "https://api.github.com/repos/${REPO}/actions/runs?status=in_progress&per_page=100" \
+                 | jq -r '[.workflow_runs[] | select(.path==".github/workflows/main.yml")] | length')
+          queued=$(api "https://api.github.com/repos/${REPO}/actions/runs?status=queued&per_page=100" \
+                 | jq -r '[.workflow_runs[] | select(.path==".github/workflows/main.yml")] | length')
+          echo "[watchdog] $(date -u +%FT%TZ) live=${live} queued=${queued}"
+          if [ "$live" -gt 0 ] || [ "$queued" -gt 0 ]; then
+            echo "[watchdog] a main.yml run is live/queued — nothing to do"
+            exit 0
+          fi
+          code=$(api -X POST -o /tmp/resp.json -w '%{http_code}' \
+                 -d '{"ref":"main"}' \
+                 "https://api.github.com/repos/${REPO}/actions/workflows/main.yml/dispatches")
+          echo "[watchdog] no live run → dispatched main.yml (http=${code})"
+          [ "$code" = "204" ] || { echo "[watchdog] ERROR dispatch failed"; head -c 300 /tmp/resp.json; exit 1; }
