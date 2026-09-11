@@ -1,0 +1,37 @@
+name: watchdog-b
+
+# نگهبان «همیشه فعال» — زمان‌بند B (دقیقه‌های فرد ۵،۱۵،...،۵۵) برای جبران تأخیر زمان‌بندی گیت‌هاب.
+# منطق دقیقاً همان .github/scripts/watchdog.sh است و در همان concurrency group اجرا می‌شود،
+# پس هرگز با زمان‌بند A همزمان/دوتایی دیسپچ نمی‌کند.
+on:
+  schedule:
+    - cron: '5,15,25,35,45,55 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: watchdog-keepalive
+  cancel-in-progress: false
+
+env:
+  REPO: ${{ github.repository }}
+  STATE_REPO: ${{ github.repository }}-state
+  STATE_TAG: state
+  STALE_MIN: '45'
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '' }}
+  NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
+  SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN || '' }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  ensure-running:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: "watchdog-b: same logic, second scheduler"
+        shell: bash
+        run: bash .github/scripts/watchdog.sh
