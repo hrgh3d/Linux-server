@@ -91,6 +91,7 @@ jobs:
       NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || '' }}
       # v6.11: کانال هشدار مستقیم تلگرام (بدون وبهوک) — notify.sh از این استفاده می‌کند
       NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
+      VPS_NAME: hrgh3d
       SAVE_INTERVAL_MIN: '5'      # همگام‌سازی دوره‌ای (فقط در صورت تغییر)
       LIFETIME_MIN: ${{ inputs.lifetime_min || '350' }}
       PROBE_ENABLED: ${{ inputs.probe || 'false' }}
