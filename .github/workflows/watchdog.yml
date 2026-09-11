@@ -1,12 +1,24 @@
 name: watchdog
 
-# نگهبان «همیشه فعال»: هر ۱۰ دقیقه چک می‌کند اگر هیچ رانی از main.yml زنده/در صف
-# نباشد، خودش یکی روشن می‌کند. اگر رانی زنده باشد هیچ کاری نمی‌کند و هیچ‌وقت ران زنده
-# را کنسل نمی‌کند (پس هندآف جانشین دست‌نخورده می‌ماند).
+# نگهبان «همیشه فعال» برای Linux-server:
+#   ۱) اگر هیچ رانی از main.yml زنده/در صف نباشد → خودش یکی روشن می‌کند.
+#   ۲) اگر رانی زنده است ولی state بیش از ۴۵ دقیقه آپلود نشده → هشدار تلگرام
+#      (یعنی saveها داخل ران شکست می‌خورند؛ مثلاً توکن state مرده است).
+#   ۳) اگر dispatch شکست بخورد → هشدار تلگرام (با ذکر دلیل).
+# هیچ‌وقت ران زنده را کنسل/جایگزین نمی‌کند (هندآف جانشین دست‌نخورده می‌ماند).
 on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: 'فقط یک هشدار تستی تلگرام بفرست (برای بررسی سالم‌بودن کانال هشدار)'
+        required: false
+        default: 'false'
+      test_dispatch:
+        description: 'یک ورک‌فلوی سبک را با GITHUB_TOKEN دیسپچ کن (تست توان دیسپچ بدون PAT)'
+        required: false
+        default: 'false'
 
 permissions:
   contents: read
@@ -16,38 +28,93 @@ concurrency:
   group: watchdog
   cancel-in-progress: false
 
+env:
+  REPO: ${{ github.repository }}
+  STATE_REPO: ${{ github.repository }}-state
+  STATE_TAG: state
+  STALE_MIN: '45'
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '' }}
+  NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
+
 jobs:
   ensure-running:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: "watchdog: dispatch main.yml only when nothing is live"
+      - name: "watchdog: keep a main.yml run alive + alert on stale state"
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN }}
-          REPO: ${{ github.repository }}
+          SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN || '' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEST_ALERT: ${{ inputs.test_alert || 'false' }}
+          TEST_DISPATCH: ${{ inputs.test_dispatch || 'false' }}
         run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then echo "[watchdog] ERROR: no token (SUCCESSOR_TOKEN/PERSIST_TOKEN empty)"; exit 1; fi
-          api() { curl -sS -m 30 -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
+          set -uo pipefail
+          api() { curl -sS -m 30 -H "Authorization: Bearer ${1}" -H "Accept: application/vnd.github+json" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" "${@:2}"; }
 
-          # همهٔ وضعیت‌های «زنده» (in_progress/queued/waiting/requested/pending) در یک درخواست
-          live=$(api "https://api.github.com/repos/${REPO}/actions/runs?per_page=50" | jq -r '
-            [.workflow_runs[]
-             | select(.path==".github/workflows/main.yml")
-             | select(.status=="in_progress" or .status=="queued" or .status=="waiting"
-                      or .status=="requested" or .status=="pending")] | length')
+          alert() {
+            local msg="$1"
+            echo "[watchdog] ALERT: ${msg}"
+            if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${NOTIFY_CHAT_ID:-}" ]; then
+              if curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+                   -d "chat_id=${NOTIFY_CHAT_ID}" -d "disable_web_page_preview=true" \
+                   --data-urlencode "text=🔴 Linux-server watchdog: ${msg}" >/dev/null 2>&1; then
+                echo "[watchdog] alert delivered via telegram"
+              else
+                echo "[watchdog] WARN: telegram alert failed"
+              fi
+            else
+              echo "[watchdog] WARN: no telegram token/chat — alert not delivered"
+            fi
+            return 0
+          }
 
-          # تازگی آخرین آپلود state هم به‌عنوان نشانهٔ سلامت ثبت می‌شود (فقط گزارش، نه تصمیم)
-          last=$(api "https://api.github.com/repos/${REPO}/releases/tags/state" \
-                 | jq -r '.assets[0].updated_at // "unknown"' 2>/dev/null || echo unknown)
-          echo "[watchdog] $(date -u +%FT%TZ) main.yml live/queued=${live} last_state_upload=${last}"
+          T="${SUCCESSOR_TOKEN:-${GITHUB_TOKEN}}"
+          echo "[watchdog] $(date -u +%FT%TZ) token=$([ -n "${SUCCESSOR_TOKEN:-}" ] && echo pat || echo github_token)"
 
+          if [ "${TEST_ALERT:-false}" = "true" ]; then
+            alert "تست کانال هشدار (درخواستی) — همه‌چیز مرتب است."
+          fi
+
+          # --- ۱) ران‌های زنده/در صف از main.yml ---
+          RUNS="$(api "$T" "https://api.github.com/repos/${REPO}/actions/runs?per_page=50")"
+          live=$(printf '%s' "$RUNS" | jq -r '[.workflow_runs[] | select(.path==".github/workflows/main.yml")
+                  | select(.status=="in_progress" or .status=="queued" or .status=="waiting"
+                           or .status=="requested" or .status=="pending")] | length')
+          live_id=$(printf '%s' "$RUNS" | jq -r '[.workflow_runs[] | select(.path==".github/workflows/main.yml")
+                  | select(.status=="in_progress" or .status=="queued")] | .[0].id // ""')
+
+          # --- ۲) تازگی آخرین state ---
+          last=$(api "$T" "https://api.github.com/repos/${STATE_REPO}/releases/tags/${STATE_TAG}" | jq -r '.assets[0].updated_at // "none"')
+          age_min=-1
+          if [ "$last" != "none" ] && [ -n "$last" ]; then
+            age_min=$(( ( $(date -u +%s) - $(date -u -d "$last" +%s) ) / 60 ))
+          fi
+          echo "[watchdog] live=${live} live_id=${live_id} last_state=${last} age_min=${age_min}"
+
+          # --- ۳) تصمیم ---
           if [ "$live" -gt 0 ]; then
-            echo "[watchdog] a main.yml run is live — nothing to do"
+            if [ "$age_min" -ge 0 ] && [ "$age_min" -gt "${STALE_MIN}" ]; then
+              alert "ران ${live_id} زنده است ولی ${age_min} دقیقه است state آپلود نشده (سقف ${STALE_MIN} دقیقه). یعنی saveها دارند شکست می‌خورند — احتمالاً PERSIST_TOKEN منقضی/باطل شده است. سرور در پایان همین ران خاموش می‌شود مگر توکن عوض شود."
+            else
+              echo "[watchdog] healthy — nothing to do"
+            fi
+            if [ "${TEST_DISPATCH:-false}" = "true" ]; then
+              code=$(api "${GITHUB_TOKEN}" -X POST -o /tmp/td.json -w '%{http_code}' -d '{"ref":"main"}' \
+                     "https://api.github.com/repos/${REPO}/actions/workflows/ops-server-check.yml/dispatches")
+              echo "[watchdog] test_dispatch via GITHUB_TOKEN http=${code}"
+              [ "$code" = "204" ] || head -c 200 /tmp/td.json
+            fi
             exit 0
           fi
-          code=$(api -X POST -o /tmp/resp.json -w '%{http_code}' -d '{"ref":"main"}' \
+
+          # چیزی زنده نیست → روشن کن
+          code=$(api "$T" -X POST -o /tmp/resp.json -w '%{http_code}' -d '{"ref":"main"}' \
                  "https://api.github.com/repos/${REPO}/actions/workflows/main.yml/dispatches")
           echo "[watchdog] nothing live → dispatched main.yml (http=${code})"
-          [ "$code" = "204" ] || { echo "[watchdog] ERROR dispatch failed"; head -c 300 /tmp/resp.json; exit 1; }
+          if [ "$code" != "204" ]; then
+            alert "هیچ رانی زنده نبود و dispatch هم شکست خورد (http=${code}). سرور خاموش است و خودکار بالا نمی‌آید. پاسخ: $(head -c 200 /tmp/resp.json 2>/dev/null)"
+            exit 1
+          fi
+          echo "[watchdog] recovered — a fresh run was dispatched"
