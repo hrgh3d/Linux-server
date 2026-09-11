@@ -30,5 +30,6 @@ jobs:
         shell: bash
         env:
           SSH_PASS: ${{ secrets.SSH_PASS }}
+          HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: bash .github/scripts/send_backup.sh
