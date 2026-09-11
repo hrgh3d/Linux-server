@@ -1,10 +1,16 @@
 name: send-backup
 
-# بکاپ فشردهٔ کل سیستم → ارسال به ربات گزارش تلگرام (روزانه + دستی)
+# بکاپ کامل و قابل‌بازگردانی → تلگرام (روزانه) + اسنپ‌شات state (هفتگی/دستی)
 on:
   schedule:
-    - cron: '47 3 * * *'
+    - cron: '47 3 * * *'      # بکاپ روزانهٔ کامل (داده + بوت‌استرپ بازیابی)
+    - cron: '15 4 * * 6'      # شنبه‌ها: بکاپ DR + اسنپ‌شات state (بخش‌بخش)
   workflow_dispatch:
+    inputs:
+      full:
+        description: 'بکاپ DR کامل: اسنپ‌شات state را هم بفرست'
+        required: false
+        default: 'false'
 
 permissions:
   contents: read
@@ -15,20 +21,34 @@ concurrency:
 
 env:
   REPO: ${{ github.repository }}
+  STATE_REPO: ${{ github.repository }}-state
   VPS_NAME: hrgh3d
-  TARGET_IP: 100.70.83.2
+  TARGET_IP: '100.70.83.2'
   TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
   NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
+  DR_MODE: ${{ (github.event.inputs.full == 'true') || (github.event.schedule == '15 4 * * 6') }}
 
 jobs:
   backup:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - name: "backup: build on server + send to telegram"
+      - name: "backup: server data + recovery bootstrap (+ state snapshot in DR mode)"
         shell: bash
         env:
           HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: bash .github/scripts/send_backup.sh
+          TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN }}
+          TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
+          PERSIST_TOKEN: ${{ secrets.PERSIST_TOKEN }}
+          STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
+          SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN }}
+        run: |
+          set -uo pipefail
+          for v in "$HAMID_PASSWORD" "$PERSIST_TOKEN" "$STATE_TOKEN" "$SUCCESSOR_TOKEN" "$TAILSCALE_AUTH_KEY" \
+                   "$TAILSCALE_API_TOKEN" "$MIRZABOT_TOKEN" "$TELEGRAM_BOT_TOKEN"; do
+            [ -n "$v" ] && echo "::add-mask::$v"
+          done
+          bash .github/scripts/send_backup.sh
