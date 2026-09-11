@@ -1,0 +1,30 @@
+name: ops-notify-test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  t:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      SSH_PASS: ${{ secrets.HAMID_PASSWORD }}
+      TARGET_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: "notify-test: send a real Telegram alert through the bot"
+        shell: bash
+        run: |
+          set -uo pipefail
+          sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
+          curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
+          sudo tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname=mrp-nt --accept-routes --ssh=false >/tmp/tsup.log 2>&1 || { tail -5 /tmp/tsup.log; exit 1; }
+          for i in $(seq 1 10); do sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online==true' >/dev/null && break || sleep 2; done
+          SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/kh -o ConnectTimeout=10 \
+                   -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+                   -o 'ProxyCommand=sudo tailscale nc %h %p')
+          sshpass -p "$SSH_PASS" scp "${SSHOPTS[@]}" .github/scripts/notify_test.sh root@"$TARGET_IP":/tmp/
+          sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" "chmod 700 /tmp/notify_test.sh; ADMIN_ID=7262486406 bash /tmp/notify_test.sh; rm -f /tmp/notify_test.sh" || echo "SSH FAILED"
