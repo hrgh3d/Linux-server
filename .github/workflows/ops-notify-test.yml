@@ -10,7 +10,7 @@ jobs:
     permissions:
       contents: read
     env:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '' }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN || '' }}
       NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       SSH_PASS: ${{ secrets.HAMID_PASSWORD }}

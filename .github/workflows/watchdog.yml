@@ -31,7 +31,7 @@ env:
   STATE_TAG: state
   STALE_MIN: '45'
   VPS_NAME: hrgh3d
-  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '' }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN || '' }}
   NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
   SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN || '' }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
