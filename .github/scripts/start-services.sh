@@ -33,6 +33,10 @@ start_system hermes-tunnel.service
 # v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
 # بوت‌های بعدی از راه استاندارد (همین یونیت) بالا می‌آیند.
 GW_UNIT=/root/.config/systemd/user/hermes-gateway.service
+# v6.11b: دایرکتوری لاگ هر بوت تضمین شود — بدون آن خود gateway موقع نوشتن
+# لاگ کرش می‌کند (دقیقاً همان‌طور که در بازسازی دستی دیدیم).
+sudo mkdir -p /root/.hermes/logs 2>/dev/null || mkdir -p /root/.hermes/logs
+sudo chown -R root:root /root/.hermes 2>/dev/null || true
 if [ ! -f "$GW_UNIT" ] && [ -x /usr/local/lib/hermes-agent/venv/bin/python ]; then
   echo "[services] hermes-gateway unit missing — recreating standard unit"
   sudo mkdir -p /root/.config/systemd/user
