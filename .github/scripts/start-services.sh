@@ -30,6 +30,29 @@ start_system hermes-dashboard.service
 start_system hermes-tunnel.service
 
 # --- Hermes gateway: یونیت user روت ---
+# v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
+# بوت‌های بعدی از راه استاندارد (همین یونیت) بالا می‌آیند.
+GW_UNIT=/root/.config/systemd/user/hermes-gateway.service
+if [ ! -f "$GW_UNIT" ] && [ -x /usr/local/lib/hermes-agent/venv/bin/python ]; then
+  echo "[services] hermes-gateway unit missing — recreating standard unit"
+  sudo mkdir -p /root/.config/systemd/user
+  sudo tee "$GW_UNIT" >/dev/null <<'UNIT'
+[Unit]
+Description=Hermes Telegram Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HERMES_HOME=/root/.hermes
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m hermes_cli.main gateway run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT
+fi
 if [ -f /root/.config/systemd/user/hermes-gateway.service ]; then
   echo "[services] found hermes-gateway user service, starting..."
   sudo loginctl enable-linger root >/dev/null 2>&1 || true
