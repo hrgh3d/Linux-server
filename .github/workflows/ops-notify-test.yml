@@ -36,3 +36,7 @@ jobs:
                    -o 'ProxyCommand=sudo tailscale nc %h %p')
           sshpass -p "$SSH_PASS" scp "${SSHOPTS[@]}" .github/scripts/notify_test.sh root@"$TARGET_IP":/tmp/
           sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" "chmod 700 /tmp/notify_test.sh; ADMIN_ID=7262486406 bash /tmp/notify_test.sh; rm -f /tmp/notify_test.sh" || echo "SSH FAILED"
+      - name: "cleanup: leave tailnet (no ghost nodes)"
+        if: always()
+        shell: bash
+        run: sudo tailscale logout >/dev/null 2>&1 || true

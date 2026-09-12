@@ -44,3 +44,7 @@ jobs:
           echo "  dashboard http: $(curl -s -o /dev/null -w '%{http_code}' -m 8 http://127.0.0.1/ 2>/dev/null)"
           echo "  disk: $(df -h / | tail -1 | awk '{print $3"/"$2" "$5}')"
           REMOTE
+      - name: "cleanup: leave tailnet (no ghost nodes)"
+        if: always()
+        shell: bash
+        run: sudo tailscale logout >/dev/null 2>&1 || true

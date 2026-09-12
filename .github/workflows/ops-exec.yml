@@ -32,3 +32,7 @@ jobs:
           echo "$CMD_B64" | base64 -d > /tmp/remote.sh
           sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'bash -s' < /tmp/remote.sh 2>&1 | tail -120
           echo "=== OPS-EXEC DONE ==="
+      - name: "cleanup: leave tailnet (no ghost nodes)"
+        if: always()
+        shell: bash
+        run: sudo tailscale logout >/dev/null 2>&1 || true

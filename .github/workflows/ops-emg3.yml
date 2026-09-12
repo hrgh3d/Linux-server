@@ -26,3 +26,7 @@ jobs:
           sshpass -p "$SSH_PASS" scp "${SSHOPTS[@]}" .github/scripts/emg3.py root@"$TARGET_IP":/tmp/emg3.py 2>&1 | tail -1
           sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'python3 /tmp/emg3.py 2>&1 | tail -260'
           echo "=== EMG3 DONE ==="
+      - name: "cleanup: leave tailnet (no ghost nodes)"
+        if: always()
+        shell: bash
+        run: sudo tailscale logout >/dev/null 2>&1 || true
