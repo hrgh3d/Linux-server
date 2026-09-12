@@ -33,6 +33,19 @@ start_system hermes-tunnel.service
 # v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
 # بوت‌های بعدی از راه استاندارد (همین یونیت) بالا می‌آیند.
 GW_UNIT=/root/.config/systemd/user/hermes-gateway.service
+# v6.12: اگر snapshot فاسد کل هرمز را برده باشد ولی توکن تزریق‌شده موجود باشد،
+# با همان نصب‌کننده‌ی استانداردِ پروویژن باز نصب کن (یک‌بار؛ بعد در state می‌ماند).
+VENV_PY=/usr/local/lib/hermes-agent/venv/bin/python
+if [ ! -x "$VENV_PY" ] && grep -q '^TELEGRAM_BOT_TOKEN=.\{4,\}' /root/.hermes/.env 2>/dev/null; then
+  echo "[services] hermes venv missing but token present — recovery install (standard installer)"
+  if curl -fsSL --max-time 60 https://hermes-agent.nousresearch.com/install.sh -o /tmp/hermes-install.sh; then
+    timeout 540 sudo env HERMES_HOME=/root/.hermes bash /tmp/hermes-install.sh --non-interactive --skip-browser --skip-computer-use >/tmp/hermes-reinstall.log 2>&1 \
+      && echo "[services] hermes recovery install OK" \
+      || { echo "[services] WARNING: hermes recovery install failed (rc=$?)"; tail -12 /tmp/hermes-reinstall.log 2>/dev/null; }
+  else
+    echo "[services] WARNING: could not download hermes installer"
+  fi
+fi
 # v6.11b: دایرکتوری لاگ هر بوت تضمین شود — بدون آن خود gateway موقع نوشتن
 # لاگ کرش می‌کند (دقیقاً همان‌طور که در بازسازی دستی دیدیم).
 sudo mkdir -p /root/.hermes/logs 2>/dev/null || mkdir -p /root/.hermes/logs

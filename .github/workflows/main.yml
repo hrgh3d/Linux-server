@@ -272,7 +272,7 @@ jobs:
         run: bash .github/scripts/dashboard_guard.sh
 
       - name: Start persistent apps (Hermes dashboard/tunnel/gateway)
-        timeout-minutes: 10
+        timeout-minutes: 30
         run: bash .github/scripts/start-services.sh
       - name: Write persistence probe (new paths + second apt pkg)
         if: env.PROBE_ENABLED == 'true'
