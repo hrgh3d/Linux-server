@@ -1,4 +1,4 @@
-name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.10]
+name: Linux-server — Persistent Ubuntu (Tailscale + Releases) [v6.13]
 
 # ============================================================================
 # سرور Ubuntu پایدار روی GitHub Actions — معماری v6.0 (شاخه AI، بدون VPN)
@@ -86,6 +86,9 @@ jobs:
       HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
       # v6.10: secretهای خارج‌شده از آرشیو state (تزریق در secrets_inject.sh)
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '' }}
+      # v6.13: ربات «گزارش سیستم» جدا از ربات Hermes Gateway است؛ notify.sh
+      # برای هشدارها اولویت را به REPORT_BOT_TOKEN می‌دهد.
+      REPORT_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || '' }}
       # v6.10: رمز داشبورد Hermes (nginx basic-auth در dashboard_guard.sh)
       DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD || '' }}
       NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || '' }}
@@ -518,6 +521,10 @@ jobs:
                   CONSEC=0
                 fi
               fi
+              # v6.13: heartbeat سبک روی release state — حتی وقتی save به دلیل
+              # dedup (سرور idle) چیزی آپلود نمی‌کند، watchdog می‌تواند زنده بودن
+              # مسیر ذخیره را از updated_at همان release تشخیص دهد (بدون هشدار کاذب).
+              python3 "$SCRIPT_DIR/heartbeat.py" || true
               LAST_AUTO="$NOW"
               check_tailscale || true
             fi

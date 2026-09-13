@@ -22,8 +22,9 @@
 |---|---|---|
 | Tailscale Auth Key | Secret `TAILSCALE_AUTH_KEY` | ۹۰ روزه (سقف API؛ `expirySeconds:0` پذیرفته نمی‌شود). چون node **غیر-ephemeral** است، بعد از اولین اتصال موفق، reconnect با node key در state است و این key فقط برای bootstrap لازم است. قبل از انقضا (هشدار `[key-expiry]` هر بوت) key تازه بساز — می‌شود با API: `POST /api/v2/tailnet/-/keys` با `capabilities.devices.create {reusable:true, ephemeral:false, preauthorized:true}`. |
 | Tailscale API Token | Secret `TAILSCALE_API_TOKEN` | **محدوده‌ی زمانی دارد (مثال فعلی: ۲۴ ساعت!)** — همیشه تاریخ انقضا را در `key-dates.json` ثبت کن. بدون آن: pin IP + cleanup + چک انقضا غیرفعال می‌شوند (boot نمی‌شکند). |
-| PAT (push/زنجیره) | Secrets `PERSIST_TOKEN` / `SUCCESSOR_TOKEN` | زنجیره الان با `GITHUB_TOKEN` کار می‌کند؛ PAT فقط برای state و push. با هر تعویض، هر دو secret را به‌روز کن. |
-| Telegram Bot Token | Secret `TELEGRAM_BOT_TOKEN` | از آرشیو خارج است (تزریق هر بوت). اگر جایی لو رفت: BotFather → `/token` برای همین bot → revoke → مقدار جدید در secret. |
+| PAT (push/زنجیره) | Secret `PERSIST_TOKEN` | زنجیره با `GITHUB_TOKEN` خودِ ران کار می‌کند؛ `PERSIST_TOKEN` برای state (آپلود/دانلود) و fallback دیسپچ است. (`SUCCESSOR_TOKEN` حذف شد — همه‌جا به `PERSIST_TOKEN` برمی‌گردند.) با هر تعویض PAT فقط `PERSIST_TOKEN` را به‌روز کن. |
+| Telegram Bot Token (Hermes) | Secret `TELEGRAM_BOT_TOKEN` | فقط برای Hermes Gateway (تزریق هر بوت به `/root/.hermes/.env`). اگر جایی لو رفت: BotFather → `/token` برای همین bot → revoke → مقدار جدید در secret. |
+| ربات گزارش سیستم | Secret `REPORT_BOT_TOKEN` | **جدا از ربات Hermes** — watchdog، send-backup و notify.sh هشدارها/گزارش‌ها را با این ربات می‌فرستند (`@Vpshamidreportbot`). chat_id: secret `NOTIFY_CHAT_ID`. |
 | رمز داشبورد | Secret `DASHBOARD_PASSWORD` | فقط hash یک‌طرفه در آرشیو است؛ تعویض = تغییر secret (بوت بعد اعمال می‌شود). |
 | `.github/key-dates.json` | داخل ریپو | با هر تعویض توکن به‌روز کن — هر بوت چک می‌شود (<۱۰ روز = هشدار). |
 | وبهوک اعلان | Secret `NOTIFY_WEBHOOK_URL` | Discord webhook یا Telegram (`bot<TOKEN>/sendMessage?chat_id=<ID>`) — اختیاری. |

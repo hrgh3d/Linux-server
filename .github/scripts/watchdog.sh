@@ -46,11 +46,16 @@ notify_state() {
 }
 
 M_SHA=""
-marker_read() {
+# FIX (2026-09-13): marker_read قبلاً داخل $(...) فراخوانی می‌شد و M_SHA در
+# subshell گم می‌شد → marker_write بدون sha → HTTP 422 → marker هرگز به‌روز
+# نمی‌شد و پیام «قطع شد» هر تیک تکرار می‌شد (اسپم تلگرام). حالا marker یک‌بار
+# در shell اصلی خوانده می‌شود (marker_fetch) تا هم state و هم sha در دسترس باشند.
+marker_fetch() {
   local r
   r="$(api "${GITHUB_TOKEN:-}" "${API}/repos/${REPO}/contents/${MARKER_PATH}?ref=main" 2>/dev/null)"
   M_SHA="$(printf '%s' "$r" | jq -r '.sha // ""' 2>/dev/null)"
-  printf '%s' "$r" | jq -r '.content // ""' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null | jq -r '.state // ""' 2>/dev/null
+  PREV_STATE="$(printf '%s' "$r" | jq -r '.content // ""' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null | jq -r '.state // ""' 2>/dev/null)"
+  echo "[watchdog] marker read: state='${PREV_STATE}' sha=$([ -n "$M_SHA" ] && echo present || echo missing)"
 }
 marker_write() {
   M_SHA="$M_SHA" python3 - "$1" >/tmp/wd-body.json <<'PY'
@@ -122,7 +127,9 @@ if [ "${TEST_DISPATCH:-false}" = "true" ]; then
   echo "[watchdog] test_dispatch http=${tcode}"
 fi
 
-prev="$(marker_read)"
+PREV_STATE=""
+marker_fetch
+prev="$PREV_STATE"
 if [ "$STATE" != "$prev" ]; then
   notify_state "$STATE" "$REASON"
   marker_write "$STATE"

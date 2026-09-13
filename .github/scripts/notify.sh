@@ -75,11 +75,14 @@ fi
 
 # --- direct Telegram (no webhook needed) -------------------------------------
 # اگر وبهوک ست نشده باشد ولی توکن ربات و chat_id موجود باشند، مستقیم به تلگرام می‌فرستد.
-if [ -z "${NOTIFY_WEBHOOK_URL:-}" ] && [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${NOTIFY_CHAT_ID:-}" ]; then
+# v6.13: ربات گزارش (REPORT_BOT_TOKEN) از ربات Hermes Gateway جداست — هشدارها
+# اولویت با REPORT_BOT_TOKEN دارند تا کانال Hermes اشغال/مخلوط نشود.
+_ALERT_TG_TOKEN="${REPORT_BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
+if [ -z "${NOTIFY_WEBHOOK_URL:-}" ] && [ -n "${_ALERT_TG_TOKEN}" ] && [ -n "${NOTIFY_CHAT_ID:-}" ]; then
   _MSG="سیستم ${VPS_NAME:-hrgh3d} قطع شد ❌
 مرحله: ${STAGE} (run ${RUN}#${ATT})
 $(printf '%s' "${ERR}" | head -c 300)"
-  if curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+  if curl -fsS -m 20 -X POST "https://api.telegram.org/bot${_ALERT_TG_TOKEN}/sendMessage" \
        -d "chat_id=${NOTIFY_CHAT_ID}" -d "disable_web_page_preview=true" \
        --data-urlencode "text=${_MSG}" >/dev/null 2>&1; then
     echo "[notify] telegram alert sent (direct, no webhook)"
