@@ -85,21 +85,30 @@ def main():
                 log("WARN delete old %s: %s" % (name, e))
 
     # 2) آپلود heartbeat تازه
+    # FIX: آپلود asset باید از uploads.github.com باشد (مثل state_sync.py) —
+    # api.github.com روی POST assets با 404 جواب می‌دهد.
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     content = ("ts=%s\nrun=%s\nattempt=%s\nboot=%s\n" % (
         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         os.environ.get("GITHUB_RUN_ID", "?"),
         os.environ.get("GITHUB_RUN_ATTEMPT", "?"),
         os.environ.get("BOOT_TS", "?"))).encode()
+    upload_url = str(rel.get("upload_url", "")).split("{")[0]
+    if not upload_url:
+        log("upload_url missing on release — skipped")
+        return
     try:
-        st, _ = req(
-            "POST",
-            "/repos/%s/releases/%d/assets?name=heartbeat-%s.txt" % (repo, rel_id, ts),
-            token,
-            headers={"Content-Type": "text/plain"},
-            raw=content,
-        )
-        log("ok (HTTP %d, heartbeat-%s.txt)" % (st, ts))
+        r = urllib.request.Request(
+            "%s?name=heartbeat-%s.txt" % (upload_url, ts),
+            method="POST", data=content,
+            headers={
+                "Authorization": "Bearer %s" % token,
+                "Accept": "application/vnd.github+json",
+                "Content-Type": "text/plain",
+                "User-Agent": "linux-server-heartbeat",
+            })
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            log("ok (HTTP %d, heartbeat-%s.txt)" % (resp.status, ts))
     except urllib.error.HTTPError as e:
         log("upload failed HTTP %d — save pipeline may be broken (non-fatal here)" % e.code)
     except Exception as e:
