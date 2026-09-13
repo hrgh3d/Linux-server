@@ -189,13 +189,15 @@ EXPECTED=$(( PAYLOAD_N + META_N ))
 # TELEGRAM_BOT_TOKEN هرگز در آرشیو state ذخیره نمی‌شود: قبل از tar خط آن در
 # فایل زنده خالی می‌شود و بلافاصله بعد از tar برمی‌گردد (trap: حتی در خطا).
 # تزریق مقدار واقعی در هر بوت توسط secrets_inject.sh انجام می‌شود.
+# v6.13: REPORT_BOT_TOKEN (ربات گزارش سیستم — جدا از ربات Hermes) هم همین
+# سیاست را دارد: blank قبل از tar، بازیابی بعد از آن.
 TS_ENV=/root/.hermes/.env
 ENV_BACKUP=""
-if [ -f "$TS_ENV" ] && grep -q '^TELEGRAM_BOT_TOKEN=.\{4,\}' "$TS_ENV" 2>/dev/null; then
+if [ -f "$TS_ENV" ] && grep -qE '^(TELEGRAM_BOT_TOKEN|REPORT_BOT_TOKEN)=.{4,}' "$TS_ENV" 2>/dev/null; then
   ENV_BACKUP="/tmp/.ts-env.keep.$$"
   cp -p "$TS_ENV" "$ENV_BACKUP"
-  sed -i 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=/' "$TS_ENV"
-  log "secret: TELEGRAM_BOT_TOKEN blanked for archive (restored after tar)"
+  sed -i -e 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=/' -e 's/^REPORT_BOT_TOKEN=.*/REPORT_BOT_TOKEN=/' "$TS_ENV"
+  log "secret: TELEGRAM_BOT_TOKEN/REPORT_BOT_TOKEN blanked for archive (restored after tar)"
 fi
 restore_env_secret() {
   if [ -n "$ENV_BACKUP" ] && [ -f "$ENV_BACKUP" ]; then

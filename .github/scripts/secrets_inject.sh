@@ -45,4 +45,10 @@ inject_env_line() {
 
 inject_env_line "TELEGRAM_BOT_TOKEN" "${TELEGRAM_BOT_TOKEN:-}" "$ENV_FILE"
 
+# v6.13: ربات «گزارش سیستم» جدا از ربات Hermes Gateway است. توکن آن (و chat_id)
+# برای اسکریپت‌های سمت سرور (مثل hermes-tunnel.sh که آدرس تونل داشبورد را هر بوت
+# اعلام می‌کند) تزریق می‌شود. save.sh قبل از آرشیو این خط را هم خالی می‌کند.
+inject_env_line "REPORT_BOT_TOKEN" "${REPORT_BOT_TOKEN:-}" "$ENV_FILE"
+inject_env_line "NOTIFY_CHAT_ID" "${NOTIFY_CHAT_ID:-}" "$ENV_FILE"
+
 log "secrets injection done."
