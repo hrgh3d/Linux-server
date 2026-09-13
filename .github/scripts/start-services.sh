@@ -29,6 +29,99 @@ start_system() {
 start_system hermes-dashboard.service
 start_system hermes-tunnel.service
 
+# --- v6.14: استک تونل‌ها + نگهبان آدرس‌ها ---
+# اگر اسکریپت‌ها/یونیت‌ها گم شده باشند (state خراب/تازه)، از کپی معتبر ریپو
+# بازسازی می‌شوند؛ بعد 9router و تونل آن و tunnel-watch (اعلام‌کننده‌ی آدرس‌ها
+# فقط از راه ربات گزارش) استارت می‌شوند. همه idempotent.
+ensure_tunnel_stack() {
+  local repo_dir; repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local s
+  for s in tunnel-run.sh tunnel-watch.sh; do
+    if [ ! -x "/usr/local/bin/$s" ] && [ -f "$repo_dir/$s" ]; then
+      echo "[services] /usr/local/bin/$s missing — installing from repo copy"
+      sudo cp "$repo_dir/$s" "/usr/local/bin/$s" && sudo chmod +x "/usr/local/bin/$s"
+    fi
+  done
+  if [ ! -f /etc/systemd/system/hermes-tunnel.service ] || \
+     grep -q "hermes-tunnel.sh" /etc/systemd/system/hermes-tunnel.service 2>/dev/null; then
+    echo "[services] (re)writing hermes-tunnel.service (generic tunnel-run.sh)"
+    sudo tee /etc/systemd/system/hermes-tunnel.service >/dev/null <<'UNIT'
+[Unit]
+Description=Hermes dashboard cloudflared quick tunnel (via tunnel-run.sh)
+After=hermes-dashboard.service network-online.target
+Wants=hermes-dashboard.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tunnel-run.sh hermes http://127.0.0.1:9119 /root/.hermes/tunnel_url.txt
+Restart=on-failure
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  fi
+  if [ ! -f /etc/systemd/system/9router-tunnel.service ]; then
+    sudo tee /etc/systemd/system/9router-tunnel.service >/dev/null <<'UNIT'
+[Unit]
+Description=9router dashboard cloudflared quick tunnel (guarded nginx :9121)
+After=9router.service nginx.service network-online.target
+Wants=9router.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tunnel-run.sh 9router http://127.0.0.1:9121 /root/.9router/tunnel_url.txt
+Restart=on-failure
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  fi
+  if [ ! -f /etc/systemd/system/tunnel-watch.service ]; then
+    sudo tee /etc/systemd/system/tunnel-watch.service >/dev/null <<'UNIT'
+[Unit]
+Description=Dashboard tunnel address watcher (announces changes via report bot)
+After=hermes-tunnel.service 9router-tunnel.service network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tunnel-watch.sh
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  fi
+  if [ ! -f /etc/systemd/system/9router.service ] && [ -x /usr/local/bin/9router ]; then
+    sudo tee /etc/systemd/system/9router.service >/dev/null <<'UNIT'
+[Unit]
+Description=9Router AI router (dashboard port 20128)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME=/root
+ExecStart=/usr/local/bin/9router --no-browser --skip-update --log
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  fi
+  sudo systemctl daemon-reload >/dev/null 2>&1 || true
+  for u in hermes-tunnel 9router-tunnel tunnel-watch 9router; do
+    sudo systemctl enable "$u.service" >/dev/null 2>&1 || true
+  done
+}
+ensure_tunnel_stack
+start_system 9router.service
+start_system 9router-tunnel.service
+start_system tunnel-watch.service
+
 # --- Hermes gateway: یونیت user روت ---
 # v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
 # بوت‌های بعدی از راه استاندارد (همین یونیت) بالا می‌آیند.
