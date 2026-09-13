@@ -50,25 +50,36 @@ while :; do
     URL=$(head -1 "$URLFILE" 2>/dev/null || true)
     PREV=$(jq -r --arg n "$NAME" '.[$n] // ""' "$LAST" 2>/dev/null || echo "")
     ACTIVE=$(systemctl is-active "$UNIT" 2>/dev/null || echo unknown)
-    if [ "$ACTIVE" != "active" ]; then
+    if [ "$ACTIVE" = "activating" ]; then
+      : # در حال بالا آمدن — کاری نکن (جلوگیری از لوپ ری‌استارت موقع بوت)
+    elif [ "$ACTIVE" != "active" ]; then
       log "$NAME: unit=$ACTIVE — restarting $UNIT"
       rm -f "$URLFILE"
       systemctl restart "$UNIT" >/dev/null 2>&1 || true
     elif [ -n "${URL:-}" ] && [ "$URL" != "$PREV" ]; then
-      HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 12 "$URL/" 2>/dev/null || echo 000)
+      # چک سلامت عمومی با ۳ تلاش (edge propagation چند ثانیه طول می‌کشد)
+      HTTP=000
+      for try in 1 2 3; do
+        HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 12 "$URL/" 2>/dev/null || echo 000)
+        case "$HTTP" in 200|301|302|307|308|401|403) break;; esac
+        sleep 5
+      done
       case "$HTTP" in
         200|301|302|307|308|401|403)
           log "$NAME: NEW URL $URL (public HTTP $HTTP) — announcing"
-          tg_report "🌐 آدرس جدید ${LABEL}:
+          # فقط در صورت موفقیت ارسال، آدرس «اعلام‌شده» ثبت می‌شود (اعلان ازدست‌رفته
+          # در چرخه‌ی بعد دوباره تلاش می‌شود)
+          if tg_report "🌐 آدرس جدید ${LABEL}:
 ${URL}
 ورود: کاربر hamid + رمز داشبورد
-(آدرس قبلی: ${PREV:-—})" || true
-          TMP=$(mktemp)
-          jq --arg n "$NAME" --arg u "$URL" --arg t "$(date -u '+%FT%TZ')" \
-             '.[$n]=$u | .[$n+"_ts"]=$t' "$LAST" > "$TMP" 2>/dev/null && mv "$TMP" "$LAST"
+(آدرس قبلی: ${PREV:-—})"; then
+            TMP=$(mktemp)
+            jq --arg n "$NAME" --arg u "$URL" --arg t "$(date -u '+%FT%TZ')" \
+               '.[$n]=$u | .[$n+"_ts"]=$t' "$LAST" > "$TMP" 2>/dev/null && mv "$TMP" "$LAST"
+          fi
           ;;
         *)
-          log "$NAME: URL $URL failed public check (HTTP $HTTP) — restarting tunnel"
+          log "$NAME: URL $URL failed public check 3x (HTTP $HTTP) — restarting tunnel"
           rm -f "$URLFILE"
           systemctl restart "$UNIT" >/dev/null 2>&1 || true
           ;;
