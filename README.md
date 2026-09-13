@@ -1,12 +1,12 @@
 # Linux-server
 
-سرور Ubuntu پایدار روی GitHub Actions: **داده ماندگار، هویت Tailscale ثابت (IP ثابت)، SSH با کلید، داشبورد رمزدار**. معماری فعلی: **v6.10**.
+سرور Ubuntu پایدار روی GitHub Actions: **داده ماندگار، هویت Tailscale ثابت (IP ثابت)، SSH با کلید، داشبورد رمزدار**. معماری فعلی: **v6.13**.
 
 ## چطور کار می‌کند
 - هر Run یک runner موقت است (~۵.۸ ساعت عمر). ۲۰ دقیقه قبل از پایان، خودِ Run، Run جانشین را dispatch می‌کند (زنجیره؛ قطعی هر دست‌به‌دست‌سازی = فقط چند دقیقه بوت).
 - تیک ساعته کرون فقط **backstop** است (اگر زنجیره پاره شود).
 - در ابتدای هر بوت: دانلود state از ریپوی خصوصی `Linux-server-state` → بازنصب پکیج‌های کاربر (کاتالوگ نسخه‌دقیق) → اعمال داده/تنظیمات → تزریق secretها → استارت سرویس‌ها.
-- هر ۵ دقیقه state در صورت تغییر ذخیره می‌شود (rolling؛ ۲ نسخه‌ی آخر نگه داشته می‌شود برای rollback).
+- هر ۵ دقیقه state در صورت تغییر ذخیره می‌شود (rolling؛ ۲ نسخه‌ی آخر نگه داشته می‌شود برای rollback) + یک `heartbeat` سبک روی همان Release تا watchdog در سرورِ idle هشدار کاذب «state کهنه» ندهد (v6.13).
 
 ## چه چیزهایی ماندگار است
 - `/root` ،`/home/Hamid` ،`/opt` ،`/srv` ،`/etc` ،`/usr/local/bin|sbin` ،`/var/www` ،`/var/lib` ،`/var/opt` ،cron
@@ -31,8 +31,9 @@ ssh -i ~/.ssh/linux-server root@100.70.83.2
 - کاربر: `hamid` — رمز: secret `DASHBOARD_PASSWORD` (در اختیار شما)
 - زنجیره: tunnel → nginx :9119 (auth) → dashboard :9120 (loopback فقط)
 
-## امنیتی (v6.10)
-- **Secretها وارد آرشیو state نمی‌شوند**: `TELEGRAM_BOT_TOKEN` قبل از archive خالی می‌شود و در هر بوت از GitHub Secrets تزریق می‌شود (`secrets_inject.sh`).
+## امنیتی (v6.13)
+- **Secretها وارد آرشیو state نمی‌شوند**: `TELEGRAM_BOT_TOKEN` و `REPORT_BOT_TOKEN` قبل از archive خالی می‌شوند و در هر بوت از GitHub Secrets تزریق می‌شود (`secrets_inject.sh`).
+- **دو ربات تلگرام جدا**: ربات Hermes Gateway (`TELEGRAM_BOT_TOKEN`) فقط برای خودِ Hermes؛ ربات گزارش سیستم (`REPORT_BOT_TOKEN`) برای watchdog/اعلان‌ها/آدرس تونل داشبورد.
 - آرشیو state فقط **hash یک‌طرفه** رمز داشبورد را می‌بیند (htpasswd SHA-512؛ خود رمز فقط در GitHub Secrets است).
 - Tailscale بدون `--accept-routes` (ساب‌نت داخلی runner به tailnet route نمی‌شود).
 - dispatch زنجیره با `GITHUB_TOKEN` خودِ ران (توکن لو‌رفته لازم نیست).
