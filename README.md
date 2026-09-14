@@ -24,7 +24,7 @@ ssh -i ~/.ssh/linux-server root@100.70.83.2
 # فیلتر کلیدهای مجاز: فقط root و Hamid (AllowUsers)
 ```
 فingerprint کلید host سرور (برای تأیید هویت در اتصال اول):
-`SHA256:kdsQ9FkMfUVWwaLckY3/yb2vEq0faMwUFtgID8eEl4w`
+`SHA256:6P2g9TXEf9e4kPQC7KslkPg+kbQVyP12mVA9pSdfaoc (ED25519)`
 
 ## داشبورد Hermes (با رمز)
 آدرس تونل هر بوت به تلگرام ارسال می‌شود (trycloudflare.com). داشبورد پشت **Basic Auth** است:

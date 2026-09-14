@@ -8,7 +8,7 @@
 - **وضعیت سریع:** Actions ← آخرین Run باید `in_progress` و قدم `Keep server alive` باشد. قدم قرمز = لاگ همان قدم.
 - **جایگزینی دستی (ریبیلد):** Actions ← Run workflow (پیش‌فرض ۳۵ دقیقه). Run دستی، Run فعلی را کنسل و جایگزینش می‌شود.
 - **خاموش کردن کامل:** کنسل Run فعال + Disable ورکفلو (وگرنه کرون ساعته دوباره روشنش می‌کند).
-- **وصل SSH:** `ssh -i <کلید> root@100.70.83.2` (فingerprint: `SHA256:kdsQ9FkMfUVWwaLckY3/yb2vEq0faMwUFtgID8eEl4w`).
+- **وصل SSH:** `ssh -i <کلید> root@100.70.83.2` (فingerprint: `SHA256:6P2g9TXEf9e4kPQC7KslkPg+kbQVyP12mVA9pSdfaoc (ED25519)`).
 - **داشبورد Hermes:** آدرس تونل هر بوت به تلگرام می‌آید؛ لاگین `hamid` + رمز (secret `DASHBOARD_PASSWORD`).
 
 ## ۲) قرارداد ایجنت
