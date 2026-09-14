@@ -146,6 +146,15 @@ else
   fi
 fi
 
+if [ "${TEST_BUNDLE:-false}" = "true" ]; then
+  if [ -n "${SUCCESSOR_TOKEN:-}" ]; then
+    bcode=$(api "$SUCCESSOR_TOKEN" -X POST -o /tmp/bk-resp.json -w '%{http_code}' \
+      -d '{"ref":"main","inputs":{"full":"true"}}' \
+      "${API}/repos/${REPO}/actions/workflows/send-backup.yml/dispatches")
+    echo "[watchdog] TEST_BUNDLE dispatch http=${bcode}"
+  fi
+fi
+
 if [ "${TEST_DISPATCH:-false}" = "true" ]; then
   tcode=$(api "${GITHUB_TOKEN}" -X POST -o /tmp/td.json -w '%{http_code}' -d '{"ref":"main"}' \
           "${API}/repos/${REPO}/actions/workflows/main.yml/dispatches")
@@ -158,6 +167,15 @@ prev="$PREV_STATE"
 if [ "$STATE" != "$prev" ]; then
   notify_state "$STATE" "$REASON"
   marker_write "$STATE"
+  # v6.17: همراه هر گزارش قطع/وصل → بکاپ کامل DR به تلگرام (send-backup خودش dedup دارد)
+  if [ -n "${SUCCESSOR_TOKEN:-}" ]; then
+    bcode=$(api "$SUCCESSOR_TOKEN" -X POST -o /tmp/bk-resp.json -w '%{http_code}' \
+      -d '{"ref":"main","inputs":{"full":"true"}}' \
+      "${API}/repos/${REPO}/actions/workflows/send-backup.yml/dispatches")
+    echo "[watchdog] backup bundle dispatch http=${bcode} (state=${STATE})"
+  else
+    echo "[watchdog] WARN: no PAT — backup bundle dispatch skipped"
+  fi
 else
   echo "[watchdog] no change (${STATE}) — no message"
 fi

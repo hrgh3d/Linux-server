@@ -41,6 +41,35 @@ tg_report() {  # $1 = text — فقط ربات گزارش، هیچ کانال د
   fi
 }
 
+# ---- v6.17: بکاپ کامل با هر گزارش آدرس --------------------------------------
+# send-backup.yml (DR) را dispatch می‌کند تا باندل کامل (ریپو+کلیدها+state) به
+# تلگرام برود. PERSIST_TOKEN هرگز روی دیسک نیست: از env پروسه‌ی زنده‌ی رانر
+# خوانده می‌شود. گارد محلی ۱۰ دقیقه‌ای: دو تغییر آدرس هم‌زمان = یک باندل
+# (dedup سراسری ۱۵ دقیقه‌ای هم داخل خود send_backup.sh هست).
+BUNDLE_GUARD="$STATE_DIR/last-bundle-dispatch"
+BUNDLE_REPO="hrgh3d/Linux-server"
+persist_token() {
+  local pp tt
+  for pp in /proc/[0-9]*/environ; do
+    tt=$(tr '\0' '\n' < "$pp" 2>/dev/null | sed -n 's/^PERSIST_TOKEN=//p' | head -1)
+    [ -n "$tt" ] && { printf '%s' "$tt"; return 0; }
+  done
+  return 1
+}
+dispatch_bundle() { # $1 = trigger
+  local now last tok code
+  now=$(date +%s); last=$(cat "$BUNDLE_GUARD" 2>/dev/null || echo 0)
+  if [ $(( now - last )) -lt 600 ]; then
+    log "bundle dispatch skipped (last $(( (now - last) / 60 ))min ago) [$1]"; return 0
+  fi
+  tok=$(persist_token) || { log "WARN: PERSIST_TOKEN not found in proc envs — bundle skipped [$1]"; return 1; }
+  code=$(curl -s -m 20 -X POST -H "Authorization: Bearer $tok" -H "Accept: application/vnd.github+json" \
+    -d '{"ref":"main","inputs":{"full":"true"}}' -o /dev/null -w '%{http_code}' \
+    "https://api.github.com/repos/${BUNDLE_REPO}/actions/workflows/send-backup.yml/dispatches" 2>/dev/null)
+  if [ "$code" = "204" ]; then echo "$now" > "$BUNDLE_GUARD"; log "backup bundle dispatched [$1]";
+  else log "WARN: bundle dispatch http=$code [$1]"; fi
+}
+
 # name|unit|urlfile|label
 TUNNELS="hermes|hermes-tunnel.service|/root/.hermes/tunnel_url.txt|Hermes Dashboard
 9router|9router-tunnel.service|/root/.9router/tunnel_url.txt|9Router Terminal"
@@ -88,6 +117,7 @@ while :; do
             TMP=$(mktemp)
             jq --arg n "$NAME" --arg u "$URL" --arg t "$(date -u '+%FT%TZ')" \
                '.[$n]=$u | .[$n+"_ts"]=$t' "$LAST" > "$TMP" 2>/dev/null && mv "$TMP" "$LAST"
+            dispatch_bundle "url-change:$NAME"
           fi
           ;;
         500)

@@ -13,8 +13,50 @@ TS_HOSTNAME="${TS_HOSTNAME:-hrg-backup}"
 LIMIT=$((45 * 1024 * 1024))
 PART=$((40 * 1024 * 1024))
 DR_MODE="${DR_MODE:-false}"
+FORCE="${FORCE:-false}"
+DEDUP_MIN="${DEDUP_MIN:-15}"
+TRIGGER="${TRIGGER:-manual}"
+API="https://api.github.com"
+MARKER_PATH=".bundle-state.json"
 
-echo "[backup] $(date -u +%FT%TZ) vps=${VPS_NAME} target=${TARGET_IP} dr=${DR_MODE}"
+echo "[backup] $(date -u +%FT%TZ) vps=${VPS_NAME} target=${TARGET_IP} dr=${DR_MODE} trigger=${TRIGGER} force=${FORCE}"
+
+# ---------- v6.17: dedup — باندل تکراری داخل DEDUP_MIN دقیقه ارسال نمی‌شود ----------
+# (مگر FORCE=true یا باندل قبلی DR نبوده و این یکی DR باشد — اسنپ‌شات state تازه‌تر لازم است)
+MSHA=""
+marker_fetch() {
+  [ -n "${GITHUB_TOKEN:-}" ] || return 0
+  local r
+  r="$(curl -sS -m 20 -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+       "${API}/repos/${REPO}/contents/${MARKER_PATH}?ref=main" 2>/dev/null)"
+  MSHA="$(printf '%s' "$r" | jq -r '.sha // ""' 2>/dev/null)"
+  MARK_TS="$(printf '%s' "$r" | jq -r '.content // ""' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null | jq -r '.ts // ""' 2>/dev/null)"
+  MARK_DR="$(printf '%s' "$r" | jq -r '.content // ""' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null | jq -r '.dr // false' 2>/dev/null)"
+}
+marker_write() { # $1=bytes
+  [ -n "${GITHUB_TOKEN:-}" ] || return 0
+  MSHA="$MSHA" DRFLAG="$DR_MODE" TRG="$TRIGGER" python3 - "$1" > /tmp/bm-body.json <<'PY'
+import base64, json, os, sys, time
+raw = json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "trigger": os.environ.get("TRG",""),
+                  "dr": os.environ.get("DRFLAG") == "true", "bytes": int(sys.argv[1] or 0)}).encode()
+body = {"message": "backup-bundle: " + os.environ.get("TRG", ""), "content": base64.b64encode(raw).decode(), "branch": "main"}
+if os.environ.get("MSHA"): body["sha"] = os.environ["MSHA"]
+print(json.dumps(body))
+PY
+  curl -sS -m 20 -X PUT -H "Authorization: Bearer ${GITHUB_TOKEN}" -H 'Content-Type: application/json' \
+    -d @/tmp/bm-body.json "${API}/repos/${REPO}/contents/${MARKER_PATH}" -o /dev/null -w '[backup] marker write http=%{http_code}\n'
+}
+marker_fetch
+if [ "$FORCE" != "true" ] && [ -n "${MARK_TS:-}" ]; then
+  AGE_MIN=$(( ( $(date -u +%s) - $(date -u -d "$MARK_TS" +%s 2>/dev/null || echo 0) ) / 60 ))
+  if [ "$AGE_MIN" -lt "$DEDUP_MIN" ]; then
+    if [ "${MARK_DR:-false}" = "true" ] || [ "$DR_MODE" != "true" ]; then
+      echo "[backup] bundle sent ${AGE_MIN}min ago (dr=${MARK_DR:-?}, dedup=${DEDUP_MIN}min) and FORCE!=true — skipping"
+      exit 0
+    fi
+    echo "[backup] recent bundle was non-DR; this is DR — continuing"
+  fi
+fi
 
 # ---------- ۰) بوت‌استرپ بازیابی (روی runner) ----------
 BK=/tmp/bootstrap; rm -rf "$BK"; mkdir -p "$BK/recovery"
@@ -26,7 +68,7 @@ if [ -f .github/recovery/RECOVERY.md ]; then cp .github/recovery/RECOVERY.md "$B
   echo "# کلیدهای بازیابی — مقادیر Base64 هستند. برای دیدن مقدار: base64 -d <<< '<مقدار>'"
   echo "# این‌ها را به‌عنوان سکرت ریپوی جدید ثبت کن (نام‌ها همان‌ها). تاریخ: $(date -u +%FT%TZ)"
   for n in HAMID_PASSWORD PERSIST_TOKEN STATE_TOKEN SUCCESSOR_TOKEN TAILSCALE_AUTH_KEY \
-           TAILSCALE_API_TOKEN TAILSCALE_FIXED_IP TELEGRAM_BOT_TOKEN NOTIFY_CHAT_ID \
+           TAILSCALE_API_TOKEN TAILSCALE_FIXED_IP TELEGRAM_BOT_TOKEN REPORT_BOT_TOKEN NOTIFY_CHAT_ID \
            MIRZABOT_TOKEN MIRZABOT_ADMIN_ID MIRZABOT_ADMIN_USER MIRZABOT_BOT_NAME MIRZABOT_BRAND \
            XUI_RESET_USER XUI_RESET_PASS DASHBOARD_PASSWORD; do
     v="$(eval "printf '%s' \"\${$n:-}\"")"
@@ -62,12 +104,26 @@ for attempt in $(seq 1 12); do
 done
 if [ "$SSH_OK" != "1" ]; then
   echo "[backup] SSH FAILED"
-  curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-    -d "chat_id=${NOTIFY_CHAT_ID}" --data-urlencode "text=سیستم ${VPS_NAME} قطع شد ❌
+  if [ "$DR_MODE" = "true" ]; then
+    # v6.17: در حالت DR (رویداد قطع/وصل یا دستی full) حتی بدون سرور هم باندل می‌فرستیم:
+    # bootstrap (ریپو+کلیدها+RECOVERY) + اسنپ‌شات state از ریپوی state.
+    echo "[backup] DR mode → continuing WITHOUT server data"
+  else
+    curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+      -d "chat_id=${NOTIFY_CHAT_ID}" --data-urlencode "text=سیستم ${VPS_NAME} قطع شد ❌
 (بکاپ نگرفت: ورود SSH برقرار نشد)" >/dev/null 2>&1 || true
-  exit 1
+    exit 1
+  fi
 fi
 echo "[backup] ssh auth OK (single secret: HAMID_PASSWORD)"
+if [ "$SSH_OK" != "1" ]; then
+  M=/tmp/merge; rm -rf "$M"; mkdir -p "$M"
+  cp -r "$BK" "$M/bootstrap"
+  echo "server-data: UNAVAILABLE (ssh failed at $(date -u +%FT%TZ)) — bundle = bootstrap + state snapshot" > "$M/SERVER-DATA-UNAVAILABLE.txt"
+  tar -czf /tmp/final-backup.tar.gz -C "$M" .
+  LOCAL_SIZE=$(stat -c%s /tmp/final-backup.tar.gz)
+  echo "[backup] bootstrap-only bundle size = ${LOCAL_SIZE} bytes"
+else
 SSH() { SSHRUN "$@"; }
 
 SSH 'cat > /tmp/bkbuild.sh' <<'REMOTE'
@@ -135,12 +191,13 @@ cp -r "$BK" "$M/bootstrap"
 tar -czf /tmp/final-backup.tar.gz -C "$M" .
 LOCAL_SIZE=$(stat -c%s /tmp/final-backup.tar.gz)
 echo "[backup] final bundle size = ${LOCAL_SIZE} bytes"
+fi
 
 send_doc() {
   curl -fsS -m 300 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
     -F "chat_id=${NOTIFY_CHAT_ID}" -F "document=@$1" -F "caption=$2" >/dev/null 2>&1
 }
-CAP="🗄 بکاپ کامل سیستم ${VPS_NAME} — $(date -u '+%Y-%m-%d %H:%M') UTC
+CAP="🗄 بکاپ کامل سیستم ${VPS_NAME} — $(date -u '+%Y-%m-%d %H:%M') UTC (رویداد: ${TRIGGER})
 شامل: دادهٔ سرور + کل ریپو + کلیدها (Base64) + راهنمای RECOVERY"
 if [ "$LOCAL_SIZE" -le "$LIMIT" ]; then
   send_doc /tmp/final-backup.tar.gz "${CAP}" && echo "[backup] sent to telegram" || echo "[backup] WARN: telegram send failed"
@@ -157,10 +214,10 @@ if [ "$DR_MODE" = "true" ]; then
   if [ -n "$TOKX" ] && [ -n "${STATE_REPO:-}" ]; then
     ASSET_URL=$(curl -sS -m 60 -H "Authorization: token ${TOKX}" -H "Accept: application/vnd.github+json" \
       "https://api.github.com/repos/${STATE_REPO}/releases/tags/state" \
-      | python3 -c 'import json,sys; d=json.load(sys.stdin); a=sorted(d.get("assets",[]), key=lambda x:x["updated_at"]); print(a[-1]["url"] if a else "")' 2>/dev/null)
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); a=sorted([x for x in d.get("assets",[]) if x["name"].startswith("state-") and x["name"].endswith(".tar.gz")], key=lambda x:x["updated_at"]); print(a[-1]["url"] if a else "")' 2>/dev/null)  # v6.17 FIX: فقط state-*.tar.gz — قبلاً heartbeat (۷۶ بایت!) به‌جای اسنپ‌شات انتخاب می‌شد
     if [ -n "$ASSET_URL" ]; then
       curl -sSL -m 900 -H "Authorization: token ${TOKX}" -H "Accept: application/octet-stream" "$ASSET_URL" -o /tmp/state.tar.gz \
-        && echo "[backup] state size=$(stat -c%s /tmp/state.tar.gz)"
+        && { STATE_SIZE=$(stat -c%s /tmp/state.tar.gz); echo "[backup] state size=${STATE_SIZE}"; }
       if [ -s /tmp/state.tar.gz ]; then
         split -b "$PART" -d -a 2 /tmp/state.tar.gz /tmp/state.part-
         n=$(ls /tmp/state.part-* | wc -l); i=0
@@ -177,4 +234,5 @@ if [ "$DR_MODE" = "true" ]; then
     echo "[backup] WARN: no token/state repo for DR"
   fi
 fi
+marker_write "$(( ${LOCAL_SIZE:-0} + ${STATE_SIZE:-0} ))"
 echo "[backup] done"

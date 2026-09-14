@@ -11,9 +11,15 @@ on:
         description: 'بکاپ DR کامل: اسنپ‌شات state را هم بفرست'
         required: false
         default: 'false'
+      force:
+        description: 'dedup را نادیده بگیر و حتی اگر باندل تازه ارسال شده دوباره بفرست'
+        required: false
+        default: 'false'
+  repository_dispatch:
+    types: [send-backup]
 
 permissions:
-  contents: read
+  contents: write   # v6.17: نوشتن marker باندل (.bundle-state.json)
 
 concurrency:
   group: send-backup
@@ -26,7 +32,11 @@ env:
   TARGET_IP: '100.70.83.2'
   TELEGRAM_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN }}
   NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
-  DR_MODE: ${{ (github.event.inputs.full == 'true') || (github.event.schedule == '15 4 * * 6') }}
+  DR_MODE: ${{ (github.event.inputs.full == 'true') || (github.event.schedule == '15 4 * * 6') || (github.event_name == 'repository_dispatch') }}
+  FORCE: ${{ github.event.inputs.force || 'false' }}
+  TRIGGER: ${{ github.event.schedule && 'cron' || github.event_name }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  REPORT_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || '' }}
 
 jobs:
   backup:

@@ -16,6 +16,10 @@ on:
         description: 'تست دیسپچ با GITHUB_TOKEN روی ورک‌فلوی سبک'
         required: false
         default: 'false'
+      test_bundle:
+        description: 'دیسپچ send-backup (تست باندل گزارش‌ها)'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write
@@ -37,6 +41,7 @@ env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   TEST_ALERT: ${{ inputs.test_alert || 'false' }}
   TEST_DISPATCH: ${{ inputs.test_dispatch || 'false' }}
+  TEST_BUNDLE: ${{ inputs.test_bundle || 'false' }}
 
 jobs:
   ensure-running:
