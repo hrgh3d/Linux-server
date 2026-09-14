@@ -8,7 +8,7 @@
 - **وضعیت سریع:** Actions ← آخرین Run باید `in_progress` و قدم `Keep server alive` باشد. قدم قرمز = لاگ همان قدم.
 - **جایگزینی دستی (ریبیلد):** Actions ← Run workflow (پیش‌فرض ۳۵ دقیقه). Run دستی، Run فعلی را کنسل و جایگزینش می‌شود.
 - **خاموش کردن کامل:** کنسل Run فعال + Disable ورکفلو (وگرنه کرون ساعته دوباره روشنش می‌کند).
-- **وصل SSH:** `ssh -i <کلید> root@100.70.83.2` (فingerprint: `SHA256:6P2g9TXEf9e4kPQC7KslkPg+kbQVyP12mVA9pSdfaoc (ED25519)`).
+- **وصل SSH (ساده):** `ssh root@100.70.83.2` + رمز (secret `HAMID_PASSWORD`؛ کاربر `Hamid` هم همان رمز). کلید اختیاری: `ssh -i <کلید> root@100.70.83.2`. fingerprint host: `SHA256:6P2g9TXEf9e4kPQC7KslkPg+kbQVyP12mVA9pSdfaoc` (ED25519، پایدار بین جانشینی‌ها). خطای `HOST IDENTIFICATION HAS CHANGED` = ورودی قدیمی در known_hosts → یک‌بار `ssh-keygen -R 100.70.83.2`.
 - **داشبورد Hermes:** آدرس تونل هر بوت به تلگرام می‌آید؛ لاگین `hamid` + رمز (secret `DASHBOARD_PASSWORD`).
 
 ## ۲) قرارداد ایجنت

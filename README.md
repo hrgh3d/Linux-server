@@ -1,6 +1,6 @@
 # Linux-server
 
-سرور Ubuntu پایدار روی GitHub Actions: **داده ماندگار، هویت Tailscale ثابت (IP ثابت)، SSH با کلید، داشبورد رمزدار**. معماری فعلی: **v6.13**.
+سرور Ubuntu پایدار روی GitHub Actions: **داده ماندگار، هویت Tailscale ثابت (IP ثابت)، SSH ساده با رمز (کلید اختیاری)، داشبورد رمزدار**. معماری فعلی: **v6.13**.
 
 ## چطور کار می‌کند
 - هر Run یک runner موقت است (~۵.۸ ساعت عمر). ۲۰ دقیقه قبل از پایان، خودِ Run، Run جانشین را dispatch می‌کند (زنجیره؛ قطعی هر دست‌به‌دست‌سازی = فقط چند دقیقه بوت).
@@ -17,14 +17,17 @@
 
 ## اتصال SSH
 ```bash
-# کلید (پیشنهادی؛ فایل private key در اختیار شماست — hamid@windows-powershell)
+# اتصال ساده (رمز) — روش اصلی:
+ssh root@100.70.83.2
+# رمز = secret HAMID_PASSWORD (برای کاربر Hamid هم همان رمز است)
+
+# کلید (اختیاری؛ فایل private key در اختیار شماست — hamid@windows-powershell):
 ssh -i ~/.ssh/linux-server root@100.70.83.2
-# یا از ویندوز با PowerShell:
-#   ssh -i $env:USERPROFILE\.ssh\linux-server root@100.70.83.2
-# فیلتر کلیدهای مجاز: فقط root و Hamid (AllowUsers)
+# فیلتر کاربران مجاز: فقط root و Hamid (AllowUsers)
 ```
-فingerprint کلید host سرور (برای تأیید هویت در اتصال اول):
-`SHA256:6P2g9TXEf9e4kPQC7KslkPg+kbQVyP12mVA9pSdfaoc (ED25519)`
+- IP فقط از داخل شبکه Tailscale در دسترس است؛ رمز بدون عضویت در tailnet به کار نمی‌آید.
+- fingerprint کلید host (تأیید در اتصال اول): `SHA256:6P2g9TXEf9e4kPQC7KslkPg+kbQVyP12mVA9pSdfaoc` (ED25519) — کلیدهای host پایدارند (در state ذخیره می‌شوند).
+- اگر خطای `REMOTE HOST IDENTIFICATION HAS CHANGED` دیدید (ورودی قدیمی از سرور قبل از بازسازی)، یک‌بار: `ssh-keygen -R 100.70.83.2`
 
 ## داشبورد Hermes (با رمز)
 آدرس تونل هر بوت به تلگرام ارسال می‌شود (trycloudflare.com). داشبورد پشت **Basic Auth** است:
