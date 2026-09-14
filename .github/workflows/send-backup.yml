@@ -25,7 +25,7 @@ env:
   VPS_NAME: hrgh3d
   TARGET_IP: '100.70.83.2'
   TELEGRAM_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN }}
-  NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
+  NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
   DR_MODE: ${{ (github.event.inputs.full == 'true') || (github.event.schedule == '15 4 * * 6') }}
 
 jobs:

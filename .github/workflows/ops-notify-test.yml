@@ -11,7 +11,7 @@ jobs:
       contents: read
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN || '' }}
-      NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
+      NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       SSH_PASS: ${{ secrets.HAMID_PASSWORD }}
       TARGET_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
@@ -35,7 +35,7 @@ jobs:
                    -o PreferredAuthentications=password -o PubkeyAuthentication=no \
                    -o 'ProxyCommand=sudo tailscale nc %h %p')
           sshpass -p "$SSH_PASS" scp "${SSHOPTS[@]}" .github/scripts/notify_test.sh root@"$TARGET_IP":/tmp/
-          sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" "chmod 700 /tmp/notify_test.sh; ADMIN_ID=7262486406 bash /tmp/notify_test.sh; rm -f /tmp/notify_test.sh" || echo "SSH FAILED"
+          sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" "chmod 700 /tmp/notify_test.sh; bash /tmp/notify_test.sh; rm -f /tmp/notify_test.sh" || echo "SSH FAILED"
       - name: "cleanup: leave tailnet (no ghost nodes)"
         if: always()
         shell: bash

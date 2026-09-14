@@ -21,7 +21,7 @@
 | مورد | کجا | وضعیت/چرخه |
 |---|---|---|
 | Tailscale Auth Key | Secret `TAILSCALE_AUTH_KEY` | ۹۰ روزه (سقف API؛ `expirySeconds:0` پذیرفته نمی‌شود). چون node **غیر-ephemeral** است، بعد از اولین اتصال موفق، reconnect با node key در state است و این key فقط برای bootstrap لازم است. قبل از انقضا (هشدار `[key-expiry]` هر بوت) key تازه بساز — می‌شود با API: `POST /api/v2/tailnet/-/keys` با `capabilities.devices.create {reusable:true, ephemeral:false, preauthorized:true}`. |
-| Tailscale API Token | Secret `TAILSCALE_API_TOKEN` | **محدوده‌ی زمانی دارد (مثال فعلی: ۲۴ ساعت!)** — همیشه تاریخ انقضا را در `key-dates.json` ثبت کن. بدون آن: pin IP + cleanup + چک انقضا غیرفعال می‌شوند (boot نمی‌شکند). |
+| Tailscale API Token | Secret `TAILSCALE_API_TOKEN` | **محدوده‌ی زمانی دارد (حداکثر ۹۰ روز؛ تاریخ‌های فعلی در `key-dates.json`)** — همیشه تاریخ انقضا را در `key-dates.json` ثبت کن. بدون آن: pin IP + cleanup + چک انقضا غیرفعال می‌شوند (boot نمی‌شکند). |
 | PAT (push/زنجیره) | Secret `PERSIST_TOKEN` | زنجیره با `GITHUB_TOKEN` خودِ ران کار می‌کند؛ `PERSIST_TOKEN` برای state (آپلود/دانلود) و fallback دیسپچ است. (`SUCCESSOR_TOKEN` حذف شد — همه‌جا به `PERSIST_TOKEN` برمی‌گردند.) با هر تعویض PAT فقط `PERSIST_TOKEN` را به‌روز کن. |
 | Telegram Bot Token (Hermes) | Secret `TELEGRAM_BOT_TOKEN` | فقط برای Hermes Gateway (تزریق هر بوت به `/root/.hermes/.env`). اگر جایی لو رفت: BotFather → `/token` برای همین bot → revoke → مقدار جدید در secret. |
 | ربات گزارش سیستم | Secret `REPORT_BOT_TOKEN` | **جدا از ربات Hermes** — watchdog، send-backup و notify.sh هشدارها/گزارش‌ها را با این ربات می‌فرستند (`@Vpshamidreportbot`). chat_id: secret `NOTIFY_CHAT_ID`. |
@@ -39,11 +39,11 @@
 | داشبورد بدون رمز (HTTP 200) | قدم `Dashboard auth guard` را چک کن: nginx install/active + هتپاسورد |
 | ایجنت بعد از ریبیلد برنگشت | `/var/log/agent-autostart.log`؛ idempotent بودن اسکریپت |
 
-## ۵) ⚠️ Billing (مهم‌ترین ریسک عملیاتی)
-- ریپو **public** + اکانت **Free** = **۲۰۰ دقیقه رایگان/ماه** (نه نامحدود؛ private روی Free = ۰).
-- مصرف ≈ **۱۴۵۰ دقیقه/روز** → سقف ماهانه در ~۱.۴ روز پر می‌شود؛ بعدش Runهای جدید (شامل dispatch جانشین) تا **ریست ماهانه (روز ۱)** رد می‌شوند → سرور می‌ایستد و با اولین تیک کرون بعد از ریست زنده می‌شود.
-- پایش: Settings → Billing and plans → Usage → Actions (یا email هشدار GitHub).
-- گزینه‌های پایدار: (a) پلن Team — ۵۰هزار دقیقه/ماه، (b) مهاجرت به VPS واقعی (ارزان‌ترین و پایدارترین)، (c) پذیرش قطعی ماهانه.
+## ۵) ⏱️ Billing
+- ریپو **public** است؛ مصرف را نسبت به محدودیت‌های پلن پایش کنید: Settings → Billing and plans → Usage → Actions (هشدار ایمیلی GitHub در صورت نزدیک شدن به سقف).
+- اگر ایجاد Run متوقف شود: state در ریپوی خصوصی امن است و زنجیره با اولین تیک کرون پس از رفع محدودیت خودکار برمی‌گردد (بازیابی کامل، بدون از دست رفتن داده).
+- گزینه‌های پایدار در صورت نیاز: پلن پولی یا مهاجرت به VPS واقعی.
+
 
 ## ۶) بکاپ
 - کد: هر لحظه `git clone https://github.com/hrgh3d/Linux-server` (public).

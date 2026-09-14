@@ -32,7 +32,7 @@ env:
   STALE_MIN: '45'
   VPS_NAME: hrgh3d
   TELEGRAM_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN || '' }}
-  NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID || '7262486406' }}
+  NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
   SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN || '' }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   TEST_ALERT: ${{ inputs.test_alert || 'false' }}

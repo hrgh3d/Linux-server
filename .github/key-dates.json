@@ -2,5 +2,5 @@
   "tailscale_api_token_expires": "2026-12-12",
   "tailscale_auth_key_expires": "2026-12-12",
   "successor_pat_expires": "TODO-YYYY-MM-DD",
-  "notes": "تاریخ‌ها secret نیستند. با هر تعویض توکن به‌روز کن؛ هر بوت چک می‌شود (<۱۰ روز = هشدار). وضعیت فعلی (۲۰۲۶-09-13): API token (kcCLjETwy321CNTRL) تا 2026-12-12. auth key فعلی = knN9cU8yJ... (ساخته‌شده با API در ۱۵:۱۴، تا 2026-12-12، reusable + NON-ephemeral + preauthorized — مطابق معماری؛ کلید دستی Hrgh3d1 ephemeral/preauth=false بود و برای bootstrap سرور مناسب نبود، در کنسول دست‌نخورده باقی مانده). چون node غیر-ephemeral است، بعد از اولین اتصال موفق reconnect با node key در state انجام می‌شود و auth key فقط برای bootstrap لازم است. Secret اضافی SUCCESSOR_TOKEN حذف شد (۲۰۲۶-09-13) — dispatch جانشین با GITHUB_TOKEN و fallback با PERSIST_TOKEN؛ با هر تعویض PAT فقط PERSIST_TOKEN را به‌روز کن."
+  "notes": "تاریخ‌ها secret نیستند. با هر تعویض توکن به‌روز کن؛ هر بوت چک می‌شود (<۱۰ روز = هشدار). node غیر-ephemeral است: بعد از اولین اتصال موفق، reconnect با node key در state انجام می‌شود و auth key فقط برای bootstrap لازم است. Secret اضافی SUCCESSOR_TOKEN حذف شد (۲۰۲۶-09-13) — dispatch جانشین با GITHUB_TOKEN و fallback با PERSIST_TOKEN؛ با هر تعویض PAT فقط PERSIST_TOKEN را به‌روز کن."
 }
