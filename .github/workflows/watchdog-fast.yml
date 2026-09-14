@@ -1,0 +1,45 @@
+name: watchdog-fast
+
+# پایشگر سریع مقیم (v6.16) — جایگزین تکیه بر کرون ۱۰ دقیقه‌ای.
+# یک Run سبک و بلندمدت (تا ۳۴۰ دقیقه) که هر ۶۰ ثانیه:
+#   * زنده بودن Run اصلی (سرور) را چک می‌کند؛ اگر مرده بود فوراً main.yml را
+#     dispatch می‌کند (تشخیص ≤۱ دقیقه + بوت ~۳ دقیقه = وصل در ~۴ دقیقه)
+#   * پیام‌های قطع/وصل را با همان marker مشترک (.wd-state.json) می‌فرستد
+#     (بدون تکرار با کرون‌ها — آن‌ها وقتی این زنجیره زنده است passive می‌شوند)
+#   * ۲۰ دقیقه قبل از پایان عمر خودش، جانشین خودش را dispatch می‌کند
+# پشت‌بند: watchdog.yml / watchdog-b.yml (کرون) اگر این زنجیره بمیرد دوباره
+# روشنش می‌کنند. ریپو public است → دقیقه‌های استاندارد نامحدود/رایگان.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: watchdog-fast
+  cancel-in-progress: false
+
+env:
+  REPO: ${{ github.repository }}
+  STATE_REPO: ${{ github.repository }}-state
+  STATE_TAG: state
+  STALE_MIN: '45'
+  VPS_NAME: hrgh3d
+  TELEGRAM_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN || '' }}
+  NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
+  SUCCESSOR_TOKEN: ${{ secrets.SUCCESSOR_TOKEN || secrets.PERSIST_TOKEN || '' }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  WATCHDOG_MODE: fast
+  FAST_LIFETIME_MIN: '340'
+  FAST_POLL_SEC: '60'
+
+jobs:
+  fast-monitor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: "watchdog-fast: 60s poll, self-chaining"
+        shell: bash
+        run: bash .github/scripts/watchdog.sh

@@ -1,11 +1,20 @@
 #!/bin/bash
-# watchdog.sh — نگهبان «همیشه فعال» (نسخهٔ ۲)
+# watchdog.sh — نگهبان «همیشه فعال» (v6.16 — دو حالته)
 #   • پیام‌های سادهٔ وصل/قطع به ربات گزارش (فقط در لحظهٔ تغییر وضعیت)
 #   • اگر هیچ رانی زنده نبود → خودش یکی روشن می‌کند (PAT، بعد GITHUB_TOKEN)
 #   • اگر ران زنده است ولی state کهنه است → «قطع شد» با دلیل کوتاه
 #   • هیچ‌وقت ران زنده را کنسل نمی‌کند
+# حالتها (WATCHDOG_MODE):
+#   fast (watchdog-fast.yml): مقیم — هر FAST_POLL_SEC ثانیه یک پاس کامل؛ نزدیک
+#     پایان عمر (FAST_LIFETIME_MIN) جانشین خودش را dispatch می‌کند → تشخیص مرگ
+#     سرور ≤۱ دقیقه و وصل کامل ≈ ۳-۵ دقیقه. اگر ران fast دیگری in_progress
+#     باشد، این ران کنار می‌رود (جلوگیری از تکثیر زنجیره).
+#   cron (watchdog.yml / watchdog-b.yml): پشت‌بند — اگر زنجیرهٔ fast زنده باشد
+#     passive است (بدون dispatch/پیام، بدون رقابت)؛ وگرنه یک پاس کامل می‌زند و
+#     زنجیرهٔ fast را (re)start می‌کند.
 # env: REPO, STATE_REPO, STATE_TAG, STALE_MIN, VPS_NAME, TELEGRAM_BOT_TOKEN, NOTIFY_CHAT_ID,
-#      SUCCESSOR_TOKEN, GITHUB_TOKEN, TEST_ALERT, TEST_DISPATCH
+#      SUCCESSOR_TOKEN, GITHUB_TOKEN, TEST_ALERT, TEST_DISPATCH,
+#      WATCHDOG_MODE, FAST_LIFETIME_MIN, FAST_POLL_SEC, GITHUB_RUN_ID
 set -uo pipefail
 
 REPO="${REPO:?}"
@@ -16,6 +25,10 @@ VPS_NAME="${VPS_NAME:-$(basename "$REPO")}"
 MAIN_PATH=".github/workflows/main.yml"
 API="https://api.github.com"
 MARKER_PATH=".wd-state.json"
+MODE="${WATCHDOG_MODE:-cron}"
+FAST_LIFETIME_MIN="${FAST_LIFETIME_MIN:-340}"
+FAST_POLL_SEC="${FAST_POLL_SEC:-60}"
+FAST_WF=".github/workflows/watchdog-fast.yml"
 
 api() { local tok="$1"; shift
   curl -sS -m 30 -H "Authorization: Bearer ${tok}" -H "Accept: application/vnd.github+json" \
@@ -84,6 +97,7 @@ if [ "${TEST_ALERT:-false}" = "true" ]; then
   tg "🧪 پیام تستی — سیستم ${VPS_NAME}: کانال گزارش سالم است ✅"
 fi
 
+pass_once() {
 RUNS="$(api "$TOK" "${API}/repos/${REPO}/actions/runs?per_page=50")"
 live=$(printf '%s' "$RUNS" | jq -r --arg p "$MAIN_PATH" '[.workflow_runs[] | select(.path==$p)
         | select(.status=="in_progress" or .status=="queued" or .status=="waiting"
@@ -116,8 +130,19 @@ else
   fi
   echo "[watchdog] nothing live → dispatched main.yml via ${used} (http=${code})"
   if [ "$code" != "204" ]; then
-    tg "سیستم ${VPS_NAME} قطع شد ❌
-(روشن‌کردن خودکار هم نشد: http=${code})"; exit 1
+    FAILS=$(( $(cat /tmp/wd-fail-count 2>/dev/null || echo 0) + 1 )); echo "$FAILS" > /tmp/wd-fail-count
+    if [ "$MODE" = "fast" ]; then
+      if [ "$FAILS" = 1 ] || [ $(( FAILS % 10 )) = 0 ]; then
+        tg "سیستم ${VPS_NAME} قطع شد ❌
+(روشن‌کردن خودکار هم نشد: http=${code} — تلاش ${FAILS}، تکرار هر ${FAST_POLL_SEC} ثانیه)"
+      fi
+      echo "[watchdog-fast] dispatch failed http=${code} (fail #${FAILS}) — retry next poll"
+    else
+      tg "سیستم ${VPS_NAME} قطع شد ❌
+(روشن‌کردن خودکار هم نشد: http=${code})"; return 2
+    fi
+  else
+    rm -f /tmp/wd-fail-count
   fi
 fi
 
@@ -136,4 +161,51 @@ if [ "$STATE" != "$prev" ]; then
 else
   echo "[watchdog] no change (${STATE}) — no message"
 fi
-exit 0
+return 0
+}
+
+if [ "$MODE" = "fast" ]; then
+  # ضدتکثیر: اگر ران fast دیگری in_progress است، این ران خودش کنار می‌رود
+  OTHER=$(api "$TOK" "${API}/repos/${REPO}/actions/runs?per_page=20" \
+    | jq -r --arg p "$FAST_WF" --arg me "${GITHUB_RUN_ID:-0}" \
+      '[.workflow_runs[] | select(.path==$p) | select(.status=="in_progress") | select((.id|tostring) != $me)] | length' 2>/dev/null || echo 0)
+  if [ "${OTHER:-0}" -gt 0 ]; then
+    echo "[watchdog-fast] another fast run in_progress — exiting (no-multiply guard)"
+    exit 0
+  fi
+  START=$(date +%s)
+  echo "[watchdog-fast] started: poll=${FAST_POLL_SEC}s lifetime=${FAST_LIFETIME_MIN}m run_id=${GITHUB_RUN_ID:-?}"
+  while :; do
+    pass_once; rc=$?
+    [ "$rc" = 2 ] && exit 1
+    EL=$(( ($(date +%s) - START) / 60 ))
+    if [ "$EL" -ge "$FAST_LIFETIME_MIN" ]; then
+      code=$(api "$TOK" -X POST -o /tmp/wf-resp.json -w '%{http_code}' -d '{"ref":"main"}' \
+        "${API}/repos/${REPO}/actions/workflows/watchdog-fast.yml/dispatches")
+      echo "[watchdog-fast] self-successor dispatch http=${code} (elapsed=${EL}m)"
+      if [ "$code" != "204" ]; then
+        sleep 30
+        code=$(api "$TOK" -X POST -o /tmp/wf-resp.json -w '%{http_code}' -d '{"ref":"main"}' \
+          "${API}/repos/${REPO}/actions/workflows/watchdog-fast.yml/dispatches")
+        echo "[watchdog-fast] self-successor retry http=${code}"
+      fi
+      exit 0
+    fi
+    sleep "$FAST_POLL_SEC"
+  done
+else
+  # cron: اگر زنجیرهٔ fast زنده است → passive (بدون رقابت dispatch/پیام)
+  FASTLIVE=$(api "$TOK" "${API}/repos/${REPO}/actions/runs?per_page=30" \
+    | jq -r --arg p "$FAST_WF" \
+      '[.workflow_runs[] | select(.path==$p) | select(.status=="in_progress" or .status=="queued" or .status=="waiting" or .status=="requested" or .status=="pending")] | length' 2>/dev/null || echo 0)
+  if [ "${FASTLIVE:-0}" -gt 0 ]; then
+    echo "[watchdog] fast chain alive (${FASTLIVE}) — cron pass passive"
+    exit 0
+  fi
+  pass_once; rc=$?
+  [ "$rc" = 2 ] && exit 1
+  code=$(api "$TOK" -X POST -o /tmp/wf-resp.json -w '%{http_code}' -d '{"ref":"main"}' \
+    "${API}/repos/${REPO}/actions/workflows/watchdog-fast.yml/dispatches")
+  echo "[watchdog] fast chain missing → dispatched watchdog-fast http=${code}"
+  exit 0
+fi

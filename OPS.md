@@ -8,6 +8,7 @@
 - **وضعیت سریع:** Actions ← آخرین Run باید `in_progress` و قدم `Keep server alive` باشد. قدم قرمز = لاگ همان قدم.
 - **جایگزینی دستی (ریبیلد):** Actions ← Run workflow (پیش‌فرض ۳۵ دقیقه). Run دستی، Run فعلی را کنسل و جایگزینش می‌شود.
 - **خاموش کردن کامل:** کنسل Run فعال + Disable ورکفلو (وگرنه کرون ساعته دوباره روشنش می‌کند).
+- **بازیابی قطعی کامل (v6.16):** `watchdog-fast` مقیم هر **۶۰ ثانیه** چک می‌کند؛ نبودِ رانر → dispatch فوری → تشخیص ≤۱ دقیقه + بوت ≈۳ دقیقه = وصل کامل ≈ **۳-۵ دقیقه**. کرون‌های `watchdog`/`watchdog-b` وقتی زنجیرهٔ fast زنده است passive‌اند و فقط اگر خودش بمیرد دوباره روشنش می‌کنند. خاموش‌کردن کاملِ ماندگار: هر سه ورک‌فلو (main + watchdog-fast + watchdog/b) کنسل/Disable شوند.
 - **وصل SSH (ساده):** `ssh root@100.70.83.2` + رمز (secret `HAMID_PASSWORD`؛ کاربر `Hamid` هم همان رمز). کلید اختیاری: `ssh -i <کلید> root@100.70.83.2`. fingerprint host: `SHA256:6P2g9TXEf9e4kPQC7KslkPg+kbQVyP12mVA9pSdfaoc` (ED25519، پایدار بین جانشینی‌ها). خطای `HOST IDENTIFICATION HAS CHANGED` = ورودی قدیمی در known_hosts → یک‌بار `ssh-keygen -R 100.70.83.2`.
 - **داشبوردها:** Hermes روی سرور `http://localhost:9119` و 9Router `http://localhost:20128/dashboard` — هر دو ۲۴/۷ سرویس systemd با `Restart=always`. آدرس عمومی (تونل) با هر تغییر توسط ربات گزارش اعلام می‌شود: `Hermes Dashboard : <آدرس>` / `9Router Terminal : <آدرس>`. لاگین هر دو: `hamid` + رمز (secret `DASHBOARD_PASSWORD`). دستور `hermes dashboard` روی سرور به‌جای ارور، آدرس‌ها را چاپ می‌کند.
 
