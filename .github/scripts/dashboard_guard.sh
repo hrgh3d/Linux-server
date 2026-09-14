@@ -87,7 +87,11 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection \$connection_upgrade;
-        proxy_set_header Host \$http_host;
+        # FIX (v6.16.2): بک‌اند hermes هدر Host را اعتبارسنجی می‌کند («Invalid Host
+        # header») — host خودِ upstream پاس داده می‌شود تا هر آدرس تونل عمومی کار کند.
+        proxy_set_header Host 127.0.0.1:${BACK_PORT};
+        proxy_redirect http://127.0.0.1:${BACK_PORT}/ /;
+        proxy_redirect http://localhost:${BACK_PORT}/ /;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_read_timeout 3600s;
