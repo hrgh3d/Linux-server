@@ -45,8 +45,21 @@ tg_report() {  # $1 = text — فقط ربات گزارش، هیچ کانال د
 TUNNELS="hermes|hermes-tunnel.service|/root/.hermes/tunnel_url.txt|Hermes Dashboard
 9router|9router-tunnel.service|/root/.9router/tunnel_url.txt|9Router Terminal"
 
+HTPASSWD=/etc/nginx/.htpasswd-hermes
+heal_htpasswd() {  # v6.16.1: اگر www-data نتواند htpasswd را بخواند → 500 پشت لاگین
+  [ -f "$HTPASSWD" ] || return 0
+  local g pr
+  g=$(stat -c '%G' "$HTPASSWD" 2>/dev/null); pr=$(stat -c '%A' "$HTPASSWD" 2>/dev/null)
+  if [ "$g" != "www-data" ] || [ "${pr:4:1}" != "r" ]; then
+    chown root:www-data "$HTPASSWD" 2>/dev/null || true
+    chmod 640 "$HTPASSWD" 2>/dev/null || true
+    log "htpasswd perms fixed (was ${g}/${pr})"
+  fi
+}
+
 log "started (interval=${INTERVAL}s, report-bot only)"
 while :; do
+  heal_htpasswd
   while IFS='|' read -r NAME UNIT URLFILE LABEL; do
     [ -n "$NAME" ] || continue
     URL=$(head -1 "$URLFILE" 2>/dev/null || true)
@@ -76,6 +89,9 @@ while :; do
             jq --arg n "$NAME" --arg u "$URL" --arg t "$(date -u '+%FT%TZ')" \
                '.[$n]=$u | .[$n+"_ts"]=$t' "$LAST" > "$TMP" 2>/dev/null && mv "$TMP" "$LAST"
           fi
+          ;;
+        500)
+          log "$NAME: HTTP 500 — nginx-side (htpasswd) نه تونل؛ ری‌استارت بی‌فایده است (heal_htpasswd اصلاح می‌کند)"
           ;;
         *)
           log "$NAME: URL $URL failed public check 3x (HTTP $HTTP) — restarting tunnel"
