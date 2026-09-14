@@ -1,11 +1,13 @@
 #!/bin/bash
 # ============================================================================
-# tunnel-watch.sh (v6.14) — نگهبان تونل‌های داشبورد (Hermes + 9router)
+# tunnel-watch.sh (v6.15) — نگهبان تونل‌های داشبورد (Hermes + 9router)
 #
 #   * هر ۳۰ ثانیه: وضعیت یونیت‌های تونل + آدرس فعلی هر تونل را می‌خواند.
 #   * اگر یونیتی مرده باشد → ری‌استارت (cloudflared quick tunnel آدرس تازه
 #     می‌گیرد)؛ اگر آدرسی «به هر دلیلی» عوض شود (ری‌استارت، ریبیلد رانر،
 #     قطعی cloudflare) → آدرس جدید **فقط از راه ربات گزارش سیستم**
+#     قالب v6.15 (دقیقاً طبق درخواست کاربر): «Hermes Dashboard : <آدرس>» و
+#     «9Router Terminal : <آدرس>».
 #     (REPORT_BOT_TOKEN + NOTIFY_CHAT_ID در /root/.hermes/.env که هر بوت از
 #     GitHub Secrets تزریق می‌شود و هرگز در آرشیو state نمی‌ماند) ارسال می‌شود.
 #   * آخرین آدرسهای اعلام‌شده در /root/.tunnel-watch/last.json (ماندگار بین
@@ -40,8 +42,8 @@ tg_report() {  # $1 = text — فقط ربات گزارش، هیچ کانال د
 }
 
 # name|unit|urlfile|label
-TUNNELS="hermes|hermes-tunnel.service|/root/.hermes/tunnel_url.txt|داشبورد Hermes
-9router|9router-tunnel.service|/root/.9router/tunnel_url.txt|داشبورد 9router"
+TUNNELS="hermes|hermes-tunnel.service|/root/.hermes/tunnel_url.txt|Hermes Dashboard
+9router|9router-tunnel.service|/root/.9router/tunnel_url.txt|9Router Terminal"
 
 log "started (interval=${INTERVAL}s, report-bot only)"
 while :; do
@@ -69,10 +71,7 @@ while :; do
           log "$NAME: NEW URL $URL (public HTTP $HTTP) — announcing"
           # فقط در صورت موفقیت ارسال، آدرس «اعلام‌شده» ثبت می‌شود (اعلان ازدست‌رفته
           # در چرخه‌ی بعد دوباره تلاش می‌شود)
-          if tg_report "🌐 آدرس جدید ${LABEL}:
-${URL}
-ورود: کاربر hamid + رمز داشبورد
-(آدرس قبلی: ${PREV:-—})"; then
+          if tg_report "${LABEL} : ${URL}"; then
             TMP=$(mktemp)
             jq --arg n "$NAME" --arg u "$URL" --arg t "$(date -u '+%FT%TZ')" \
                '.[$n]=$u | .[$n+"_ts"]=$t' "$LAST" > "$TMP" 2>/dev/null && mv "$TMP" "$LAST"

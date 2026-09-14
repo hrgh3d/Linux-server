@@ -42,6 +42,57 @@ ensure_tunnel_stack() {
       sudo cp "$repo_dir/$s" "/usr/local/bin/$s" && sudo chmod +x "/usr/local/bin/$s"
     fi
   done
+  # v6.15: drop-in «همیشه ری‌استارت» برای یونیت‌های حیاتی (nginx شاملش نیست
+  # که Restart دارد؟ دارد: همه با drop-in یکدست always می‌شوند) — idempotent.
+  local _u _d _f
+  for _u in nginx hermes-dashboard hermes-tunnel 9router 9router-tunnel; do
+    _d="/etc/systemd/system/${_u}.service.d"; _f="${_d}/10-restart-always.conf"
+    if [ ! -f "$_f" ]; then
+      sudo mkdir -p "$_d"
+      printf '[Service]\nRestart=always\nRestartSec=5\n' | sudo tee "$_f" >/dev/null
+      sudo systemctl daemon-reload
+      echo "[services] drop-in Restart=always for ${_u}"
+    fi
+  done
+  # v6.15: رَپر «hermes dashboard» بدون ارور — پورت پیش‌فرض 9119 دست nginx
+  # (گیت رمز داشبورد) است و بک‌اند واقعی روی 9120 به‌عنوان سرویس اجرا می‌شود؛
+  # پس اگر سرویس زنده بود، به‌جای BACKEND_PORT_IN_USE آدرس‌ها چاپ می‌شود.
+  # alias فقط در پوسته تعاملی است → سرویس‌ها/اسکریپت‌ها باینری واقعی را صدا می‌زنند.
+  if [ ! -x /usr/local/bin/hermes-ui ]; then
+    sudo tee /usr/local/bin/hermes-ui >/dev/null <<'SHIM'
+#!/bin/bash
+# hermes-ui — رپر دوستانه‌ی CLI (v6.15). هر چیزی جز «dashboard بدون --port
+# وقتی 9119 اشغال است» عیناً به باینری واقعی پاس داده می‌شود.
+if [ "${1:-}" = "dashboard" ]; then
+  _hp=0; for _a in "$@"; do case "$_a" in --port|--port=*) _hp=1;; esac; done
+  if [ "$_hp" = 0 ] && ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE ':9119$'; then
+    echo "✅ Hermes Dashboard همین حالا به‌عنوان سرویس در حال اجراست (hermes-dashboard.service)."
+    echo
+    echo "آدرس روی سرور : http://localhost:9119"
+    echo "ورود            : کاربر hamid + رمز داشبورد (secret DASHBOARD_PASSWORD)"
+    _pub=$(head -1 /root/.hermes/tunnel_url.txt 2>/dev/null || true)
+    if [ -n "${_pub:-}" ]; then
+      echo "آدرس عمومی      : ${_pub}"
+      echo "(تغییر آدرس عمومی را ربات گزارش با قالب «Hermes Dashboard : <آدرس>» اعلام می‌کند)"
+    fi
+    echo
+    echo "وضعیت سرویس     : systemctl status hermes-dashboard --no-pager"
+    echo "نمونه‌ی دوم روی پورت آزاد: hermes dashboard --port 0"
+    exit 0
+  fi
+fi
+exec /usr/local/bin/hermes "$@"
+SHIM
+    sudo chmod +x /usr/local/bin/hermes-ui
+    echo "[services] installed /usr/local/bin/hermes-ui"
+  fi
+  local _rc
+  for _rc in /root/.bashrc /home/Hamid/.bashrc; do
+    if [ -f "$_rc" ] && ! sudo grep -q "alias hermes=" "$_rc" 2>/dev/null; then
+      echo "alias hermes='/usr/local/bin/hermes-ui'" | sudo tee -a "$_rc" >/dev/null
+      echo "[services] alias hermes added to $_rc"
+    fi
+  done
   if [ ! -f /etc/systemd/system/hermes-tunnel.service ] || \
      grep -q "hermes-tunnel.sh" /etc/systemd/system/hermes-tunnel.service 2>/dev/null; then
     echo "[services] (re)writing hermes-tunnel.service (generic tunnel-run.sh)"
@@ -54,7 +105,7 @@ Wants=hermes-dashboard.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/tunnel-run.sh hermes http://127.0.0.1:9119 /root/.hermes/tunnel_url.txt
-Restart=on-failure
+Restart=always
 RestartSec=20
 
 [Install]
@@ -71,7 +122,7 @@ Wants=9router.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/tunnel-run.sh 9router http://127.0.0.1:9121 /root/.9router/tunnel_url.txt
-Restart=on-failure
+Restart=always
 RestartSec=20
 
 [Install]
@@ -105,7 +156,7 @@ Wants=network-online.target
 Type=simple
 Environment=HOME=/root
 ExecStart=/usr/local/bin/9router --no-browser --skip-update --log
-Restart=on-failure
+Restart=always
 RestartSec=10
 
 [Install]
@@ -156,7 +207,7 @@ Wants=network-online.target
 Type=simple
 Environment=HERMES_HOME=/root/.hermes
 ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m hermes_cli.main gateway run
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]

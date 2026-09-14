@@ -29,10 +29,23 @@ ssh -i ~/.ssh/linux-server root@100.70.83.2
 - fingerprint کلید host (تأیید در اتصال اول): `SHA256:6P2g9TXEf9e4kPQC7KslkPg+kbQVyP12mVA9pSdfaoc` (ED25519) — کلیدهای host پایدارند (در state ذخیره می‌شوند).
 - اگر خطای `REMOTE HOST IDENTIFICATION HAS CHANGED` دیدید (ورودی قدیمی از سرور قبل از بازسازی)، یک‌بار: `ssh-keygen -R 100.70.83.2`
 
-## داشبورد Hermes (با رمز)
-آدرس تونل هر بوت به تلگرام ارسال می‌شود (trycloudflare.com). داشبورد پشت **Basic Auth** است:
-- کاربر: `hamid` — رمز: secret `DASHBOARD_PASSWORD` (در اختیار شما)
-- زنجیره: tunnel → nginx :9119 (auth) → dashboard :9120 (loopback فقط)
+## داشبوردها (Hermes + 9Router) — همیشه در حال اجرا
+هر دو به‌عنوان سرویس systemd با `Restart=always` اجرا می‌شوند؛ تونل‌ها و نگهبان آدرس‌ها هم خودکار زنده نگه داشته می‌شوند.
+
+| داشبورد | آدرس روی سرور | آدرس عمومی |
+|---|---|---|
+| **Hermes Dashboard** | `http://localhost:9119` | تونل trycloudflare — با هر تغییر، ربات گزارش: `Hermes Dashboard : <آدرس جدید>` |
+| **9Router Terminal** | `http://localhost:20128/dashboard` | تونل trycloudflare — با هر تغییر، ربات گزارش: `9Router Terminal : <آدرس جدید>` |
+
+- ورود (هر دو): کاربر `hamid` + رمز secret `DASHBOARD_PASSWORD`.
+- زنجیره: tunnel → nginx (auth) → بک‌اند (`9120` برای Hermes، `20128` برای 9Router — فقط loopback).
+- دستور `hermes dashboard` روی سرور دیگر ارور `BACKEND_PORT_IN_USE` نمی‌دهد — چون سرویس در حال اجراست، همان آدرس‌ها را چاپ می‌کند (alias به `hermes-ui`).
+
+## ربات گزارش (Report Bot) — فقط ۳ نوع پیام، فقط هنگام تغییر واقعی
+- `سیستم hrgh3d قطع شد ❌` — وقتی هیچ رانری زنده نباشد یا state کهنه شود (watchdog هر ۱۰ دقیقه چک می‌کند و در نبودِ رانر، خودش رانر جدید روشن می‌کند).
+- `سیستم hrgh3d وصل شد ✅` — وقتی سیستم از وضعیت قطعی برگردد (جانشینی‌های عادی ۶ ساعته پیام ندارند).
+- `Hermes Dashboard : <آدرس>` / `9Router Terminal : <آدرس>` — وقتی آدرس تونل به هر دلیلی عوض شود.
+
 
 ## امنیتی (v6.13)
 - **Secretها وارد آرشیو state نمی‌شوند**: `TELEGRAM_BOT_TOKEN` و `REPORT_BOT_TOKEN` قبل از archive خالی می‌شوند و در هر بوت از GitHub Secrets تزریق می‌شود (`secrets_inject.sh`).
