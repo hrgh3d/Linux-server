@@ -24,21 +24,55 @@ mkdir -p "$STATE_DIR"
 
 log() { echo "[tunnel-watch $(date -u '+%T')] $*"; }
 
+CRED_CACHE="$STATE_DIR/.report-creds"
+read_creds() {  # چاپ "TOKEN<TAB>CHAT" یا خطای غیرصفر
+  local tok chat
+  tok=$(grep -m1 '^REPORT_BOT_TOKEN=.\{8,\}' "$ENVF" 2>/dev/null | cut -d= -f2-)
+  chat=$(grep -m1 '^NOTIFY_CHAT_ID=.' "$ENVF" 2>/dev/null | cut -d= -f2-)
+  if [ -n "${tok:-}" ] && [ -n "${chat:-}" ]; then
+    # v6.21: کش کن تا در «پنجره‌ی خالی‌سازی» save.sh هم در دسترس باشد
+    (umask 077; printf '%s\t%s' "$tok" "$chat" > "$CRED_CACHE") 2>/dev/null || true
+    printf '%s\t%s' "$tok" "$chat"; return 0
+  fi
+  if [ -s "$CRED_CACHE" ]; then
+    cat "$CRED_CACHE" 2>/dev/null; return 0
+  fi
+  return 1
+}
+
 tg_report() {  # $1 = text — فقط ربات گزارش، هیچ کانال دیگری
-  local TOK CHAT
-  TOK=$(grep -m1 '^REPORT_BOT_TOKEN=.\{8,\}' "$ENVF" 2>/dev/null | cut -d= -f2-)
-  CHAT=$(grep -m1 '^NOTIFY_CHAT_ID=.' "$ENVF" 2>/dev/null | cut -d= -f2-)
+  local TOK CHAT CREDS
+  # v6.21 (علت ریشه‌ای): save.sh هنگام ساخت آرشیو، REPORT_BOT_TOKEN را موقتاً
+  # در .env خالی می‌کند. اگر دقیقاً در همان لحظه آدرس تونل عوض شود، اینجا
+  # توکن «خالی» دیده می‌شد و اعلان برای همیشه از دست می‌رفت. حالا از کش
+  # استفاده می‌شود تا این پنجره‌ی رقابتی بی‌اثر شود.
+  CREDS=$(read_creds) || {
+    log "WARN: REPORT_BOT_TOKEN/NOTIFY_CHAT_ID unavailable (no cache) — announce deferred"
+    return 1
+  }
+  TOK="${CREDS%%$'\t'*}"; CHAT="${CREDS##*$'\t'}"
   if [ -z "${TOK:-}" ] || [ -z "${CHAT:-}" ]; then
-    log "WARN: REPORT_BOT_TOKEN/NOTIFY_CHAT_ID in $ENVF missing — announce skipped"
+    log "WARN: report creds empty — announce deferred"
     return 1
   fi
-  if curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TOK}/sendMessage" \
-       -d "chat_id=${CHAT}" -d "disable_web_page_preview=true" \
-       --data-urlencode "text=$1" >/dev/null 2>&1; then
-    log "announced via REPORT bot"
-  else
-    log "WARN: telegram send failed"
-  fi
+  # v6.21: تلاش چندباره + برگرداندن کد خطای واقعی.
+  # باگ قبلی: در شاخه‌ی شکست، return غیرصفر نداشت و مقدار بازگشتی تابع صفر
+  # (موفق) می‌شد؛ در نتیجه caller آدرس را «اعلام‌شده» ثبت می‌کرد و آن آدرس
+  # دیگر هرگز دوباره ارسال نمی‌شد (اعلان برای همیشه گم می‌شد).
+  local i code
+  for i in 1 2 3; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST \
+      "https://api.telegram.org/bot${TOK}/sendMessage" \
+      -d "chat_id=${CHAT}" -d "disable_web_page_preview=true" \
+      --data-urlencode "text=$1" 2>/dev/null)
+    if [ "$code" = "200" ]; then
+      log "announced via REPORT bot"
+      return 0
+    fi
+    log "WARN: telegram send failed (http=$code, try $i/3)"
+    sleep 3
+  done
+  return 1
 }
 
 # ---- v6.17: بکاپ کامل با هر گزارش آدرس --------------------------------------
@@ -48,11 +82,22 @@ tg_report() {  # $1 = text — فقط ربات گزارش، هیچ کانال د
 # (dedup سراسری ۱۵ دقیقه‌ای هم داخل خود send_backup.sh هست).
 BUNDLE_GUARD="$STATE_DIR/last-bundle-dispatch"
 BUNDLE_REPO="hrgh3d/Linux-server"
+TOKEN_CACHE="$STATE_DIR/.ptok"
 persist_token() {
   local pp tt
-  for pp in /proc/[0-9]*/environ; do
-    tt=$(tr '\0' '\n' < "$pp" 2>/dev/null | sed -n 's/^PERSIST_TOKEN=//p' | head -1)
+  # v6.21: کش محلی — اگر پروسه‌ی رانر موقتاً در دسترس نباشد باز هم کار کند
+  if [ -s "$TOKEN_CACHE" ]; then
+    tt=$(cat "$TOKEN_CACHE" 2>/dev/null)
     [ -n "$tt" ] && { printf '%s' "$tt"; return 0; }
+  fi
+  # v6.21: خطای «No such process» به /dev/null می‌رود (پروسه‌ها حین پیمایش
+  # از بین می‌روند و قبلاً ده‌ها خط نویز در ژورنال می‌ساخت)
+  for pp in /proc/[0-9]*/environ; do
+    tt=$( (tr '\0' '\n' < "$pp") 2>/dev/null | sed -n 's/^PERSIST_TOKEN=//p' | head -1)
+    if [ -n "$tt" ]; then
+      (umask 077; printf '%s' "$tt" > "$TOKEN_CACHE") 2>/dev/null || true
+      printf '%s' "$tt"; return 0
+    fi
   done
   return 1
 }
