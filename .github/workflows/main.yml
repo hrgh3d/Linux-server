@@ -277,6 +277,15 @@ jobs:
       - name: Start persistent apps (Hermes dashboard/tunnel/gateway)
         timeout-minutes: 30
         run: bash .github/scripts/start-services.sh
+
+      - name: 9router panel password guard (persist across runners)
+        # v6.20: رمز پنل 9router (bcrypt در settings.data داخل SQLite) در هر بوت
+        # با مقدار Secret هم‌ترازسازی می‌شود تا بین چرخش رانرها به 123456 برنگردد.
+        timeout-minutes: 5
+        env:
+          ROUTER_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
+        run: bash .github/scripts/router_password_guard.sh
+
       - name: Write persistence probe (new paths + second apt pkg)
         if: env.PROBE_ENABLED == 'true'
         run: |

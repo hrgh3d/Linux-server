@@ -41,6 +41,28 @@ def is_sqlite_file(path):
         return False
 
 
+def checkpoint(src_abs):
+    """v6.20: fold the WAL back into the main db file.
+
+    Databases in WAL mode keep recent commits in <db>-wal. payload.py excludes
+    -wal/-shm from the archive, so any commit that still lives only in the WAL
+    would be LOST if this db ever takes the raw-passthrough fallback path
+    below. Checkpointing first makes the main file self-contained. Best-effort:
+    a locked/busy db simply keeps its WAL and still gets the online-backup
+    treatment, which reads WAL content correctly.
+    """
+    try:
+        c = sqlite3.connect(src_abs, timeout=10)
+        try:
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            c.commit()
+        finally:
+            c.close()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def snapshot(src_abs, dst_abs):
     """Copy a consistent snapshot of src_abs into dst_abs and verify it."""
     os.makedirs(os.path.dirname(dst_abs) or ".", exist_ok=True)
@@ -94,6 +116,8 @@ def main():
             if is_sqlite_file(abs_path):
                 n_db += 1
                 dst = os.path.join(stage_dir, rel)
+                # v6.20: WAL -> main file, so even the raw fallback is complete
+                checkpoint(abs_path)
                 try:
                     snapshot(abs_path, dst)
                 except Exception as e:  # noqa: BLE001
