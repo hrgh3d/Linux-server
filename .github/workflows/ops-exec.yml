@@ -30,6 +30,20 @@ jobs:
           SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/kh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=15)
           for i in 1 2 3 4 5; do sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'echo SSH_OK' 2>/dev/null | grep -q SSH_OK && break || { echo "wait ssh ($i)"; sleep 5; }; done
           echo "$CMD_B64" | base64 -d > /tmp/remote.sh
+          # v6.19: اجازه می‌دهد اسکریپت از placeholder استفاده کند و مقدار واقعیِ
+          # secret فقط روی runner جایگزین شود — نه در cmd_b64 عمومی، نه در لاگ
+          # (مقدار با add-mask ماسک شده است).
+          python3 - "$SSH_PASS" <<'PY'
+import sys, io
+p = sys.argv[1]
+with io.open('/tmp/remote.sh', 'r', encoding='utf-8', errors='surrogateescape') as fh:
+    s = fh.read()
+n = s.count('__HAMID_PASSWORD__')
+s = s.replace('__HAMID_PASSWORD__', p)
+with io.open('/tmp/remote.sh', 'w', encoding='utf-8', errors='surrogateescape') as fh:
+    fh.write(s)
+print("[ops-exec] secret placeholder substitutions: %d" % n)
+PY
           sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'bash -s' < /tmp/remote.sh 2>&1 | tail -120
           echo "=== OPS-EXEC DONE ==="
       - name: "cleanup: leave tailnet (no ghost nodes)"
