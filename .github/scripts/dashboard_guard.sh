@@ -102,21 +102,19 @@ NGINX
 ln -sf "$SITE" /etc/nginx/sites-enabled/hermes-dash
 log "nginx site configured: :${DASH_PORT} (auth) -> :${BACK_PORT}"
 
-# ---- v6.14: گارد داشبورد 9router (9121 auth -> 20128 loopback) -------------
-# همان htpasswd (hamid + DASHBOARD_PASSWORD). تونل عمومی 9router فقط به 9121
-# وصل می‌شود → داشبورد 9router هرگز بدون رمز عمومی نمی‌شود.
+# ---- v6.18: پراکسی داشبورد 9router (9121 -> 20128 loopback) — بدون Basic-Auth
+# به درخواست کاربر (2026-09-14): prompt اولِ nginx (username/password) حذف شد.
+# محافظت = لاگین داخلی خودِ اپ 9router + URL تصادفی تونل که فقط به report bot
+# اعلام می‌شود. htpasswd و auth_basic فقط برای hermes-dash باقی می‌ماند.
 R_DASH_PORT=9121
 R_BACK_PORT=20128
 SITE_R=/etc/nginx/sites-available/9router-dash
 cat > "$SITE_R" <<NGINX
-# 9router dashboard behind Basic Auth (v6.14)
+# 9router dashboard — NO nginx basic auth (v6.18, by user request); app login only
 server {
     listen 127.0.0.1:${R_DASH_PORT};
     listen [::1]:${R_DASH_PORT};
     server_name _;
-
-    auth_basic "9router Dashboard";
-    auth_basic_user_file ${HTPASSWD};
 
     location / {
         proxy_pass http://127.0.0.1:${R_BACK_PORT};
@@ -132,7 +130,7 @@ server {
 }
 NGINX
 ln -sf "$SITE_R" /etc/nginx/sites-enabled/9router-dash
-log "nginx site configured: :${R_DASH_PORT} (auth) -> :${R_BACK_PORT} (9router)"
+log "nginx site configured: :${R_DASH_PORT} -> :${R_BACK_PORT} (9router, no basic-auth; app login only)"
 
 # ---- 4) patch یونیت داشبورد 9119 -> 9120 (idempotent) ----------------------
 for U in /etc/systemd/system/hermes-dashboard.service /root/hermes-dashboard.service; do
