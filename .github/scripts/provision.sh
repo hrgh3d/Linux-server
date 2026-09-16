@@ -195,6 +195,34 @@ UNIT
   $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
   $SUDO systemctl enable openclaw-gateway.service >/dev/null 2>&1 || true
   note "openclaw: service unit written + enabled"
+
+  # v6.28: اپ‌های موبایل/دسکتاپ برای pairing حتماً wss:// معتبر می‌خواهند و با
+  # http روی IP تیل‌نت کد اتصال صادر نمی‌شود. Tailscale Serve یک گواهی واقعی
+  # روی نام MagicDNS می‌دهد. نام گره ثابت است (هویت در /var/lib/tailscale حفظ
+  # می‌شود) پس آدرس بین رانرها عوض نمی‌شود و کدهای قبلی معتبر می‌مانند.
+  local _dn
+  _dn=$(tailscale status --json 2>/dev/null | python3 -c "
+import sys,json
+try: print(json.load(sys.stdin).get('Self',{}).get('DNSName','').rstrip('.'))
+except Exception: pass
+" 2>/dev/null)
+  if [ -n "$_dn" ]; then
+    if ! tailscale serve status 2>/dev/null | grep -q '18789'; then
+      timeout 90 tailscale serve --bg --https=443 http://127.0.0.1:18789 >/dev/null 2>&1 \
+        && note "openclaw: tailscale serve enabled (https://$_dn)" \
+        || note "openclaw: tailscale serve FAILED (pairing may need manual serve)"
+    else
+      note "openclaw: tailscale serve already active"
+    fi
+    timeout 90 tailscale cert "$_dn" >/dev/null 2>&1 || true
+    # آدرس pairing باید در کانفیگ بماند وگرنه openclaw qr خطا می‌دهد
+    if [ -x /usr/local/bin/openclaw ]; then
+      timeout 60 /usr/local/bin/openclaw config set \
+        plugins.entries.device-pair.config.publicUrl "wss://$_dn" >/dev/null 2>&1 || true
+    fi
+  else
+    note "openclaw: no tailscale DNS name — serve skipped"
+  fi
 }
 
 provision_hermes() {
