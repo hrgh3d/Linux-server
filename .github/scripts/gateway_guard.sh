@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gateway_guard.sh — v6.27
+# gateway_guard.sh — v6.29
 # نگهبان دائمی «اتصال واقعی» ربات تلگرام Hermes.
 #
 # چرا لازم است؟ (رخداد ۱۶ سپتامبر ۲۰۲۶ — زنجیرهٔ کامل علت)
@@ -126,11 +126,42 @@ do_restart() {
 
 # save.sh در حال آرشیوگیری، توکن را موقتاً خالی کرده است؟
 # اگر sentinel تازه باشد دخالت نکن؛ اگر کهنه باشد یعنی آن ران مرده → ترمیم کن.
+#
+# v6.29 — رفع باگ «standing by ابدی»: save.sh هر ۵ دقیقه اجرا می‌شود و sentinel
+# را دوباره تازه می‌کند. با تکیه بر سن sentinel به‌تنهایی، نگهبان می‌توانست
+# بی‌نهایت منتظر بماند و توکنِ خالی ساعت‌ها دست‌نخورده بماند (۱۶ سپتامبر: شش
+# بار پشت‌سرهم «standing by» در ۲۵ دقیقه، در حالی که هیچ save.sh زنده نبود).
+# حالا دو شرط دیگر هم لازم است:
+#   ۱) واقعاً پروسهٔ save.sh/tar در حال اجرا باشد، و
+#   ۲) از اولین باری که توکن را خالی دیدیم بیش از سقف مطلق نگذشته باشد.
 in_backup_window() {
   local s=/run/hermes-env-blanked
-  [ -f "$s" ] || return 1
-  local age=$(( $(date +%s) - $(stat -c %Y "$s" 2>/dev/null || echo 0) ))
-  [ "$age" -lt "${GUARD_BLANK_GRACE_SEC:-420}" ]
+  local seen=/var/lib/hermes-guard/blank-first-seen
+  local now; now=$(date +%s)
+
+  if [ ! -f "$s" ]; then rm -f "$seen" 2>/dev/null; return 1; fi
+
+  local age=$(( now - $(stat -c %Y "$s" 2>/dev/null || echo 0) ))
+  if [ "$age" -ge "${GUARD_BLANK_GRACE_SEC:-420}" ]; then
+    rm -f "$seen" 2>/dev/null; return 1
+  fi
+
+  # sentinel تازه است، ولی آیا آرشیوگیری واقعاً در جریان است؟
+  if ! pgrep -f 'save\.sh|tar -c .*state\.tar' >/dev/null 2>&1; then
+    log "sentinel fresh but no save.sh/tar running — treating as stale"
+    rm -f "$s" "$seen" 2>/dev/null
+    return 1
+  fi
+
+  # سقف مطلق: از اولین مشاهدهٔ توکن خالی بیشتر از این صبر نمی‌کنیم
+  [ -f "$seen" ] || printf '%s' "$now" > "$seen"
+  local waited=$(( now - $(cat "$seen" 2>/dev/null || echo "$now") ))
+  if [ "$waited" -ge "${GUARD_BLANK_MAX_WAIT_SEC:-900}" ]; then
+    log "blank token persisted ${waited}s across archive windows — repairing anyway"
+    rm -f "$seen" 2>/dev/null
+    return 1
+  fi
+  return 0
 }
 
 # v6.27: REPORT_BOT_TOKEN هم در همان پنجرهٔ blank شدن save.sh قربانی می‌شود.
