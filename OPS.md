@@ -93,7 +93,24 @@ openclaw config set --json gateway.nodes.pairing.autoApproveCidrs \
 ```
 `provision.sh` از v6.31 همهٔ این‌ها را در هر بوت خودش اعمال می‌کند.
 
+### داشبورد هر ۱۰ دقیقه می‌میرد (سرویس active است ولی HTTPS قطع)
+علت: هر اجرای ops-exec/واچ‌داگ `tailscaled` را Stop/Start می‌کند و حالت داخلی
+OpenClaw (`gateway.tailscale.mode=serve`) مسیر ingress را فقط in-process نگه
+می‌دارد، پس برنمی‌گردد. درمان (v6.34):
+```bash
+openclaw config set gateway.tailscale.mode off
+systemctl restart openclaw-gateway
+tailscale serve --bg --https=443 http://127.0.0.1:18789   # در /var/lib/tailscale می‌ماند
+```
+نگهبان `openclaw-serve-guard.timer` هر ۶۰ ثانیه آدرس HTTPS را probe می‌کند و
+در صورت قطعی مسیر Serve را بازمی‌سازد. لاگ: `/var/log/openclaw-serve-guard.log`.
+
+> ⚠️ `tailscale serve status` را سیگنال سلامت نگیرید — در حالت داخلی OpenClaw
+> حتی وقتی داشبورد سالم است «No serve config» می‌گوید و باعث ری‌استارت الکی
+> می‌شود. سیگنال درست، `curl` واقعی به آدرس HTTPS است.
+
 ### ماندگاری
 دستگاه‌های paired در `/root/.openclaw/state/openclaw.sqlite` ذخیره می‌شوند که
 در آرشیو state است و `sqlite_stage.py` نسخهٔ سالم از آن می‌گیرد ⇒ بعد از تعویض
-رانر نیازی به pairing مجدد نیست.
+رانر نیازی به pairing مجدد نیست. مسیر Serve هم در `/var/lib/tailscale` (روت
+persist) ذخیره می‌شود، پس آدرس داشبورد بین رانرها ثابت می‌ماند.
