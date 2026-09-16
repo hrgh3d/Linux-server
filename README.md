@@ -1,6 +1,8 @@
 # Linux-server
 
-سرور Ubuntu پایدار روی GitHub Actions: **داده ماندگار، هویت Tailscale ثابت (IP ثابت)، SSH ساده با رمز (کلید اختیاری)، داشبورد رمزدار**. معماری فعلی: **v6.13**.
+سرور Ubuntu پایدار روی GitHub Actions: **داده ماندگار، هویت Tailscale ثابت (IP ثابت)، SSH ساده با رمز (کلید اختیاری)، داشبورد رمزدار**. معماری فعلی: **v6.22** (آخرین به‌روزرسانی: ۲۰۲۶-۰۹-۱۶).
+
+> این مخزن **عمومی** است تا دقایق GitHub Actions نامحدود باشد. هیچ رازی داخل آن نیست — همه از GitHub Secrets تزریق می‌شوند.
 
 ## چطور کار می‌کند
 - هر Run یک runner موقت است (~۵.۸ ساعت عمر). ۲۰ دقیقه قبل از پایان، خودِ Run، Run جانشین را dispatch می‌کند (زنجیره؛ قطعی هر دست‌به‌دست‌سازی = فقط چند دقیقه بوت).
@@ -37,8 +39,9 @@ ssh -i ~/.ssh/linux-server root@100.70.83.2
 | **Hermes Dashboard** | `http://localhost:9119` | تونل trycloudflare — با هر تغییر، ربات گزارش: `Hermes Dashboard : <آدرس جدید>` |
 | **9Router Terminal** | `http://localhost:20128/dashboard` | تونل trycloudflare — با هر تغییر، ربات گزارش: `9Router Terminal : <آدرس جدید>` |
 
-- ورود (هر دو): کاربر `hamid` + رمز secret `DASHBOARD_PASSWORD`.
-- زنجیره: tunnel → nginx (auth) → بک‌اند (`9120` برای Hermes، `20128` برای 9Router — فقط loopback).
+- **ورود Hermes**: گیت nginx با کاربر `hamid` + رمز secret `DASHBOARD_PASSWORD`.
+- **ورود 9Router** (از v6.18): گیت nginx **حذف شده** — فقط رمز خودِ پنل، برابر با secret `HAMID_PASSWORD`. از v6.20 این رمز در هر بوت تثبیت می‌شود و بین رانرها به پیش‌فرض برنمی‌گردد.
+- زنجیره: tunnel → nginx (برای Hermes با auth، برای 9Router بدون auth) → بک‌اند (`9120` برای Hermes، `20128` برای 9Router — فقط loopback).
 - دستور `hermes dashboard` روی سرور دیگر ارور `BACKEND_PORT_IN_USE` نمی‌دهد — چون سرویس در حال اجراست، همان آدرس‌ها را چاپ می‌کند (alias به `hermes-ui`).
 
 ## ربات گزارش (Report Bot) — فقط ۳ نوع پیام، فقط هنگام تغییر واقعی
@@ -47,7 +50,15 @@ ssh -i ~/.ssh/linux-server root@100.70.83.2
 - `Hermes Dashboard : <آدرس>` / `9Router Terminal : <آدرس>` — وقتی آدرس تونل به هر دلیلی عوض شود.
 
 
-## امنیتی (v6.13)
+## تغییرات مهم اخیر (v6.17 → v6.22)
+- **v6.22** — تشخیص قابل‌اتکای نصب خراب Hermes: تابع اعتبارسنجی حالا واقعاً مفسر venv را اجرا و وجود درخت کد را بررسی می‌کند (قبلاً نصبِ کاملاً پاک‌شده «سالم» تشخیص داده می‌شد).
+- **v6.21** — رفع گم‌شدن اعلان آدرس تونل: `tg_report` در شکست `return 1` می‌دهد (قبلاً `0` برمی‌گرداند و آدرس اشتباهاً «اعلام‌شده» ثبت می‌شد) + کش اعتبارنامه‌ی ربات برای پنجره‌ی خالی‌سازی `save.sh`.
+- **v6.20** — تثبیت دائمی رمز پنل 9router (`router_password_guard.sh`) + `wal_checkpoint` روی همه‌ی دیتابیس‌های SQLite پیش از آرشیو (رفع نشتی WAL که تغییرات را از بکاپ حذف می‌کرد).
+- **v6.19** — پشتیبانی `ops-exec` از placeholder `__HAMID_PASSWORD__` (راز فقط روی رانر جایگزین می‌شود، نه در ورودی/لاگ عمومی).
+- **v6.18** — حذف گیت Basic-Auth از داشبورد 9router (گیت Hermes دست‌نخورده).
+- **v6.17** — ارسال باندل کامل بازیابی با هر گزارش.
+
+## امنیتی (v6.13 → v6.21)
 - **Secretها وارد آرشیو state نمی‌شوند**: `TELEGRAM_BOT_TOKEN` و `REPORT_BOT_TOKEN` قبل از archive خالی می‌شوند و در هر بوت از GitHub Secrets تزریق می‌شود (`secrets_inject.sh`).
 - **دو ربات تلگرام جدا**: ربات Hermes Gateway (`TELEGRAM_BOT_TOKEN`) فقط برای خودِ Hermes؛ ربات گزارش سیستم (`REPORT_BOT_TOKEN`) برای watchdog/اعلان‌ها/آدرس تونل داشبورد.
 - آرشیو state فقط **hash یک‌طرفه** رمز داشبورد را می‌بیند (htpasswd SHA-512؛ خود رمز فقط در GitHub Secrets است).
@@ -78,8 +89,11 @@ ssh -i ~/.ssh/linux-server root@100.70.83.2
     ssh_configure.sh          # sshd + merge کلید ثابت (بدون حذف کلیدهای مجاز)
     secrets_inject.sh         # تزریق secretهای خارج‌شده از آرشیو (v6.10)
     dashboard_guard.sh        # nginx basic-auth جلوی داشبورد (v6.10)
-    provision.sh              # نصب خودکار 9router/Hermes/cloudflared در صورت نبود
+    provision.sh              # نصب خودکار 9router/Hermes/cloudflared در صورت نبود (v6.22: تشخیص نصب خراب)
     start-services.sh         # استارت سرویس‌های ماندگار
+    router_password_guard.sh  # تثبیت رمز پنل 9router در هر بوت (v6.20)
+    tunnel-watch.sh           # پایش آدرس تونل‌ها + اعلام از راه ربات گزارش (v6.21)
+    send_backup.sh            # ارسال باندل کامل بازیابی به تلگرام (v6.17)
     server_report.sh          # گزارش بوت (Step Summary)
     notify.sh                 # اعلان failure (webhook اختیاری + marker)
   config/sshd_config          # کانفیگ ثابت sshd
