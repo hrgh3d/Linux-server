@@ -316,6 +316,45 @@ else
   echo "[services] gateway_guard.sh not found — guard skipped"
 fi
 
+# --- v6.32: نگهبان Tailscale Serve برای OpenClaw ---
+# درس ۱۶ سپتامبر (بعدازظهر): با gateway.tailscale.mode=serve، خودِ OpenClaw
+# مسیر Serve را هنگام استارت claim می‌کند. اگر tailscaled ری‌استارت شود آن
+# claim از بین می‌رود و OpenClaw دوباره نمی‌گیردش؛ فقط لاگ می‌کند
+# "serve route claim exited ... until the Gateway restarts".
+# نتیجه: سرویس active، لوپ‌بک ۲۰۰، ولی داشبورد HTTPS و اپ موبایل قطع.
+if [ -f "$SCRIPT_DIR/openclaw_serve_guard.sh" ]; then
+  sudo install -m 0755 "$SCRIPT_DIR/openclaw_serve_guard.sh" \
+    /usr/local/bin/openclaw_serve_guard.sh
+  sudo tee /etc/systemd/system/openclaw-serve-guard.service >/dev/null <<'UNIT'
+[Unit]
+Description=OpenClaw Tailscale Serve ingress guard (re-claim after tailscaled restart)
+After=network-online.target tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/openclaw_serve_guard.sh
+UNIT
+  sudo tee /etc/systemd/system/openclaw-serve-guard.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Run the OpenClaw Serve ingress guard every 60s
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=10s
+Unit=openclaw-serve-guard.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+  sudo systemctl daemon-reload >/dev/null 2>&1 || true
+  sudo systemctl enable --now openclaw-serve-guard.timer >/dev/null 2>&1 \
+    && echo "[services] openclaw-serve-guard.timer: enabled (60s)" \
+    || echo "[services] WARNING: could not enable openclaw-serve-guard.timer"
+else
+  echo "[services] openclaw_serve_guard.sh not found — serve guard skipped"
+fi
+
 # --- راستی‌آزمایی ---
 echo "[services] status:"
 sudo systemctl is-active hermes-dashboard.service hermes-tunnel.service 2>/dev/null || true
