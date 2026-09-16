@@ -146,32 +146,33 @@ EXCL=(
   --exclude=./root/.9router/logs        --exclude=root/.9router/logs
   --exclude=*/node_modules              --exclude=*/__pycache__
   --exclude=*.sock                      --exclude=*.pid
+  # آرشیوهای نجات/بکاپ قبلی داخل /root — خودشان بکاپ‌اند، نباید تودرتو بیایند
+  --exclude=./root/*.tar.gz             --exclude=root/*.tar.gz
+  --exclude=./root/hermes-rescue-*      --exclude=root/hermes-rescue-*
+  --exclude=./root/hermes-pre-update-keep --exclude=root/hermes-pre-update-keep
+  --exclude=*/\.git/objects
 )
 
-# اندازه‌گیری «بعد از کسر مسیرهای استثناشده» تا تخمین بودجه واقع‌بینانه باشد
-want_kb() {
-  local p="$1" k=0 sub
-  [ -e "$p" ] || { echo 0; return; }
-  k=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
-  for sub in /root/.openclaw/cache /root/.openclaw/tmp /root/.openclaw/media \
-             /root/.npm /root/.cache /root/.9router/logs; do
-    case "$sub" in "$p"/*|"$p")
-      [ -e "$sub" ] && k=$(( k - $(du -sk "$sub" 2>/dev/null | awk '{print $1}') )) ;;
-    esac
-  done
-  [ "$k" -lt 0 ] && k=0
-  echo "$k"
-}
-
+# v6.35.1 — اول فشرده کن، بعد تصمیم بگیر.
+# تخمین قبلی بر پایهٔ `du` (حجم خام) بود، ولی این فایل‌ها ۱۰ تا ۲۰ برابر فشرده
+# می‌شوند. نتیجه: app-code/bin-scripts/home-root با «حجم زیاد» رد می‌شدند در
+# حالی که کل باندل فقط ۲.۳MB از بودجهٔ ۳۶MB را پر کرده بود. حالا tar ساخته
+# می‌شود و اندازهٔ *واقعی* سنجیده می‌شود؛ اگر از بودجه رد شد حذفش می‌کنیم.
 try_tar() {
-  out="$B/$1"; shift
-  want=0
-  for p in "$@"; do want=$((want + $(want_kb "$p"))) ; done
-  if [ "$((total + want*1024))" -gt "$BUDGET" ]; then add "SKIP $1 (حجم زیاد: ${want}KB)"; return 0; fi
-  tar -czf "$out" --ignore-failed-read "${EXCL[@]}" "$@" 2>/dev/null || return 0
-  [ -s "$out" ] || return 0
-  total=$((total + $(stat -c%s "$out")))
-  add "$1 ($(du -h "$out" | cut -f1))"
+  out="$B/$1"; name="$1"; shift
+  have=0
+  for p in "$@"; do [ -e "$p" ] && have=1; done
+  [ "$have" = "1" ] || { add "SKIP $name (مسیری وجود ندارد)"; return 0; }
+  tar -czf "$out" --ignore-failed-read "${EXCL[@]}" "$@" 2>/dev/null
+  [ -s "$out" ] || { add "SKIP $name (خالی)"; rm -f "$out"; return 0; }
+  sz=$(stat -c%s "$out")
+  if [ "$((total + sz))" -gt "$BUDGET" ]; then
+    add "SKIP $name (بودجه پر شد: $((sz/1024))KB فشرده)"
+    rm -f "$out"
+    return 0
+  fi
+  total=$((total + sz))
+  add "$name ($(du -h "$out" | cut -f1))"
 }
 
 # v6.35: دیتابیس‌های زندهٔ sqlite را با VACUUM INTO می‌گیریم تا torn نباشند.
@@ -204,14 +205,20 @@ fi
 snap_sqlite /root/.openclaw/state/openclaw.sqlite openclaw-state.sqlite
 snap_sqlite /root/.9router/db/data.sqlite 9router-data.sqlite
 
-try_tar app-code.tar.gz /opt/9router /root/9router /opt/hermes /root/.hermes /var/www
-try_tar services.tar.gz /etc/nginx /etc/cron.d /etc/systemd/system /etc/systemd/user
-try_tar bin-scripts.tar.gz /usr/local/bin /usr/local/sbin
-# v6.35: هویت گره تیل‌اسکیل + مسیر ماندگار Serve اینجاست. بدون آن، بعد از
-# بازیابی آدرس MagicDNS عوض می‌شود و همهٔ setup codeها و لینک‌ها باطل می‌شوند.
+# v6.35.1 — ترتیب بر اساس بحرانی بودن: اگر روزی بودجه پر شد، چیزهای
+# غیرقابل‌بازسازی باید از قبل داخل باندل باشند.
+# ۱) هویت گره تیل‌اسکیل + مسیر ماندگار Serve. بدون آن، بعد از بازیابی آدرس
+#    MagicDNS عوض می‌شود و همهٔ setup codeها و لینک داشبورد باطل می‌شوند.
 try_tar tailscale-state.tar.gz /var/lib/tailscale
-# v6.35: کل کانفیگ/سشن OpenClaw (منهای cache/tmp/media که بالا exclude شده‌اند)
+# ۲) کانفیگ/سشن OpenClaw (منهای cache/tmp/media)
 try_tar openclaw.tar.gz /root/.openclaw
+# ۳) یونیت‌ها و کانفیگ سرویس‌ها (system + user برای hermes)
+try_tar services.tar.gz /etc/nginx /etc/cron.d /etc/systemd/system /etc/systemd/user
+# ۴) همهٔ نگهبان‌ها و اسکریپت‌های عملیاتی
+try_tar bin-scripts.tar.gz /usr/local/bin /usr/local/sbin
+# ۵) کد و دادهٔ اپ‌ها
+try_tar app-code.tar.gz /opt/9router /root/9router /opt/hermes /root/.hermes /var/www
+# ۶) باقی /root به‌عنوان تور ایمنی
 try_tar home-root.tar.gz /root
 {
   echo "host: $(hostname)"; echo "date: $(date -u +%FT%TZ)"; echo "uptime: $(uptime -p 2>/dev/null)"
