@@ -84,7 +84,7 @@ echo "[backup] recovery keys: $(grep -c '=' "$BK/recovery/secrets.env") مورد
 # ---------- ۱) بکاپ سرور (روی سرور hrgh3d) ----------
 sudo apt-get update -qq >/dev/null 2>&1 || true
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o DPkg::Lock::Timeout=120 \
-  curl jq sshpass openssh-client ca-certificates >/dev/null 2>&1 || true
+  curl jq sshpass openssh-client ca-certificates sqlite3 >/dev/null 2>&1 || true
 
 if [ -n "${TAILSCALE_AUTH_KEY:-}" ] && ! tailscale status >/dev/null 2>&1; then
   curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1 || true
@@ -318,12 +318,38 @@ verify_bundle() {
     printf '%s\n' "$list" | grep -q "$crit" || { echo "[verify] MISSING $crit"; missing=$((missing+1)); }
   done
   ok=$(printf '%s\n' "$list" | grep -c 'tar.gz\|sqlite')
-  if [ "$missing" -eq 0 ]; then
-    VERDICT="✅ کامل — $ok جزء، همهٔ موارد بحرانی حاضر"
-  else
-    VERDICT="⚠️ ناقص — $missing جزء بحرانی غایب است"
+
+  # v6.35.3 — بازرسی عمیق: فقط «فایل هست» کافی نیست، محتوا هم باید سالم باشد.
+  local deep="" tmpd
+  tmpd=$(mktemp -d)
+  if tar -xzf "$f" -C "$tmpd" ./sqlite/openclaw-state.sqlite 2>/dev/null \
+     || tar -xzf "$f" -C "$tmpd" sqlite/openclaw-state.sqlite 2>/dev/null; then
+    local db; db=$(find "$tmpd" -name openclaw-state.sqlite | head -1)
+    if [ -n "$db" ] && command -v sqlite3 >/dev/null 2>&1; then
+      local ic pd
+      ic=$(sqlite3 "$db" "pragma integrity_check" 2>/dev/null | head -1)
+      pd=$(sqlite3 "$db" "select count(*) from device_pairing_paired" 2>/dev/null)
+      [ "$ic" = "ok" ] && deep="${deep} db:ok" || { deep="${deep} db:CORRUPT"; missing=$((missing+1)); }
+      [ -n "$pd" ] && deep="${deep} paired:${pd}"
+      echo "[verify] sqlite integrity=$ic paired_devices=${pd:-?}"
+    fi
   fi
-  echo "[verify] members=$ok missing=$missing"
+  # هویت گره تیل‌اسکیل بدون tailscaled.state بی‌فایده است
+  if tar -xzOf "$f" ./tailscale-state.tar.gz 2>/dev/null | tar -tz 2>/dev/null | grep -q tailscaled.state \
+     || tar -xzOf "$f" tailscale-state.tar.gz 2>/dev/null | tar -tz 2>/dev/null | grep -q tailscaled.state; then
+    deep="${deep} tsid:ok"
+  else
+    echo "[verify] WARN tailscaled.state not found inside tailscale-state.tar.gz"
+    deep="${deep} tsid:MISSING"; missing=$((missing+1))
+  fi
+  rm -rf "$tmpd"
+
+  if [ "$missing" -eq 0 ]; then
+    VERDICT="✅ کامل — $ok جزء،${deep}"
+  else
+    VERDICT="⚠️ ناقص — $missing ایراد بحرانی،${deep}"
+  fi
+  echo "[verify] members=$ok missing=$missing deep=${deep}"
   return 0
 }
 verify_bundle /tmp/final-backup.tar.gz
