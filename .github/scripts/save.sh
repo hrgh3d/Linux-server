@@ -196,6 +196,14 @@ ENV_BACKUP=""
 if [ -f "$TS_ENV" ] && grep -qE '^(TELEGRAM_BOT_TOKEN|REPORT_BOT_TOKEN)=.{4,}' "$TS_ENV" 2>/dev/null; then
   ENV_BACKUP="/tmp/.ts-env.keep.$$"
   cp -p "$TS_ENV" "$ENV_BACKUP"
+  # v6.25: نسخهٔ پایدار + sentinel، چون trap در برابر SIGKILL/مرگ رانر بی‌اثر است.
+  # اگر ران وسط همین پنجره کشته شود، .env با توکنِ خالی روی دیسک می‌ماند و
+  # گیت‌وی بعدی «No messaging platforms enabled» می‌شود (رخداد ۱۶ سپتامبر).
+  # gateway_guard.sh این دو فایل را می‌بیند و ترمیم می‌کند.
+  sudo mkdir -p /var/lib/hermes-guard 2>/dev/null || true
+  sudo cp -p "$TS_ENV" /var/lib/hermes-guard/env.preblank 2>/dev/null || true
+  sudo chmod 600 /var/lib/hermes-guard/env.preblank 2>/dev/null || true
+  sudo touch /run/hermes-env-blanked 2>/dev/null || true
   sed -i -e 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=/' -e 's/^REPORT_BOT_TOKEN=.*/REPORT_BOT_TOKEN=/' "$TS_ENV"
   log "secret: TELEGRAM_BOT_TOKEN/REPORT_BOT_TOKEN blanked for archive (restored after tar)"
 fi
@@ -205,8 +213,9 @@ restore_env_secret() {
     rm -f "$ENV_BACKUP"
     log "secret: live .env restored after tar"
   fi
+  sudo rm -f /run/hermes-env-blanked 2>/dev/null || true
 }
-trap 'restore_env_secret' EXIT
+trap 'restore_env_secret' EXIT INT TERM HUP
 
 phase "creating archive..."
 V=""; [ -n "${TAR_VERBOSE:-}" ] && V="-v"

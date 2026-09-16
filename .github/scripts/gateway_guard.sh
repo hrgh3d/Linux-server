@@ -1,23 +1,35 @@
 #!/usr/bin/env bash
-# gateway_guard.sh — v6.24
+# gateway_guard.sh — v6.25
 # نگهبان دائمی «اتصال واقعی» ربات تلگرام Hermes.
 #
-# چرا لازم است؟
-#   ۱۶ سپتامبر ۲۰۲۶: بعد از نصب مجدد Hermes، گیت‌وی در حالی بالا آمد که
-#   TELEGRAM_BOT_TOKEN هنوز در .env تزریق نشده بود. نتیجه:
+# چرا لازم است؟ (رخداد ۱۶ سپتامبر ۲۰۲۶ — زنجیرهٔ کامل علت)
+#   save.sh عمداً TELEGRAM_BOT_TOKEN را قبل از tar خالی می‌کند تا توکن وارد
+#   آرشیو state نشود، و بلافاصله بعد از tar برش می‌گرداند. اگر آن ران در همان
+#   پنجره کشته شود (کرش/لغو/پایان عمر رانر)، توکن برای همیشه خالی می‌ماند.
+#   گیت‌وی بعدی با .env بی‌توکن بالا می‌آید و لاگ می‌کند:
 #       WARNING gateway.run: No messaging platforms enabled.
-#   پروسه «سالم» بود (systemctl is-active = active، pgrep = OK، بدون کرش)
-#   ولی هیچ پلتفرم پیام‌رسانی لود نشده بود → ربات کاملاً کر بود.
-#   توکن چند دقیقه بعد توسط self-heal برگشت، اما گیت‌وی ری‌استارت نشد،
-#   پس تا ساعت‌ها بی‌صدا ماند. هیچ health-check موجودی این را نمی‌گرفت.
+#   پروسه کاملاً سالم است (is-active=active، pgrep=OK، NRestarts=0، بدون کرش)
+#   ولی هیچ پلتفرمی لود نشده → ربات کر است. هیچ health-check موجودی این حالت
+#   را نمی‌گرفت؛ همه‌چیز «سبزِ گمراه‌کننده» بود.
 #
-# این نگهبان فقط و فقط «اتصال مؤثر» را می‌سنجد، نه زنده‌بودن پروسه:
-#   * توکن در .env خالی است؟ → از بکاپ‌ها بازیابی کن.
+# این نگهبان فقط «اتصال مؤثر» را می‌سنجد، نه زنده‌بودن پروسه:
+#   * توکن در .env خالی است؟ → از بکاپ‌ها بازیابی کن و ری‌استارت بده.
 #   * گیت‌وی بالاست ولی از زمان آخرین استارتش خط
 #     "Connected to Telegram (polling mode)" ندیده‌ایم؟ → ری‌استارت.
 #   * هرگز به فایل‌های سشن (~/.hermes/sessions) دست نمی‌زند.
+#   * flock: هرگز دو نمونه هم‌زمان اجرا نمی‌شود.
+#   * پنجرهٔ blanking خودِ save.sh را می‌شناسد و در آن دخالت نمی‌کند
+#     (sentinel: /run/hermes-env-blanked)، مگر اینکه کهنه شده باشد → یعنی
+#     save.sh واقعاً مرده و باید ترمیم کرد.
 #   * کول‌داون دارد تا حلقهٔ ری‌استارت نسازد.
 set -uo pipefail
+
+# --- قفل: فقط یک نمونه در هر لحظه ---
+LOCK=/run/hermes-gateway-guard.lock
+if [ -z "${_GUARD_LOCKED:-}" ]; then
+  export _GUARD_LOCKED=1
+  exec flock -n "$LOCK" "$0" "$@" || exit 0
+fi
 
 HERMES_HOME="${HERMES_HOME:-/root/.hermes}"
 ENV_FILE="$HERMES_HOME/.env"
@@ -44,7 +56,8 @@ read_token() {
 restore_token() {
   # منابع بازیابی به ترتیب اولویت: بکاپ قبل از آپدیت، بکاپ‌های خودکار، متغیر محیطی CI
   local t=""
-  for src in /root/hermes-pre-update-keep/.env /root/hermes-env-broken-*.bak; do
+  # اولویت با نسخه‌ای است که save.sh دقیقاً قبل از blank کردن نگه داشته
+  for src in /var/lib/hermes-guard/env.preblank /root/hermes-pre-update-keep/.env /root/hermes-env-broken-*.bak; do
     [ -f "$src" ] || continue
     t=$(grep -m1 '^TELEGRAM_BOT_TOKEN=' "$src" 2>/dev/null | cut -d= -f2- | tr -d '"'"'"' \r')
     [ -n "$t" ] && { log "token restored from $src"; break; }
@@ -111,11 +124,24 @@ do_restart() {
   }
 }
 
+# save.sh در حال آرشیوگیری، توکن را موقتاً خالی کرده است؟
+# اگر sentinel تازه باشد دخالت نکن؛ اگر کهنه باشد یعنی آن ران مرده → ترمیم کن.
+in_backup_window() {
+  local s=/run/hermes-env-blanked
+  [ -f "$s" ] || return 1
+  local age=$(( $(date +%s) - $(stat -c %Y "$s" 2>/dev/null || echo 0) ))
+  [ "$age" -lt "${GUARD_BLANK_GRACE_SEC:-420}" ]
+}
+
 main() {
   [ -f "$ENV_FILE" ] || { log "no $ENV_FILE — nothing to guard"; exit 0; }
 
   local tok; tok=$(read_token)
   if [ ${#tok} -lt 20 ]; then
+    if in_backup_window; then
+      log "token blank but save.sh archive window is active — standing by"
+      exit 0
+    fi
     log "TELEGRAM_BOT_TOKEN missing/empty (len=${#tok}) — attempting restore"
     if restore_token; then
       do_restart "token restored into .env"
