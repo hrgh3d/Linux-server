@@ -160,10 +160,19 @@ EXCL=(
 # می‌شود و اندازهٔ *واقعی* سنجیده می‌شود؛ اگر از بودجه رد شد حذفش می‌کنیم.
 try_tar() {
   out="$B/$1"; name="$1"; shift
+  # excludeهای اختصاصی این فراخوانی تا رسیدن به `--`
+  XTRA=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --exclude=*) XTRA+=("$1"); shift ;;
+      --) shift; break ;;
+      *) break ;;
+    esac
+  done
   have=0
   for p in "$@"; do [ -e "$p" ] && have=1; done
   [ "$have" = "1" ] || { add "SKIP $name (مسیری وجود ندارد)"; return 0; }
-  tar -czf "$out" --ignore-failed-read "${EXCL[@]}" "$@" 2>/dev/null
+  tar -czf "$out" --ignore-failed-read "${EXCL[@]}" ${XTRA[@]+"${XTRA[@]}"} "$@" 2>/dev/null
   [ -s "$out" ] || { add "SKIP $name (خالی)"; rm -f "$out"; return 0; }
   sz=$(stat -c%s "$out")
   if [ "$((total + sz))" -gt "$BUDGET" ]; then
@@ -214,12 +223,35 @@ try_tar tailscale-state.tar.gz /var/lib/tailscale
 try_tar openclaw.tar.gz /root/.openclaw
 # ۳) یونیت‌ها و کانفیگ سرویس‌ها (system + user برای hermes)
 try_tar services.tar.gz /etc/nginx /etc/cron.d /etc/systemd/system /etc/systemd/user
-# ۴) همهٔ نگهبان‌ها و اسکریپت‌های عملیاتی
-try_tar bin-scripts.tar.gz /usr/local/bin /usr/local/sbin
-# ۵) کد و دادهٔ اپ‌ها
-try_tar app-code.tar.gz /opt/9router /root/9router /opt/hermes /root/.hermes /var/www
-# ۶) باقی /root به‌عنوان تور ایمنی
-try_tar home-root.tar.gz /root
+# ۴) نگهبان‌ها و اسکریپت‌های عملیاتی.
+#    v6.35.2: /usr/local/bin روی رانرهای گیت‌هاب ۱.۲ گیگابایت است — پر از
+#    ابزارهای پیش‌فرض (minikube, pulumi, packer, node, helm…) که همه از ایمیج
+#    رانر می‌آیند و بازساختنی‌اند. فقط فایل‌های زیر ۲ مگابایت را می‌گیریم؛
+#    همهٔ اسکریپت‌های ما (gateway_guard, openclaw_serve_guard, tunnel-watch،
+#    wrapper openclaw…) در همین دسته‌اند. نتیجه: ۱.۲GB → ۱۶۰KB.
+if find /usr/local/bin /usr/local/sbin -maxdepth 1 -type f -size -2M -print0 \
+     2>/dev/null > /tmp/binlist.z && [ -s /tmp/binlist.z ]; then
+  if tar -czf "$B/bin-scripts.tar.gz" --ignore-failed-read --null -T /tmp/binlist.z 2>/dev/null \
+     && [ -s "$B/bin-scripts.tar.gz" ]; then
+    _sz=$(stat -c%s "$B/bin-scripts.tar.gz")
+    total=$((total + _sz)); add "bin-scripts.tar.gz ($(du -h "$B/bin-scripts.tar.gz" | cut -f1))"
+  fi
+fi
+rm -f /tmp/binlist.z
+
+# ۵) کد و دادهٔ اپ‌ها (منهای /root/.hermes/bin که ۸۵MB باینری دانلودی است)
+try_tar app-code.tar.gz --exclude=root/.hermes/bin --exclude=./root/.hermes/bin \
+  -- /opt/9router /root/9router /root/.hermes /var/www
+# ۶) باقی /root به‌عنوان تور ایمنی — بدون چیزهایی که جداگانه گرفته شدند یا
+#    بازساختنی‌اند (.codex 336M، .npm 311M، Documents/user_workspace/workspace.zip)
+try_tar home-root.tar.gz \
+  --exclude=root/.codex --exclude=./root/.codex \
+  --exclude=root/Documents --exclude=./root/Documents \
+  --exclude=root/user_workspace --exclude=./root/user_workspace \
+  --exclude=root/workspace.zip --exclude=./root/workspace.zip \
+  --exclude=root/.openclaw --exclude=./root/.openclaw \
+  --exclude=root/.hermes --exclude=./root/.hermes \
+  -- /root
 {
   echo "host: $(hostname)"; echo "date: $(date -u +%FT%TZ)"; echo "uptime: $(uptime -p 2>/dev/null)"
   echo "--- running services ---"; systemctl list-units --type=service --state=running --no-legend 2>/dev/null | awk '{print $1}' | head -25
