@@ -61,3 +61,39 @@ curl -s -H "Authorization: Bearer $PAT" \
 ## ۷) لاگ‌های بهداشتی
 لاگ‌ها secret/ایمیل print نمی‌کنند. اگر چیزی حساس لو رفت: لاگ آن Run را با API پاک کن:
 `DELETE /repos/hrgh3d/Linux-server/actions/runs/{id}/logs`
+
+## ۸) OpenClaw — داشبورد و اپ موبایل
+
+آدرس داشبورد (فقط داخل tailnet): `https://linux-server-vps.tail3641f4.ts.net`
+
+### خطای `proxy_attribution_required` در داشبورد
+Serve دستی ساخته شده و OpenClaw آن را پراکسیِ ناشناخته می‌بیند. مدیریت Serve
+را به خود OpenClaw بدهید (ترتیب مهم است):
+```bash
+tailscale serve --https=443 off
+openclaw config set gateway.bind loopback
+openclaw config set gateway.tailscale.mode serve
+openclaw config set --json gateway.trustedProxies '["127.0.0.1/32","::1/128"]'
+openclaw config set gateway.auth.allowTailscale true
+systemctl restart openclaw-gateway
+```
+موفقیت = لاگ `[tailscale] serve enabled:` و HTTPS root با کد **200**.
+
+### خطای `http101 403 forbidden` در اپ اندروید
+یعنی دستگاه در صف Pending است، نه مسدود:
+```bash
+openclaw devices list
+openclaw devices approve <requestId>
+```
+برای تأیید خودکار همیشگیِ دستگاه‌های داخل tailnet:
+```bash
+openclaw config set gateway.nodes.pairing.autoApproveLocal true
+openclaw config set --json gateway.nodes.pairing.autoApproveCidrs \
+  '["100.64.0.0/10","127.0.0.1/32","::1/128"]'
+```
+`provision.sh` از v6.31 همهٔ این‌ها را در هر بوت خودش اعمال می‌کند.
+
+### ماندگاری
+دستگاه‌های paired در `/root/.openclaw/state/openclaw.sqlite` ذخیره می‌شوند که
+در آرشیو state است و `sqlite_stage.py` نسخهٔ سالم از آن می‌گیرد ⇒ بعد از تعویض
+رانر نیازی به pairing مجدد نیست.

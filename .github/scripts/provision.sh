@@ -207,18 +207,34 @@ try: print(json.load(sys.stdin).get('Self',{}).get('DNSName','').rstrip('.'))
 except Exception: pass
 " 2>/dev/null)
   if [ -n "$_dn" ]; then
-    if ! tailscale serve status 2>/dev/null | grep -q '18789'; then
-      timeout 90 tailscale serve --bg --https=443 http://127.0.0.1:18789 >/dev/null 2>&1 \
-        && note "openclaw: tailscale serve enabled (https://$_dn)" \
-        || note "openclaw: tailscale serve FAILED (pairing may need manual serve)"
-    else
-      note "openclaw: tailscale serve already active"
-    fi
     timeout 90 tailscale cert "$_dn" >/dev/null 2>&1 || true
-    # آدرس pairing باید در کانفیگ بماند وگرنه openclaw qr خطا می‌دهد
+
+    # v6.31: Serve را دستی نمی‌سازیم. یک serve دستی از loopback پراکسی می‌کند
+    # ولی OpenClaw آن را نمی‌شناسد و همه چیز با proxy_attribution_required رد
+    # می‌شود. مدیریت Serve را به خودِ OpenClaw می‌دهیم.
+    timeout 30 tailscale serve --https=443 off >/dev/null 2>&1 || true
+
     if [ -x /usr/local/bin/openclaw ]; then
-      timeout 60 /usr/local/bin/openclaw config set \
+      local _oc=/usr/local/bin/openclaw
+      # ترتیب مهم است: bind باید قبل از tailscale.mode=serve روی loopback برود
+      timeout 60 $_oc config set gateway.bind loopback >/dev/null 2>&1 || true
+      timeout 60 $_oc config set gateway.tailscale.mode serve >/dev/null 2>&1 || true
+      timeout 60 $_oc config set --json gateway.trustedProxies \
+        '["127.0.0.1/32","::1/128"]' >/dev/null 2>&1 || true
+      timeout 60 $_oc config set gateway.auth.allowTailscale true >/dev/null 2>&1 || true
+      timeout 60 $_oc config set --json gateway.controlUi.allowedOrigins \
+        "[\"https://$_dn\",\"http://127.0.0.1:18789\",\"http://localhost:18789\"]" \
+        >/dev/null 2>&1 || true
+      # هر دستگاهی که از داخل tailnet بیاید خودکار تأیید شود؛ وگرنه اپ موبایل
+      # با http101 403 forbidden در صف Pending می‌ماند.
+      timeout 60 $_oc config set gateway.nodes.pairing.autoApproveLocal true \
+        >/dev/null 2>&1 || true
+      timeout 60 $_oc config set --json gateway.nodes.pairing.autoApproveCidrs \
+        '["100.64.0.0/10","127.0.0.1/32","::1/128"]' >/dev/null 2>&1 || true
+      # آدرس pairing باید در کانفیگ بماند وگرنه openclaw qr خطا می‌دهد
+      timeout 60 $_oc config set \
         plugins.entries.device-pair.config.publicUrl "wss://$_dn" >/dev/null 2>&1 || true
+      note "openclaw: native tailscale serve + proxy trust + auto-approve set (https://$_dn)"
     fi
   else
     note "openclaw: no tailscale DNS name — serve skipped"
