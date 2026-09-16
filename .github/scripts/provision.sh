@@ -22,25 +22,23 @@ has_hermes_data() {
 is_venv_valid() {
   local venv_python="/usr/local/lib/hermes-agent/venv/bin/python"
   local staged_venv="$RESTORE_ROOT/usr/local/lib/hermes-agent/venv/bin/python"
-  # check live venv
-  if [ -x "$venv_python" ] && [ -e "$venv_python" ]; then
-    # check if symlink target exists (if it's symlink)
-    if [ -L "$venv_python" ]; then
-      local target=$(readlink -f "$venv_python" 2>/dev/null || true)
-      [ -n "$target" ] && [ -e "$target" ] && return 0
-      return 1
+  # v6.22: اعتبارسنجی «کارکردی» — فقط وجود فایل کافی نیست. نصب‌های جدید
+  # hermes به /usr/bin/python3 سیستمی لینک می‌شوند (نه uv)، و نصب خراب
+  # (آپدیت نیمه‌کاره) پوشه‌ی hermes-agent را حذف می‌کند در حالی که
+  # /usr/local/bin/hermes باقی می‌ماند. پس واقعاً اجرا را تست می‌کنیم.
+  if [ -e "$venv_python" ]; then
+    local target
+    target=$(readlink -f "$venv_python" 2>/dev/null || echo "$venv_python")
+    if [ -x "$target" ] && "$venv_python" -c 'import sys' >/dev/null 2>&1; then
+      # ماژول اصلی هم باید قابل import باشد، وگرنه نصب ناقص است
+      if [ -f /usr/local/lib/hermes-agent/hermes ] || [ -d /usr/local/lib/hermes-agent/hermes_cli ]; then
+        return 0
+      fi
     fi
-    return 0
+    return 1
   fi
-  # check staged venv
-  if [ -x "$staged_venv" ] && [ -e "$staged_venv" ]; then
-    if [ -L "$staged_venv" ]; then
-      # staged symlink may point to staged uv path
-      local staged_target="$RESTORE_ROOT/usr/local/share/uv/python"
-      [ -d "$staged_target" ] || [ -d "$RESTORE_ROOT/usr/local/share/uv" ] && return 0
-      # also check if target exists in staged
-      return 0
-    fi
+  # staged (از آرشیو state) — فقط وجود را می‌سنجیم چون هنوز apply نشده
+  if [ -e "$staged_venv" ] && [ -d "$RESTORE_ROOT/usr/local/lib/hermes-agent" ]; then
     return 0
   fi
   return 1
