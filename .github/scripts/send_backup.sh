@@ -133,15 +133,60 @@ MAN="$B/manifest.txt"; : > "$MAN"
 add() { printf '  %s\n' "$1" >> "$MAN"; }
 BUDGET=$((36000 * 1024))
 total=0
+
+# v6.35 — مسیرهایی که هرگز نباید در باندل بیایند: بازساختنی‌اند ولی حجیم‌اند و
+# باعث می‌شدند کل /root از بودجه رد شود و SKIP بخورد (یعنی کانفیگ OpenClaw و
+# دستگاه‌های جفت‌شده اصلاً بکاپ نمی‌شدند).
+EXCL=(
+  --exclude=./root/.openclaw/cache      --exclude=root/.openclaw/cache
+  --exclude=./root/.openclaw/tmp        --exclude=root/.openclaw/tmp
+  --exclude=./root/.openclaw/media      --exclude=root/.openclaw/media
+  --exclude=./root/.npm                 --exclude=root/.npm
+  --exclude=./root/.cache               --exclude=root/.cache
+  --exclude=./root/.9router/logs        --exclude=root/.9router/logs
+  --exclude=*/node_modules              --exclude=*/__pycache__
+  --exclude=*.sock                      --exclude=*.pid
+)
+
+# اندازه‌گیری «بعد از کسر مسیرهای استثناشده» تا تخمین بودجه واقع‌بینانه باشد
+want_kb() {
+  local p="$1" k=0 sub
+  [ -e "$p" ] || { echo 0; return; }
+  k=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
+  for sub in /root/.openclaw/cache /root/.openclaw/tmp /root/.openclaw/media \
+             /root/.npm /root/.cache /root/.9router/logs; do
+    case "$sub" in "$p"/*|"$p")
+      [ -e "$sub" ] && k=$(( k - $(du -sk "$sub" 2>/dev/null | awk '{print $1}') )) ;;
+    esac
+  done
+  [ "$k" -lt 0 ] && k=0
+  echo "$k"
+}
+
 try_tar() {
   out="$B/$1"; shift
   want=0
-  for p in "$@"; do [ -e "$p" ] && want=$((want + $(du -sk "$p" 2>/dev/null | awk '{print $1}'))) ; done
-  if [ "$((total + want*1024))" -gt "$BUDGET" ]; then add "SKIP $1 (حجم زیاد)"; return 0; fi
-  tar -czf "$out" --ignore-failed-read "$@" 2>/dev/null || return 0
+  for p in "$@"; do want=$((want + $(want_kb "$p"))) ; done
+  if [ "$((total + want*1024))" -gt "$BUDGET" ]; then add "SKIP $1 (حجم زیاد: ${want}KB)"; return 0; fi
+  tar -czf "$out" --ignore-failed-read "${EXCL[@]}" "$@" 2>/dev/null || return 0
   [ -s "$out" ] || return 0
   total=$((total + $(stat -c%s "$out")))
   add "$1 ($(du -h "$out" | cut -f1))"
+}
+
+# v6.35: دیتابیس‌های زندهٔ sqlite را با VACUUM INTO می‌گیریم تا torn نباشند.
+# مهم‌ترینش /root/.openclaw/state/openclaw.sqlite است: جدول دستگاه‌های
+# جفت‌شده. بدون آن، بعد از بازیابی باید همهٔ گوشی‌ها دوباره pair شوند.
+snap_sqlite() {
+  local src="$1" dst="$B/sqlite/$2"
+  [ -f "$src" ] || return 0
+  mkdir -p "$B/sqlite"
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$src" "VACUUM INTO '$dst'" 2>/dev/null || cp -f "$src" "$dst" 2>/dev/null
+  else
+    cp -f "$src" "$dst" 2>/dev/null
+  fi
+  [ -s "$dst" ] && add "sqlite/$2 ($(du -h "$dst" | cut -f1))"
 }
 if [ -f /etc/x-ui/x-ui.db ]; then
   if sqlite3 /etc/x-ui/x-ui.db "VACUUM INTO '$B/x-ui.db'" 2>/dev/null || cp -f /etc/x-ui/x-ui.db "$B/x-ui.db" 2>/dev/null; then
@@ -155,15 +200,36 @@ if command -v mysqldump >/dev/null 2>&1; then
     add "SKIP mysql (دسترسی نبود)"
   fi
 fi
+# --- v6.35: اسنپ‌شات دیتابیس‌های زنده قبل از tar ---
+snap_sqlite /root/.openclaw/state/openclaw.sqlite openclaw-state.sqlite
+snap_sqlite /root/.9router/db/data.sqlite 9router-data.sqlite
+
 try_tar app-code.tar.gz /opt/9router /root/9router /opt/hermes /root/.hermes /var/www
-try_tar services.tar.gz /etc/nginx /etc/cron.d /etc/systemd/system
+try_tar services.tar.gz /etc/nginx /etc/cron.d /etc/systemd/system /etc/systemd/user
 try_tar bin-scripts.tar.gz /usr/local/bin /usr/local/sbin
+# v6.35: هویت گره تیل‌اسکیل + مسیر ماندگار Serve اینجاست. بدون آن، بعد از
+# بازیابی آدرس MagicDNS عوض می‌شود و همهٔ setup codeها و لینک‌ها باطل می‌شوند.
+try_tar tailscale-state.tar.gz /var/lib/tailscale
+# v6.35: کل کانفیگ/سشن OpenClaw (منهای cache/tmp/media که بالا exclude شده‌اند)
+try_tar openclaw.tar.gz /root/.openclaw
 try_tar home-root.tar.gz /root
 {
   echo "host: $(hostname)"; echo "date: $(date -u +%FT%TZ)"; echo "uptime: $(uptime -p 2>/dev/null)"
   echo "--- running services ---"; systemctl list-units --type=service --state=running --no-legend 2>/dev/null | awk '{print $1}' | head -25
   echo "--- disk ---"; df -h / | tail -1
   echo "--- tailscale ---"; tailscale ip -4 2>/dev/null | head -2
+  tailscale status --json 2>/dev/null | python3 -c "
+import sys,json
+try: print('  magicdns:', json.load(sys.stdin).get('Self',{}).get('DNSName','').rstrip('.'))
+except Exception: pass" 2>/dev/null
+  echo "--- tailscale serve ---"; tailscale serve status 2>/dev/null | head -4
+  echo "--- openclaw ---"
+  /usr/local/bin/openclaw --version 2>/dev/null | head -1
+  /usr/local/bin/openclaw devices list 2>/dev/null | grep -E "^ +[0-9a-f]{16}" | head -5
+  echo "--- versions ---"
+  echo "  node(system): $(node -v 2>/dev/null)"
+  echo "  node(openclaw): $(/opt/openclaw-node/bin/node -v 2>/dev/null)"
+  echo "  hermes: $(/root/.hermes/bin/hermes --version 2>/dev/null | head -1)"
   echo "--- manifest ---"; cat "$MAN" 2>/dev/null
 } > "$B/info.txt" 2>/dev/null
 OUT=/tmp/$(hostname)-backup-$(date -u +%Y%m%d-%H%M).tar.gz
@@ -193,12 +259,44 @@ LOCAL_SIZE=$(stat -c%s /tmp/final-backup.tar.gz)
 echo "[backup] final bundle size = ${LOCAL_SIZE} bytes"
 fi
 
+# ---------- v6.35: راستی‌آزمایی باندل قبل از ارسال ----------
+# باندلی که ناقص باشد بدتر از نبودنش است، چون کاذب اطمینان می‌دهد. پس قبل از
+# ارسال، محتویات را بازرسی می‌کنیم و نتیجه را در کپشن تلگرام می‌نویسیم.
+VERDICT=""
+verify_bundle() {
+  local f="$1" list missing=0 crit ok
+  list=$(tar -tzf "$f" 2>/dev/null)
+  [ -n "$list" ] || { VERDICT="❌ باندل قابل خواندن نیست"; return 1; }
+  for crit in bootstrap/repo.tar.gz bootstrap/recovery/secrets.env bootstrap/recovery/RECOVERY.md; do
+    printf '%s\n' "$list" | grep -q "$crit" || { echo "[verify] MISSING $crit"; missing=$((missing+1)); }
+  done
+  if printf '%s\n' "$list" | grep -q "SERVER-DATA-UNAVAILABLE"; then
+    VERDICT="⚠️ بدون دادهٔ سرور (SSH قطع بود) — bootstrap + state"
+    return 0
+  fi
+  for crit in tailscale-state.tar.gz openclaw.tar.gz sqlite/openclaw-state.sqlite \
+              app-code.tar.gz services.tar.gz bin-scripts.tar.gz home-root.tar.gz; do
+    printf '%s\n' "$list" | grep -q "$crit" || { echo "[verify] MISSING $crit"; missing=$((missing+1)); }
+  done
+  ok=$(printf '%s\n' "$list" | grep -c 'tar.gz\|sqlite')
+  if [ "$missing" -eq 0 ]; then
+    VERDICT="✅ کامل — $ok جزء، همهٔ موارد بحرانی حاضر"
+  else
+    VERDICT="⚠️ ناقص — $missing جزء بحرانی غایب است"
+  fi
+  echo "[verify] members=$ok missing=$missing"
+  return 0
+}
+verify_bundle /tmp/final-backup.tar.gz
+
 send_doc() {
   curl -fsS -m 300 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
     -F "chat_id=${NOTIFY_CHAT_ID}" -F "document=@$1" -F "caption=$2" >/dev/null 2>&1
 }
 CAP="🗄 بکاپ کامل سیستم ${VPS_NAME} — $(date -u '+%Y-%m-%d %H:%M') UTC (رویداد: ${TRIGGER})
-شامل: دادهٔ سرور + کل ریپو + کلیدها (Base64) + راهنمای RECOVERY"
+شامل: دادهٔ سرور + هویت Tailscale + OpenClaw (کانفیگ و دستگاه‌های جفت‌شده) + کل ریپو + کلیدها + RECOVERY.md
+بازرسی: ${VERDICT}
+بازگردانی: RECOVERY.md بخش ۵ را دنبال کن (روی سرور خالی هم کار می‌کند)"
 if [ "$LOCAL_SIZE" -le "$LIMIT" ]; then
   send_doc /tmp/final-backup.tar.gz "${CAP}" && echo "[backup] sent to telegram" || echo "[backup] WARN: telegram send failed"
 else
