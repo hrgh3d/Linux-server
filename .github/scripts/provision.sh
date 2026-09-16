@@ -114,6 +114,20 @@ provision_hermes() {
       else
         log "hermes: WARNING venv still invalid after reinstall"
       fi
+      # v6.23: هر نصب/آپدیت، فایل‌های پایتون را روی دیسک عوض می‌کند، اما
+      # پروسه‌ی gateway که از قبل در حال اجراست ماژول‌های قدیمی را در حافظه
+      # نگه می‌دارد. چون بخشی از importها تنبل (lazy) هستند — مثل
+      # hermes_cli.model_switch که فقط هنگام دستور /model بارگذاری می‌شود —
+      # ناسازگاری بعداً و به شکل «ImportError: cannot import name …» در
+      # تلگرام ظاهر می‌شود. پس بعد از هر نصب، bytecode کهنه پاک و gateway
+      # ری‌استارت می‌شود. فایل‌های سشن دست نمی‌خورند.
+      find /usr/local/lib/hermes-agent -maxdepth 3 -name '__pycache__' -type d \
+        -not -path '*/venv/*' -not -path '*/node_modules/*' -exec rm -rf {} + 2>/dev/null
+      if pgrep -f "hermes_cli.main gateway" >/dev/null 2>&1; then
+        log "hermes: restarting gateway so it picks up the new code (sessions preserved)"
+        XDG_RUNTIME_DIR=/run/user/0 $SUDO -u root systemctl --user restart hermes-gateway.service >/dev/null 2>&1 \
+          || { pkill -f "hermes_cli.main gateway" 2>/dev/null; sleep 2; }
+      fi
     else
       note "hermes: recovery FAILED (rc=$rc)"
       tail -30 "${LOG_DIR}/hermes.log" 2>/dev/null | tee -a "${LOG_DIR}/summary.txt"
