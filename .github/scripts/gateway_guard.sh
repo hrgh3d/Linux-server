@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gateway_guard.sh — v6.29
+# gateway_guard.sh — v6.30
 # نگهبان دائمی «اتصال واقعی» ربات تلگرام Hermes.
 #
 # چرا لازم است؟ (رخداد ۱۶ سپتامبر ۲۰۲۶ — زنجیرهٔ کامل علت)
@@ -110,11 +110,34 @@ cooldown_ok() {
   [ $((now - last)) -ge "$COOLDOWN_SEC" ]
 }
 
+# v6.30 — پروسه‌های یتیم گیت‌وی.
+# ۱۶ سپتامبر: بعد از یک بوت، دو پروسهٔ gateway هم‌زمان زنده بودند (۹۸۸۸ یتیم از
+# بوت قبلی + پروسهٔ واقعی یونیت). یتیم قفل long-polling تلگرام را نگه داشته بود،
+# پس پروسهٔ جدید هرگز وصل نمی‌شد و `systemctl restart` هم آن را نمی‌کشت (خارج از
+# cgroup یونیت بود). ربات ساعت‌ها کر ماند در حالی که همه‌چیز active بود.
+# قبل از هر ری‌استارت، هر پروسهٔ gateway که MainPID یونیت نیست کشته می‌شود.
+kill_orphan_gateways() {
+  local main p killed=0
+  main=$(uc show "$UNIT" -p MainPID --value)
+  for p in $(pgrep -f 'hermes_cli.main gateway' 2>/dev/null); do
+    [ "$p" = "$main" ] && continue
+    kill -TERM "$p" 2>/dev/null && killed=$((killed+1))
+  done
+  [ "$killed" -eq 0 ] && return 0
+  sleep 5
+  for p in $(pgrep -f 'hermes_cli.main gateway' 2>/dev/null); do
+    [ "$p" = "$main" ] && continue
+    kill -9 "$p" 2>/dev/null
+  done
+  log "killed $killed orphan gateway process(es) holding the Telegram poll lock"
+}
+
 do_restart() {
   local why="$1"
   if ! cooldown_ok; then log "restart needed ($why) but cooldown active — skip"; return 0; fi
   date +%s > "$STAMP"
   log "RESTARTING gateway — reason: $why"
+  kill_orphan_gateways
   uc restart "$UNIT" || {
     log "user unit restart failed; direct fallback"
     pkill -f 'hermes_cli.main gateway' 2>/dev/null
@@ -219,6 +242,13 @@ main() {
   # پروسه اصلاً بالا هست؟
   if ! pgrep -f 'hermes_cli.main gateway' >/dev/null 2>&1; then
     do_restart "gateway process not running"
+    exit 0
+  fi
+
+  # v6.30: بیش از یک پروسهٔ gateway = یتیم وجود دارد و قفل polling را گرفته.
+  # این حالت خودش به‌تنهایی دلیل کافی برای ترمیم است، حتی اگر لاگ چیزی نگوید.
+  if [ "$(pgrep -cf 'hermes_cli.main gateway')" -gt 1 ]; then
+    do_restart "multiple gateway processes (orphan holding the poll lock)"
     exit 0
   fi
 
