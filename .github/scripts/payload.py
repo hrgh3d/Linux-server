@@ -217,9 +217,14 @@ def prune_file(rel):
     for _d in _OPENCLAW_DROP:
         if rel.startswith(_d + "/"):
             return True
-    # v6.26: بقیهٔ فایل‌های دادهٔ OpenClaw می‌مانند؛ فقط لاگ/سوکت/قفل حذف می‌شود
+    # v6.26: بقیهٔ فایل‌های دادهٔ OpenClaw می‌مانند؛ فقط موارد گذرا حذف می‌شوند.
+    # -wal/-shm ژورنال‌های زندهٔ SQLite‌اند و هرگز نباید خام آرشیو شوند
+    # (خود دیتابیس توسط sqlite_stage.py سازگار snapshot می‌شود).
     if _openclaw_keep(rel):
-        return name.endswith((".sock", ".pid", ".lock", ".log"))
+        return name.endswith((".sock", ".pid", ".lock", ".log",
+                              "-wal", "-shm",
+                              ".sqlite-wal", ".sqlite-shm",
+                              ".db-wal", ".db-shm"))
     if name in PRUNE_FILE_NAMES or name.endswith(PRUNE_FILE_SUFFIXES):
         return True
     if rel in PRUNE_ABS_FILES or any(rel.startswith(d + "/") for d in PRUNE_ABS_DIRS):
