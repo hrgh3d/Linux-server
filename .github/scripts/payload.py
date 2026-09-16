@@ -154,11 +154,43 @@ def big_keep_under(rel):
     return any(rel == p or rel.startswith(p + "/") for p in _BIG_KEEP)
 
 
+# v6.26: OpenClaw — داده‌ی کاربر باید کامل بماند، کد بازنصب می‌شود.
+# /root/.openclaw شامل agents/ (سشن‌ها و حافظه)، workspace/ و openclaw.json است.
+# داخل آن پوشه‌هایی به نام cache/tmp/logs و حتی node_modules (پلاگین‌ها و skillها)
+# وجود دارد که با قواعد عمومی prune حذف می‌شدند؛ این‌ها را استثنا می‌کنیم مگر
+# آن‌هایی که واقعاً دور‌ریختنی‌اند.
+_OPENCLAW_DATA = "root/.openclaw"
+_OPENCLAW_DROP = (
+    "root/.openclaw/cache",
+    "root/.openclaw/tmp",
+    "root/.openclaw/media",   # فایل‌های حجیم رسانه‌ای؛ در صورت نیاز دوباره ساخته می‌شوند
+)
+
+
+def _openclaw_keep(rel):
+    """True اگر مسیر زیر دادهٔ OpenClaw است و باید علیرغم نام عمومی حفظ شود."""
+    if rel != _OPENCLAW_DATA and not rel.startswith(_OPENCLAW_DATA + "/"):
+        return False
+    for d in _OPENCLAW_DROP:
+        if rel == d or rel.startswith(d + "/"):
+            return False
+    return True
+
+
 def prune_dir(rel):
     # v5.3: hermes-agent venv must persist (gateway needs it), so exempt it from venv prune
     if rel.startswith("usr/local/lib/hermes-agent/venv") or rel.startswith("usr/local/lib/hermes-agent/.venv"):
         return False
     if rel == "usr/local/lib/hermes-agent/venv" or rel == "usr/local/lib/hermes-agent/.venv":
+        return False
+    # v6.26: کد OpenClaw (رانتایم Node 24 + node_modules) هرگز آرشیو نمی‌شود —
+    # حجیم است و provision.sh آن را با نسخهٔ دقیق بازنصب می‌کند (مثل 9router).
+    if rel == "opt/openclaw-node" or rel.startswith("opt/openclaw-node/"):
+        return True
+    if rel == "opt/openclaw-app" or rel.startswith("opt/openclaw-app/"):
+        return True
+    # v6.26: ولی دادهٔ کاربر OpenClaw کامل می‌ماند.
+    if _openclaw_keep(rel):
         return False
     name = rel.rstrip("/").rsplit("/", 1)[-1]
     if name in PRUNE_DIR_NAMES:
@@ -178,6 +210,16 @@ def prune_dir(rel):
 
 def prune_file(rel):
     name = rel.rsplit("/", 1)[-1]
+    # v6.26: کد OpenClaw آرشیو نمی‌شود (بازنصب می‌شود)
+    if rel.startswith("opt/openclaw-node/") or rel.startswith("opt/openclaw-app/"):
+        return True
+    # v6.26: فایل‌های دور‌ریختنی زیر .openclaw (cache/tmp/media) حذف می‌شوند
+    for _d in _OPENCLAW_DROP:
+        if rel.startswith(_d + "/"):
+            return True
+    # v6.26: بقیهٔ فایل‌های دادهٔ OpenClaw می‌مانند؛ فقط لاگ/سوکت/قفل حذف می‌شود
+    if _openclaw_keep(rel):
+        return name.endswith((".sock", ".pid", ".lock", ".log"))
     if name in PRUNE_FILE_NAMES or name.endswith(PRUNE_FILE_SUFFIXES):
         return True
     if rel in PRUNE_ABS_FILES or any(rel.startswith(d + "/") for d in PRUNE_ABS_DIRS):

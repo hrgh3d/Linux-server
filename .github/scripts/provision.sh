@@ -83,6 +83,120 @@ provision_9router() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# OpenClaw (v6.26)
+# معماری ماندگاری — عمداً مثل 9router: «داده می‌ماند، کد بازنصب می‌شود».
+#   * دادهٔ کاربر  : /root/.openclaw  → در آرشیو state حفظ می‌شود
+#                    (agents/ = سشن‌ها و حافظه، workspace/، openclaw.json،
+#                     .gateway-token، دستگاه‌های pair شده)
+#   * کد و رانتایم : /opt/openclaw-node (Node 24) + /opt/openclaw-app
+#                    → آرشیو نمی‌شوند (۷۵۰MB و پر از node_modules) و اینجا
+#                      در صورت نبود بازنصب می‌شوند.
+# نکتهٔ مهم: OpenClaw حداقل Node 24 می‌خواهد ولی Node سیستمی روی ۲۲ می‌ماند،
+# چون 9router به ماژول بومی better-sqlite3 کامپایل‌شده برای ABI نود ۲۲ وابسته
+# است. پس OpenClaw رانتایم جدا و ایزولهٔ خودش را دارد.
+OPENCLAW_NODE_DIR=/opt/openclaw-node
+OPENCLAW_APP_DIR=/opt/openclaw-app
+
+has_openclaw_data() {
+  [ -f /root/.openclaw/openclaw.json ] || [ -f "$RESTORE_ROOT/root/.openclaw/openclaw.json" ]
+}
+has_openclaw_runtime() {
+  [ -x "$OPENCLAW_NODE_DIR/bin/node" ] && \
+  [ -f "$OPENCLAW_APP_DIR/lib/node_modules/openclaw/openclaw.mjs" ]
+}
+
+install_openclaw_node() {
+  [ -x "$OPENCLAW_NODE_DIR/bin/node" ] && return 0
+  local v
+  v=$(curl -s --max-time 30 https://nodejs.org/dist/index.json 2>/dev/null | python3 -c "
+import sys,json
+try:
+    for r in json.load(sys.stdin):
+        if int(r['version'].lstrip('v').split('.')[0])==24:
+            print(r['version']); break
+except Exception: pass
+" 2>/dev/null)
+  [ -z "$v" ] && v="v24.21.0"   # fallback اگر API در دسترس نبود
+  $SUDO mkdir -p "$OPENCLAW_NODE_DIR"
+  curl -sL --max-time 300 -o /tmp/ocnode.tar.xz \
+    "https://nodejs.org/dist/$v/node-$v-linux-x64.tar.xz" || return 1
+  $SUDO tar -xJf /tmp/ocnode.tar.xz -C "$OPENCLAW_NODE_DIR" --strip-components=1 || return 1
+  rm -f /tmp/ocnode.tar.xz
+  [ -x "$OPENCLAW_NODE_DIR/bin/node" ]
+}
+
+write_openclaw_wrapper() {
+  $SUDO tee /usr/local/bin/openclaw >/dev/null <<WRAP
+#!/bin/sh
+# OpenClaw با رانتایم Node 24 اختصاصی اجرا می‌شود تا Node 22 سیستمی
+# (وابستگی 9router / better-sqlite3) دست‌نخورده بماند.
+export PATH="$OPENCLAW_NODE_DIR/bin:\$PATH"
+export OPENCLAW_STATE_DIR="\${OPENCLAW_STATE_DIR:-/root/.openclaw}"
+exec "$OPENCLAW_NODE_DIR/bin/node" "$OPENCLAW_APP_DIR/lib/node_modules/openclaw/openclaw.mjs" "\$@"
+WRAP
+  $SUDO chmod +x /usr/local/bin/openclaw
+}
+
+provision_openclaw() {
+  if ! has_openclaw_data; then
+    note "openclaw: no data — NOT installing (Mode 2)"
+    return 0
+  fi
+  if has_openclaw_runtime; then
+    write_openclaw_wrapper
+    note "openclaw: runtime present — kept"
+  else
+    log "openclaw: data exists but runtime missing — reinstalling (expected after a new runner)..."
+    if install_openclaw_node; then
+      if timeout 900 $SUDO env PATH="$OPENCLAW_NODE_DIR/bin:$PATH" \
+           "$OPENCLAW_NODE_DIR/bin/npm" install -g --prefix "$OPENCLAW_APP_DIR" \
+           openclaw@latest >"${LOG_DIR}/openclaw.log" 2>&1 && has_openclaw_runtime; then
+        write_openclaw_wrapper
+        note "openclaw: REINSTALLED (data preserved)"
+      else
+        note "openclaw: npm install FAILED"
+        tail -20 "${LOG_DIR}/openclaw.log" 2>/dev/null | tee -a "${LOG_DIR}/summary.txt"
+        return 0
+      fi
+    else
+      note "openclaw: Node 24 download FAILED"
+      return 0
+    fi
+  fi
+
+  # سرویس دائمی — در هر بوت بازنویسی می‌شود تا همیشه درست باشد
+  $SUDO tee /etc/systemd/system/openclaw-gateway.service >/dev/null <<UNIT
+[Unit]
+Description=OpenClaw Gateway (AI agent, 9router provider)
+After=network-online.target tailscaled.service 9router.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=PATH=$OPENCLAW_NODE_DIR/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/root
+Environment=OPENCLAW_STATE_DIR=/root/.openclaw
+Environment=NODE_ENV=production
+WorkingDirectory=/root/.openclaw
+ExecStart=$OPENCLAW_NODE_DIR/bin/node $OPENCLAW_APP_DIR/lib/node_modules/openclaw/openclaw.mjs gateway run --port 18789
+Restart=always
+RestartSec=5
+RestartPreventExitStatus=78
+TimeoutStopSec=60
+KillMode=mixed
+StandardOutput=append:/var/log/openclaw-gateway.log
+StandardError=append:/var/log/openclaw-gateway.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
+  $SUDO systemctl enable openclaw-gateway.service >/dev/null 2>&1 || true
+  note "openclaw: service unit written + enabled"
+}
+
 provision_hermes() {
   if has_hermes_binary_live; then
     note "hermes: present — kept (Mode 2)"
@@ -170,6 +284,7 @@ provision_cloudflared() {
 
 log "=== provisioning start (Mode 2 + recovery v4.5.5 venv-valid check) ==="
 provision_9router
+provision_openclaw
 provision_hermes
 provision_xui
 provision_cloudflared

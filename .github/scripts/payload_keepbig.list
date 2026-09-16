@@ -10,3 +10,4 @@ opt
 srv
 var/lib
 var/opt
+root/.openclaw

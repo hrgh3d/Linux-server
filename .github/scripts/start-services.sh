@@ -174,6 +174,10 @@ ensure_tunnel_stack
 start_system 9router.service
 start_system 9router-tunnel.service
 start_system tunnel-watch.service
+# v6.26: OpenClaw Gateway — فقط اگر provision.sh یونیت را ساخته باشد
+if [ -f /etc/systemd/system/openclaw-gateway.service ]; then
+  start_system openclaw-gateway.service
+fi
 
 # --- Hermes gateway: یونیت user روت ---
 # v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
