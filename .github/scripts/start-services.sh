@@ -6,6 +6,8 @@
 #   - لاگ دقیق‌تر برای دیباگ
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 fail=0
 
 start_system() {
@@ -271,6 +273,43 @@ if [ -f /root/.config/systemd/user/hermes-gateway.service ]; then
   fi
 else
   echo "[services] hermes-gateway.service: unit file absent — skip"
+fi
+
+# --- v6.24: نگهبان «اتصال واقعی» گیت‌وی تلگرام ---
+# درس ۱۶ سپتامبر: گیت‌وی می‌تواند active باشد ولی هیچ پلتفرمی لود نکرده باشد
+# (توکن خالی هنگام بوت) → ربات کر می‌شود بدون هیچ ارور یا کرشی.
+# این تایمر هر ۹۰ ثانیه «Connected to Telegram» را بررسی و در صورت نیاز ترمیم می‌کند.
+if [ -f "$SCRIPT_DIR/gateway_guard.sh" ]; then
+  sudo install -m 0755 "$SCRIPT_DIR/gateway_guard.sh" /usr/local/bin/gateway_guard.sh
+  sudo tee /etc/systemd/system/hermes-gateway-guard.service >/dev/null <<'UNIT'
+[Unit]
+Description=Hermes gateway connectivity guard (real Telegram attach check)
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=XDG_RUNTIME_DIR=/run/user/0
+ExecStart=/usr/local/bin/gateway_guard.sh
+UNIT
+  sudo tee /etc/systemd/system/hermes-gateway-guard.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Run the Hermes gateway connectivity guard every 90s
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=90
+AccuracySec=10s
+Unit=hermes-gateway-guard.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+  sudo systemctl daemon-reload >/dev/null 2>&1 || true
+  sudo systemctl enable --now hermes-gateway-guard.timer >/dev/null 2>&1 \
+    && echo "[services] hermes-gateway-guard.timer: enabled (90s)" \
+    || echo "[services] WARNING: could not enable hermes-gateway-guard.timer"
+else
+  echo "[services] gateway_guard.sh not found — guard skipped"
 fi
 
 # --- راستی‌آزمایی ---
