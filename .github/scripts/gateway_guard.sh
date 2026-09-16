@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gateway_guard.sh — v6.25
+# gateway_guard.sh — v6.27
 # نگهبان دائمی «اتصال واقعی» ربات تلگرام Hermes.
 #
 # چرا لازم است؟ (رخداد ۱۶ سپتامبر ۲۰۲۶ — زنجیرهٔ کامل علت)
@@ -133,8 +133,42 @@ in_backup_window() {
   [ "$age" -lt "${GUARD_BLANK_GRACE_SEC:-420}" ]
 }
 
+# v6.27: REPORT_BOT_TOKEN هم در همان پنجرهٔ blank شدن save.sh قربانی می‌شود.
+# بدون آن، اعلان‌های تونل و تحویل اعتبارنامه‌ها بی‌صدا شکست می‌خورند (۱۶ سپتامبر
+# هنگام نصب OpenClaw کشف شد: len=0). این تابع آن را مستقل از توکن Hermes ترمیم
+# می‌کند — بدون ری‌استارت گیت‌وی، چون فقط اسکریپت‌های سمت سرور از آن می‌خوانند.
+restore_report_token() {
+  local cur src t
+  cur=$(sed -n 's/^REPORT_BOT_TOKEN=//p' "$ENV_FILE" 2>/dev/null | head -1 | tr -d '\r "'"'"'')
+  [ ${#cur} -ge 20 ] && return 0
+  in_backup_window && return 0
+  for src in /var/lib/hermes-guard/env.preblank /root/hermes-pre-update-keep/.env /root/hermes-env-broken-*.bak; do
+    [ -f "$src" ] || continue
+    t=$(sed -n 's/^REPORT_BOT_TOKEN=//p' "$src" 2>/dev/null | head -1 | tr -d '\r "'"'"'')
+    [ ${#t} -ge 20 ] && break
+    t=""
+  done
+  [ -z "$t" ] && [ -n "${REPORT_BOT_TOKEN:-}" ] && t="$REPORT_BOT_TOKEN"
+  [ -z "$t" ] && { log "REPORT_BOT_TOKEN empty and no backup source found"; return 1; }
+  python3 - "$ENV_FILE" "$t" <<'PY'
+import sys,re
+p,tok=sys.argv[1],sys.argv[2]
+out=[];done=False
+for ln in open(p,errors='replace').read().splitlines():
+    if not done and re.match(r'^REPORT_BOT_TOKEN=',ln):
+        out.append("REPORT_BOT_TOKEN="+tok); done=True
+    else: out.append(ln)
+if not done: out.append("REPORT_BOT_TOKEN="+tok)
+open(p,'w').write("\n".join(out)+"\n")
+PY
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
+  log "REPORT_BOT_TOKEN restored (len=${#t})"
+}
+
 main() {
   [ -f "$ENV_FILE" ] || { log "no $ENV_FILE — nothing to guard"; exit 0; }
+
+  restore_report_token
 
   local tok; tok=$(read_token)
   if [ ${#tok} -lt 20 ]; then
