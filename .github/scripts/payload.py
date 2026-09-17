@@ -241,6 +241,13 @@ def prune_dir(rel):
 
 def prune_file(rel):
     name = rel.rsplit("/", 1)[-1]
+    # v6.36: ژورنال زندهٔ SQLite هرگز نباید خام آرشیو شود — مستقل از اینکه
+    # نام پایه چه پسوندی دارد. (نمونهٔ واقعی روی سرور: data.sqlite.fresh-bak-wal
+    # که پسوند PRUNE_FILE_SUFFIXES را نداشت و از کنار همه رد می‌شد.)
+    # بازیابی از یک -wal ناهماهنگ می‌تواند دیتابیس را خراب کند؛ نسخهٔ سازگار را
+    # sqlite_stage.py جداگانه stage می‌کند.
+    if name.endswith(("-wal", "-shm")):
+        return True
     # v6.26: کد OpenClaw آرشیو نمی‌شود (بازنصب می‌شود)
     if rel.startswith("opt/openclaw-node/") or rel.startswith("opt/openclaw-app/"):
         return True
@@ -573,6 +580,48 @@ def selftest():
     # Hermes همچنان طبق قواعد عمومی prune می‌شود (استثنای OpenClaw ندارد)
     assert prune_dir("root/.hermes/.git") is True
     assert prune_dir("root/.hermes/skills/x/node_modules") is True
+
+    # ژورنال SQLite با نام پایهٔ غیرمتعارف (نمونهٔ واقعی روی سرور، v6.36):
+    # قبلاً جمع‌آورنده نگهش می‌داشت ولی اعتبارسنج ردش می‌کرد — همان الگوی باگ اصلی.
+    for _j in ("root/.9router/db/data.sqlite.fresh-bak-wal",
+               "root/.9router/db/data.sqlite.prepwfix-shm",
+               "root/.openclaw/state/openclaw.sqlite-wal"):
+        assert prune_file(_j) is True, f"journal not pruned: {_j}"
+        assert member_violation(_j, "f") is not None
+
+    # ---- قرارداد سراسری: جمع‌آورنده و اعتبارسنج هرگز نباید اختلاف داشته باشند.
+    # این حلقه همان کلاس باگی را می‌گیرد که حادثه را ساخت، برای *هر* مسیری.
+    _probe = [
+        "root/.openclaw", "root/.openclaw/openclaw.json",
+        "root/.openclaw/agents/main/agent/openclaw-agent.sqlite",
+        "root/.openclaw/agents/main/memory/notes.md",
+        "root/.openclaw/workspace/a/.git/config",
+        "root/.openclaw/workspace/a/node_modules/p/i.js",
+        "root/.openclaw/workspace/a/__pycache__/m.pyc",
+        "root/.openclaw/cache/x", "root/.openclaw/tmp/y",
+        "root/.openclaw/logs/app.txt",
+        "root/.hermes/.env", "root/.hermes/skills/s/main.py",
+        "root/.hermes/.git/HEAD", "root/.hermes/x/node_modules/a.js",
+        "usr/local/lib/hermes-agent/venv/bin/python",
+        "root/.9router/db/data.sqlite", "root/.cache/z",
+        "var/lib/customx/data.db", "etc/app/conf.ini",
+    ]
+    def _collector_would_archive(rel, kind):
+        """بازتولید تصمیم واقعی walk_abs(): اگر هر جدّی prune شود، عضو هرگز
+        وارد آرشیو نمی‌شود — حتی اگر prune_file() تنهایی False بدهد."""
+        parts = rel.split("/")
+        for i in range(1, len(parts)):
+            if prune_dir("/".join(parts[:i])):
+                return False
+        return not (prune_dir(rel) if kind == "d" else prune_file(rel))
+
+    for _p in _probe:
+        for _k in ("f", "d"):
+            _archived = _collector_would_archive(_p, _k)
+            _rejected = member_violation(_p, _k) is not None
+            assert _archived != _rejected, (
+                f"collector/validator DISAGREE on {_p} (kind={_k}): "
+                f"collector_archives={_archived} validator_rejects={_rejected}")
 
     # size-cap keep-override
     _BIG_KEEP.append("root/app-data")
