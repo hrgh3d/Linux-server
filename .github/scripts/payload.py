@@ -159,22 +159,52 @@ def big_keep_under(rel):
 # داخل آن پوشه‌هایی به نام cache/tmp/logs و حتی node_modules (پلاگین‌ها و skillها)
 # وجود دارد که با قواعد عمومی prune حذف می‌شدند؛ این‌ها را استثنا می‌کنیم مگر
 # آن‌هایی که واقعاً دور‌ریختنی‌اند.
+#
+# v6.36 (حادثهٔ 2026-09-17): استثنای v6.26 بی‌قید بود و *هر* چیزی زیر .openclaw
+# را نگه می‌داشت — از جمله .git یک پروژهٔ استخراج‌شده که خود ایجنت ساخته بود.
+# اعتبارسنجِ پیش از آپلود چنین استثنایی نداشت، پس آرشیو مردود می‌شد و ذخیره‌سازی
+# کاملاً متوقف شد (≈۹ ساعت داده از دست رفت). درمان دو لایه دارد:
+#   1) همین‌جا: نام‌های واقعاً دورریختنی حتی زیر .openclaw هم prune می‌شوند.
+#   2) validate(): دیگر قواعد را دوباره پیاده‌سازی نمی‌کند، بلکه *همین* توابع را
+#      صدا می‌زند؛ پس تناقض جمع‌آورنده/اعتبارسنج از نظر ساختاری ناممکن می‌شود.
+# نکته: node_modules زیر .openclaw عمداً نگه داشته می‌شود (پلاگین‌ها و skillها
+# با آن کار می‌کنند و چیزی آن‌ها را بازنصب نمی‌کند) — و چون اعتبارسنج از همین
+# تابع استفاده می‌کند، نگه‌داشتنش دیگر بی‌خطر است.
 _OPENCLAW_DATA = "root/.openclaw"
 _OPENCLAW_DROP = (
     "root/.openclaw/cache",
     "root/.openclaw/tmp",
     "root/.openclaw/media",   # فایل‌های حجیم رسانه‌ای؛ در صورت نیاز دوباره ساخته می‌شوند
 )
+# نام پوشه‌هایی که حتی داخل دادهٔ OpenClaw هم دورریختنی‌اند (هر عمقی).
+# .git عمداً اینجاست: ایجنت مرتب مخزن clone/extract می‌کند و تاریخچهٔ git
+# نه دادهٔ سشن است نه بازسازی‌ناپذیر — ولی آرشیو را مسموم می‌کرد.
+_OPENCLAW_DROP_NAMES = {
+    ".git", "__pycache__", ".cache", ".npm", ".nvm", ".bun",
+    ".pytest_cache", ".mypy_cache", ".tox", ".nox", ".gradle",
+    ".nuget", ".conda", ".venv", "venv", "Trash",
+}
+
+
+def _under_openclaw(rel):
+    return rel == _OPENCLAW_DATA or rel.startswith(_OPENCLAW_DATA + "/")
+
+
+def _openclaw_drop(rel):
+    """True اگر مسیرِ زیر .openclaw دورریختنی است (باید prune شود)."""
+    for d in _OPENCLAW_DROP:
+        if rel == d or rel.startswith(d + "/"):
+            return True
+    # segmentهای بعد از 'root/.openclaw'
+    segs = rel.split("/")[2:]
+    return any(s in _OPENCLAW_DROP_NAMES for s in segs)
 
 
 def _openclaw_keep(rel):
     """True اگر مسیر زیر دادهٔ OpenClaw است و باید علیرغم نام عمومی حفظ شود."""
-    if rel != _OPENCLAW_DATA and not rel.startswith(_OPENCLAW_DATA + "/"):
+    if not _under_openclaw(rel):
         return False
-    for d in _OPENCLAW_DROP:
-        if rel == d or rel.startswith(d + "/"):
-            return False
-    return True
+    return not _openclaw_drop(rel)
 
 
 def prune_dir(rel):
@@ -189,9 +219,10 @@ def prune_dir(rel):
         return True
     if rel == "opt/openclaw-app" or rel.startswith("opt/openclaw-app/"):
         return True
-    # v6.26: ولی دادهٔ کاربر OpenClaw کامل می‌ماند.
-    if _openclaw_keep(rel):
-        return False
+    # v6.36: دورریختنی‌های زیر .openclaw صریحاً prune می‌شوند (.git/cache/…)،
+    # وگرنه walk داخلشان می‌رود و آرشیو در اعتبارسنجی مردود می‌شود.
+    if _under_openclaw(rel):
+        return _openclaw_drop(rel)
     name = rel.rstrip("/").rsplit("/", 1)[-1]
     if name in PRUNE_DIR_NAMES:
         # extra check: if parent is hermes-agent, keep venv
@@ -213,14 +244,13 @@ def prune_file(rel):
     # v6.26: کد OpenClaw آرشیو نمی‌شود (بازنصب می‌شود)
     if rel.startswith("opt/openclaw-node/") or rel.startswith("opt/openclaw-app/"):
         return True
-    # v6.26: فایل‌های دور‌ریختنی زیر .openclaw (cache/tmp/media) حذف می‌شوند
-    for _d in _OPENCLAW_DROP:
-        if rel.startswith(_d + "/"):
+    # v6.36: فایل‌های دور‌ریختنی زیر .openclaw (cache/tmp/media/.git/…) حذف می‌شوند
+    if _under_openclaw(rel):
+        if _openclaw_drop(rel):
             return True
-    # v6.26: بقیهٔ فایل‌های دادهٔ OpenClaw می‌مانند؛ فقط موارد گذرا حذف می‌شوند.
-    # -wal/-shm ژورنال‌های زندهٔ SQLite‌اند و هرگز نباید خام آرشیو شوند
-    # (خود دیتابیس توسط sqlite_stage.py سازگار snapshot می‌شود).
-    if _openclaw_keep(rel):
+        # بقیهٔ فایل‌های دادهٔ OpenClaw می‌مانند؛ فقط موارد گذرا حذف می‌شوند.
+        # -wal/-shm ژورنال‌های زندهٔ SQLite‌اند و هرگز نباید خام آرشیو شوند
+        # (خود دیتابیس توسط sqlite_stage.py سازگار snapshot می‌شود).
         return name.endswith((".sock", ".pid", ".lock", ".log",
                               "-wal", "-shm",
                               ".sqlite-wal", ".sqlite-shm",
@@ -355,6 +385,60 @@ def collect(root_file, out_file, base_dir, stats_file=None, keepbig_file=None):
           f"big_skipped={len(_SKIPPED_BIG)}")
 
 
+def member_violation(rel, kind=None):
+    """سیاست واحد: آیا این عضوِ آرشیو *نباید* آنجا می‌بود؟
+
+    v6.36 — این تابع دیگر قواعد prune را دوباره پیاده‌سازی نمی‌کند؛ عیناً همان
+    prune_dir()/prune_file() جمع‌آورنده را صدا می‌زند. هر استثنایی که به
+    جمع‌آورنده اضافه شود خودبه‌خود در اعتبارسنجی هم اعمال می‌شود، پس حالتی که
+    جمع‌آورنده «نگه دار» بگوید و اعتبارسنج «ممنوع» — یعنی دقیقاً باگی که در
+    2026-09-17 همهٔ ذخیره‌سازی‌ها را متوقف کرد — از نظر ساختاری ناممکن است.
+
+    تشخیص نوع عضو (مهم): یک نام ممکن است به‌عنوان پوشه مجاز و به‌عنوان فایل
+    ممنوع باشد (یا برعکس) — مثلاً فایلی به نام «cache» یا پوشه‌ای به نام
+    «x.log». پس نوع را با اولویت زیر تعیین می‌کنیم:
+      1) kind صریح ("d"/"f")
+      2) اسلشِ پایانی — خروجی `tar -tzf` پوشه‌ها را این‌طور نشان می‌دهد
+      3) وضعیت واقعی روی دیسک
+      4) اگر هیچ‌کدام: محافظه‌کار عمل کن و فقط وقتی مردود کن که در هر دو
+         حالت ممنوع باشد (هرگز چیزی را که جمع‌آورنده نگه داشته رد نکن)
+    خروجی: None یعنی مجاز، وگرنه رشتهٔ دلیل.
+    """
+    clean = rel.rstrip("/")
+    if kind is None:
+        if rel.endswith("/"):
+            kind = "d"
+        else:
+            try:
+                if os.path.islink("/" + clean):
+                    kind = "f"
+                elif os.path.isdir("/" + clean):
+                    kind = "d"
+                elif os.path.exists("/" + clean):
+                    kind = "f"
+            except OSError:
+                kind = None
+    # هر جدّ مسیر اگر prune می‌شد، فرزندش هرگز نباید داخل آرشیو باشد.
+    parts = clean.split("/")
+    for i in range(1, len(parts)):
+        anc = "/".join(parts[:i])
+        if prune_dir(anc):
+            return f"under-pruned-dir:{anc}"
+    # ژورنال زندهٔ SQLite هرگز مجاز نیست — مستقل از نوع عضو. (بازیابی از یک
+    # -wal ناهماهنگ می‌تواند دیتابیس را خراب کند؛ sqlite_stage.py نسخهٔ سازگار
+    # را جداگانه stage می‌کند.)
+    if clean.endswith(("-wal", "-shm")):
+        return "sqlite-journal"
+    if kind == "d":
+        return "pruned-dir" if prune_dir(clean) else None
+    if kind == "f":
+        return "pruned-file" if prune_file(clean) else None
+    # نوع نامعلوم (عضوی که دیگر روی دیسک نیست): محافظه‌کارانه
+    if prune_dir(clean) and prune_file(clean):
+        return "pruned-entry"
+    return None
+
+
 def validate(members_file):
     """Pre-upload archive validation: ensure nothing that was supposed to be
     pruned actually made it into the archive member list."""
@@ -370,52 +454,48 @@ def validate(members_file):
             if rel.startswith("_meta/"):
                 continue
             payload += 1
-            clean = rel.rstrip("/")
-            # v5.4: hermes-agent venv is explicitly allowed (gateway needs it)
-            if clean.startswith("usr/local/lib/hermes-agent/venv") or clean.startswith("usr/local/lib/hermes-agent/.venv"):
-                continue
-            if clean == "usr/local/lib/hermes-agent/venv" or clean == "usr/local/lib/hermes-agent/.venv":
-                continue
-            name = clean.rsplit("/", 1)[-1]
-            if name in PRUNE_FILE_NAMES or name.endswith(PRUNE_FILE_SUFFIXES):
-                bad.append((rel, "pruned-file"))
-                continue
-            if clean in PRUNE_ABS_FILES or \
-                    any(clean == d or clean.startswith(d + "/") for d in PRUNE_ABS_DIRS):
-                bad.append((rel, "pruned-abs"))
-                continue
-            segs = clean.split("/")
-            if any(s in PRUNE_DIR_NAMES for s in segs):
-                # allow venv under hermes-agent
-                if "hermes-agent" in clean and any(x in ("venv", ".venv") for x in segs):
-                    pass
-                else:
-                    bad.append((rel, "pruned-dir-name"))
-                    continue
-            if clean.startswith("etc/"):
-                if clean in PRUNE_ETC or any(
-                        clean == d or clean.startswith(d + "/") for d in PRUNE_ETC):
-                    bad.append((rel, "pruned-etc"))
-                    continue
-            if clean.startswith("var/lib/"):
-                if clean in PRUNE_VARLIB or any(
-                        clean == d or clean.startswith(d + "/") for d in PRUNE_VARLIB):
-                    bad.append((rel, "pruned-varlib"))
-                    continue
-            if clean.endswith(".db-wal") or clean.endswith(".db-shm") or \
-                    clean.endswith(".sqlite-wal") or clean.endswith(".sqlite-shm"):
-                bad.append((rel, "sqlite-journal"))
-                continue
+            why = member_violation(rel.rstrip("/"))
+            if why:
+                bad.append((rel, why))
     print(f"[validate] members_total={total} payload_members={payload}")
     if bad:
         print(f"[validate] FAIL: {len(bad)} forbidden member(s) found (first 30):")
         for rel, why in bad[:30]:
-            print(f"    {why:18} {rel}")
+            print(f"    {why:28} {rel}")
         sys.exit(1)
     if payload == 0:
         print("[validate] FAIL: archive contains no payload members")
         sys.exit(1)
     print(f"[validate] PASS (total={total} payload={payload})")
+
+
+def prune_list(members_file):
+    """v6.36 — «خودترمیمی»: به‌جای مردودکردن کل آرشیو، فقط سطرهای متخلف را از
+    لیست حذف می‌کند و تعداد حذف‌شده‌ها را روی stderr گزارش می‌دهد.
+
+    فلسفه: از دست رفتن چند فایلِ دورریختنی بی‌نهایت بهتر از توقف کاملِ بکاپ و
+    نابودی سشن‌های کاربر است. save.sh این را قبل از tar اجرا می‌کند تا آرشیو
+    از اساس تمیز ساخته شود.
+    """
+    kept, dropped = [], []
+    with open(members_file, "r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            rel = raw.strip()
+            if not rel:
+                continue
+            if member_violation(rel.rstrip("/")):
+                dropped.append(rel)
+            else:
+                kept.append(rel)
+    with open(members_file, "w", encoding="utf-8") as fh:
+        for rel in kept:
+            fh.write(rel + "\n")
+    if dropped:
+        print(f"[prune-list] removed {len(dropped)} forbidden entr(ies) "
+              f"before archiving (first 20):", file=sys.stderr)
+        for rel in dropped[:20]:
+            print(f"    {rel}", file=sys.stderr)
+    print(f"[prune-list] kept={len(kept)} dropped={len(dropped)}")
 
 
 def selftest():
@@ -461,6 +541,39 @@ def selftest():
     assert prune_file("root/.9router/db/data.sqlite-wal") is True
     assert prune_file("etc/x-ui/install-result.env") is True
     assert prune_file("etc/x-ui/system_metrics.gob") is True
+    # ---- v6.36 regression tests: حادثهٔ 2026-09-17 (از دست رفتن سشن OpenClaw)
+    # مسیر دقیقی که رانر #148 را شکست داد:
+    _POISON = ("root/.openclaw/workspace/backups/live-20260916-2245/us/"
+               "mirza-pro-extracted/mirza_pro/.git")
+    assert prune_dir(_POISON) is True, "‌.git زیر .openclaw باید prune شود"
+    assert member_violation(_POISON + "/hooks/pre-commit.sample") is not None
+    assert prune_dir("root/.openclaw/.git") is True
+    assert prune_dir("root/.openclaw/workspace/proj/__pycache__") is True
+    # دادهٔ واقعی کاربر باید دست‌نخورده بماند:
+    assert prune_dir("root/.openclaw/agents/main") is False
+    assert prune_dir("root/.openclaw/workspace") is False
+    assert prune_dir("root/.openclaw/workspace/skills/my/node_modules") is False
+    assert prune_file("root/.openclaw/openclaw.json") is False
+    assert member_violation("root/.openclaw/agents/main/agent/"
+                            "openclaw-agent.sqlite") is None
+    assert member_violation("root/.openclaw/workspace/skills/my/"
+                            "node_modules/x/index.js") is None
+    # قرارداد اصلی: هر چیزی که جمع‌آورنده نگه می‌دارد، اعتبارسنج هم باید بپذیرد.
+    for _p in ("root/.openclaw/agents/main/memory.json",
+               "root/.openclaw/workspace/notes/todo.md",
+               "root/.hermes/skills/a/skill.py",
+               "usr/local/lib/hermes-agent/venv/bin/python"):
+        assert member_violation(_p) is None, f"collector/validator mismatch: {_p}"
+    # و هر چیزی که prune می‌شود، اعتبارسنج هم باید رد کند.
+    for _p in ("root/node_modules/pkg/index.js",
+               "root/.cache/x/y",
+               "root/.openclaw/cache/blob.bin",
+               "root/.openclaw/tmp/scratch"):
+        assert member_violation(_p) is not None, f"validator too permissive: {_p}"
+    # Hermes همچنان طبق قواعد عمومی prune می‌شود (استثنای OpenClaw ندارد)
+    assert prune_dir("root/.hermes/.git") is True
+    assert prune_dir("root/.hermes/skills/x/node_modules") is True
+
     # size-cap keep-override
     _BIG_KEEP.append("root/app-data")
     assert big_keep_under("root/app-data/big.db") is True
@@ -483,12 +596,18 @@ def main():
     v = sub.add_parser("validate")
     v.add_argument("--members", required=True,
                    help="archive member list (one rel path per line)")
+    p = sub.add_parser("prune-list",
+                       help="v6.36: strip forbidden entries from a member list "
+                            "in place (self-heal instead of failing the save)")
+    p.add_argument("--members", required=True)
     sub.add_parser("selftest")
     args = ap.parse_args()
     if args.cmd == "list":
         collect(args.roots, args.out, args.base, args.stats, args.keepbig)
     elif args.cmd == "validate":
         validate(args.members)
+    elif args.cmd == "prune-list":
+        prune_list(args.members)
     elif args.cmd == "selftest":
         selftest()
     else:

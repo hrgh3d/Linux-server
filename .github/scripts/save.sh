@@ -178,8 +178,19 @@ phase "staging consistent SQLite snapshots..."
 python3 "$SCRIPT_DIR/sqlite_stage.py" "$LIST" "$SNAP_DIR" "$LIST_FINAL" "$SNAP_LIST" --fallback \
   || fatal "sqlite staging failed (cannot guarantee consistent db snapshot)"
 
+# ---- v6.36: خودترمیمی پیش از tar ------------------------------------------
+# حادثهٔ 2026-09-17: یک پوشهٔ .git که خود ایجنت OpenClaw ساخته بود وارد لیست شد،
+# اعتبارسنجِ پیش از آپلود کل آرشیو را مردود کرد و ذخیره‌سازی ~۹ ساعت کاملاً
+# متوقف ماند. حالا سطرهای متخلف *قبل از* ساخت آرشیو حذف می‌شوند تا یک فایل
+# دورریختنی هرگز نتواند کل بکاپ را گروگان بگیرد.
+phase "pre-tar policy sweep (self-heal)..."
+python3 "$SCRIPT_DIR/payload.py" prune-list --members "$LIST_FINAL" 2>&1 | sed 's/^/[persist] /' || true
+
 # ----------------------------------------------------------- 5) tar
-PAYLOAD_N=$(wc -l < "$LIST" 2>/dev/null || echo 0)
+# v6.36: از روی لیست‌هایی که واقعاً به tar داده می‌شوند شمرده می‌شود
+# (نه $LIST خام) — چون prune-list ممکن است سطرهای متخلف را حذف کرده باشد.
+PAYLOAD_N=$(( $(wc -l < "$LIST_FINAL" 2>/dev/null || echo 0) \
+            + $(wc -l < "$SNAP_LIST" 2>/dev/null || echo 0) ))
 META_FILES=()
 for _f in "$META"/_meta/*; do [ -e "$_f" ] && META_FILES+=("${_f#"$META"/}"); done
 META_N=${#META_FILES[@]}
@@ -271,8 +282,59 @@ if [ $VALIDATE_FAIL -eq 0 ]; then
     log "ERROR: archive too large (${SIZEH})"; VALIDATE_FAIL=1
   fi
 fi
+# ---- v6.36: بازسازی خودکار به‌جای تسلیم شدن -------------------------------
+# اگر اعتبارسنجی به دلیل «محتوای ممنوع» شکست خورد، یک بار لیست را دوباره هرس
+# می‌کنیم و آرشیو را از نو می‌سازیم. دلیل: توقف کاملِ ذخیره‌سازی (حادثهٔ
+# 2026-09-17) بسیار پرهزینه‌تر از انداختن چند فایل دورریختنی است.
+if [ $VALIDATE_FAIL -ne 0 ] && [ "${SAVE_REBUILD_DONE:-0}" != "1" ] \
+   && grep -q "forbidden\|pruned-\|under-pruned" /tmp/validate.log 2>/dev/null; then
+  log "v6.36: validation found forbidden members — re-sweeping list and rebuilding archive ONCE..."
+  python3 "$SCRIPT_DIR/payload.py" prune-list --members "$LIST_FINAL" 2>&1 | sed 's/^/[persist] /' || true
+  python3 "$SCRIPT_DIR/payload.py" prune-list --members "$SNAP_LIST" 2>&1 | sed 's/^/[persist] /' || true
+  PAYLOAD_N=$(( $(wc -l < "$LIST_FINAL" 2>/dev/null || echo 0) \
+              + $(wc -l < "$SNAP_LIST" 2>/dev/null || echo 0) ))
+  EXPECTED=$(( PAYLOAD_N + META_N ))
+  sudo rm -f /tmp/state.tar.gz
+  set +e
+  timeout 300 sudo tar -c -f /tmp/state.tar.gz \
+    --no-recursion --use-compress-program='gzip -1' \
+    -C / -T "$LIST_FINAL" \
+    -C "$SNAP_DIR" -T "$SNAP_LIST" \
+    -C "$META" "${META_FILES[@]}" \
+    >/tmp/tar.log 2>&1
+  RC=$?
+  set -e
+  if [ $RC -eq 0 ]; then
+    SIZE=$(stat -c%s /tmp/state.tar.gz 2>/dev/null || echo 0)
+    SIZEH=$(du -h /tmp/state.tar.gz | cut -f1)
+    VALIDATE_FAIL=0
+    if ! timeout 120 tar -tzf /tmp/state.tar.gz > "$MEMBERS" 2>/dev/null; then
+      log "ERROR: rebuilt archive cannot be listed"; VALIDATE_FAIL=1
+    fi
+    if [ $VALIDATE_FAIL -eq 0 ]; then
+      ACTUAL=$(grep -cvE '^_meta/?$' "$MEMBERS" 2>/dev/null || true)
+      if [ "${ACTUAL:-0}" -ne "$EXPECTED" ]; then
+        log "ERROR: rebuilt member count mismatch — expected=${EXPECTED} actual=${ACTUAL}"
+        VALIDATE_FAIL=1
+      fi
+    fi
+    if [ $VALIDATE_FAIL -eq 0 ] && \
+       ! python3 "$SCRIPT_DIR/payload.py" validate --members "$MEMBERS" >/tmp/validate.log 2>&1; then
+      log "ERROR: rebuilt archive STILL has forbidden content:"
+      tail -20 /tmp/validate.log | sed 's/^/    /'
+      VALIDATE_FAIL=1
+    fi
+    [ $VALIDATE_FAIL -eq 0 ] && log "v6.36: rebuild SUCCEEDED — save proceeds (data loss avoided)"
+  else
+    log "ERROR: rebuild tar failed (rc=$RC)"; VALIDATE_FAIL=1
+  fi
+fi
+
 if [ $VALIDATE_FAIL -ne 0 ]; then
   log "Archive validation FAILED — upload skipped; previous healthy state is untouched."
+  # v6.36: شکست ذخیره‌سازی دیگر بی‌صدا نیست — همان لحظه به تلگرام هشدار می‌رود.
+  bash "$SCRIPT_DIR/notify.sh" --type backup --stage archive-validation \
+    --error "ذخیره‌سازی state انجام نشد: آرشیو در اعتبارسنجی رد شد و بازسازی خودکار هم جواب نداد. تا رفع این مشکل، دادهٔ جدید بین رانرها منتقل نمی‌شود. $(tail -5 /tmp/validate.log 2>/dev/null | tr '\n' ' ')" || true
   sudo rm -f /tmp/state.tar.gz
   exit 1
 fi

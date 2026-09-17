@@ -77,7 +77,29 @@ fi
 # اگر وبهوک ست نشده باشد ولی توکن ربات و chat_id موجود باشند، مستقیم به تلگرام می‌فرستد.
 # v6.13: ربات گزارش (REPORT_BOT_TOKEN) از ربات Hermes Gateway جداست — هشدارها
 # اولویت با REPORT_BOT_TOKEN دارند تا کانال Hermes اشغال/مخلوط نشود.
+#
+# v6.36: اگر توکن در محیط نبود (مثلاً save.sh آن را موقتاً blank کرده یا اسکریپت
+# خارج از workflow اجرا شده)، از همان منابع روی دیسک می‌خوانیم تا هشدار
+# «ذخیره‌سازی خراب است» هرگز به‌خاطر نبودِ توکن گم نشود.
 _ALERT_TG_TOKEN="${REPORT_BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
+if [ -z "${_ALERT_TG_TOKEN}" ]; then
+  for _src in /run/report-bot.token /root/.hermes/.report-bot.token; do
+    [ -s "$_src" ] && _ALERT_TG_TOKEN="$(tr -d '\r\n' < "$_src")" && break
+  done
+fi
+if [ -z "${_ALERT_TG_TOKEN}" ] && [ -r /root/.hermes/.env ]; then
+  _ALERT_TG_TOKEN="$(grep -m1 '^REPORT_BOT_TOKEN=.\{8,\}' /root/.hermes/.env 2>/dev/null | cut -d= -f2-)"
+fi
+if [ -z "${_ALERT_TG_TOKEN}" ]; then
+  _PRE="$(ls -1t /root/.hermes/.env.pre-guard.* /var/lib/hermes-guard/env.preblank 2>/dev/null | head -1)"
+  [ -n "$_PRE" ] && _ALERT_TG_TOKEN="$(grep -m1 '^REPORT_BOT_TOKEN=.\{8,\}' "$_PRE" 2>/dev/null | cut -d= -f2-)"
+fi
+_ALERT_CHAT="${NOTIFY_CHAT_ID:-}"
+[ -n "$_ALERT_CHAT" ] || _ALERT_CHAT="$(grep -m1 '^NOTIFY_CHAT_ID=' /root/.hermes/.env 2>/dev/null | cut -d= -f2-)"
+[ -n "$_ALERT_CHAT" ] || _ALERT_CHAT="7262486406"
+NOTIFY_CHAT_ID="$_ALERT_CHAT"
+
+_TG_SENT=0
 if [ -z "${NOTIFY_WEBHOOK_URL:-}" ] && [ -n "${_ALERT_TG_TOKEN}" ] && [ -n "${NOTIFY_CHAT_ID:-}" ]; then
   _MSG="سیستم ${VPS_NAME:-hrgh3d} قطع شد ❌
 مرحله: ${STAGE} (run ${RUN}#${ATT})
@@ -86,6 +108,7 @@ $(printf '%s' "${ERR}" | head -c 300)"
        -d "chat_id=${NOTIFY_CHAT_ID}" -d "disable_web_page_preview=true" \
        --data-urlencode "text=${_MSG}" >/dev/null 2>&1; then
     echo "[notify] telegram alert sent (direct, no webhook)"
+    _TG_SENT=1
   else
     echo "[notify] WARN: telegram direct send failed"
   fi
@@ -117,8 +140,12 @@ PY
   else
     echo "[notify] webhook notification sent"
   fi
+elif [ "$_TG_SENT" -eq 1 ]; then
+  # v6.36: قبلاً اینجا بی‌قید چاپ می‌شد «هیچ اعلانی ارسال نشد» — حتی وقتی
+  # تلگرام موفق بوده. آن پیام غلط، تحلیل حادثهٔ 2026-09-17 را گمراه کرد.
+  echo "[notify] delivered via direct telegram (no webhook configured — that is fine)"
 else
-  echo "[notify] no NOTIFY_WEBHOOK_URL and no direct telegram (TELEGRAM_BOT_TOKEN+NOTIFY_CHAT_ID) — notification recorded locally "
+  echo "[notify] WARN: alert NOT delivered — no webhook and no usable telegram token/chat"
   echo "        (GitHub failure email/notification will also fire if the job fails)"
 fi
 exit 0
