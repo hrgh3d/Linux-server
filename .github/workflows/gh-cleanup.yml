@@ -1,0 +1,95 @@
+name: gh-cleanup
+
+# پاک‌سازی خودکار محیط GitHub (v6.37)
+#   - هر روز ساعت 03:20 UTC، ران‌های تمام‌شدهٔ قدیمی‌تر از ۲ روز را حذف می‌کند.
+#   - سیستم زنده هرگز مختل نمی‌شود: ران‌های in_progress/queued و N ران آخر هر
+#     workflow و ریلیز «state» به‌صورت سخت محافظت می‌شوند (منطق در gh_cleanup.py).
+#   - زمان اجرا عمداً با send-backup (03:47) و DR هفتگی (04:15) فاصله دارد.
+#   - پیش‌فرض دستی = DRY-RUN، تا اجرای اشتباه چیزی را حذف نکند.
+
+on:
+  schedule:
+    - cron: "20 3 * * *"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "حذف ران‌های قدیمی‌تر از این تعداد روز"
+        required: false
+        default: "2"
+      apply:
+        description: "true = حذف واقعی، false = فقط گزارش"
+        required: false
+        default: "false"
+      include_releases:
+        description: "ریلیزهای یتیم قدیمی هم حذف شوند؟ (تگ state هرگز)"
+        required: false
+        default: "false"
+
+concurrency:
+  group: gh-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: write      # حذف runs/artifacts/caches
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cleanup GitHub environment
+        env:
+          # PERSIST_TOKEN یک PAT با دسترسی به هر دو مخزن است؛ GITHUB_TOKEN
+          # داخلی به مخزن state دسترسی ندارد، پس اول PAT را امتحان می‌کنیم.
+          CLEANUP_TOKEN: ${{ secrets.PERSIST_TOKEN || secrets.GITHUB_TOKEN }}
+          DAYS: ${{ inputs.days || '2' }}
+          APPLY: ${{ inputs.apply || 'false' }}
+          INCREL: ${{ inputs.include_releases || 'false' }}
+        run: |
+          set -uo pipefail
+          # اجرای زمان‌بندی‌شده همیشه واقعی است؛ اجرای دستی فقط اگر apply=true
+          MODE=""
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "$APPLY" = "true" ]; then
+            MODE="--apply"
+          fi
+          REL=""
+          [ "$INCREL" = "true" ] && REL="--include-releases"
+
+          BK=/tmp/gh-cleanup-backups
+          mkdir -p "$BK"
+          RC=0
+          for REPO in "${{ github.repository }}" "${{ github.repository_owner }}/Linux-server-state"; do
+            echo "::group::cleanup $REPO"
+            python3 .github/scripts/gh_cleanup.py --repo "$REPO" \
+              --days "$DAYS" --keep-per-workflow 5 --max-delete 400 \
+              --backup-dir "$BK" $MODE $REL || RC=1
+            echo "::endgroup::"
+          done
+
+          # خلاصه در صفحهٔ اجرا
+          {
+            echo "## 🧹 gh-cleanup"
+            echo ""
+            echo "| تنظیم | مقدار |"
+            echo "|---|---|"
+            echo "| حالت | \`${MODE:-dry-run}\` |"
+            echo "| نگهداری | ${DAYS} روز |"
+            echo "| ریلیزها | ${INCREL} |"
+          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          exit $RC
+
+      - name: upload deletion manifests (audit trail)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanup-manifests
+          path: /tmp/gh-cleanup-backups/*.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: notify on failure
+        if: failure()
+        run: bash .github/scripts/notify.sh --type workflow --stage gh-cleanup
+             --error "پاک‌سازی خودکار محیط GitHub با خطا مواجه شد." || true
