@@ -179,6 +179,41 @@ if [ -f /etc/systemd/system/openclaw-gateway.service ]; then
   start_system openclaw-gateway.service
 fi
 
+# --- v6.38: Headroom — پروکسی فشرده‌سازی کانتکست برای «Token Saver» پنل 9router
+# پنل 9router خودش این پروسه را اجرا نمی‌کند («Headroom proxies must be started
+# outside 9Router») و فقط به http://127.0.0.1:8787 وصل می‌شود. پس اینجا بالا
+# می‌آید. venv در /opt/headroom و یونیت در /etc/systemd/system هر دو در
+# persist.list هستند، ولی اگر venv به هر دلیلی گم شود خودش را بازمی‌سازد تا
+# «Token Saver» بعد از چرخش رانر خاموش نماند.
+ensure_headroom() {
+  [ -f /etc/systemd/system/headroom.service ] || return 0
+  if [ ! -x /opt/headroom/bin/headroom ]; then
+    echo "[services] headroom: venv missing after restore — rebuilding..."
+    python3 -m venv /opt/headroom >/dev/null 2>&1 || {
+      sudo apt-get install -y -q python3-venv >/dev/null 2>&1
+      python3 -m venv /opt/headroom >/dev/null 2>&1; }
+    timeout 900 /opt/headroom/bin/pip install -q "headroom-ai[proxy]" \
+      >/tmp/headroom-rebuild.log 2>&1 \
+      && echo "[services] headroom: venv rebuilt" \
+      || echo "[services] WARNING: headroom venv rebuild failed (see /tmp/headroom-rebuild.log)"
+  fi
+  mkdir -p /root/.headroom 2>/dev/null || true
+}
+ensure_headroom
+if [ -f /etc/systemd/system/headroom.service ]; then
+  start_system headroom.service
+  # آماده‌باش کوتاه: پنل تا وقتی /health جواب ندهد دکمه را فعال نمی‌کند
+  for _i in 1 2 3; do
+    curl -fsS -m 3 http://127.0.0.1:8787/health >/dev/null 2>&1 && break
+    sleep 3
+  done
+  if curl -fsS -m 3 http://127.0.0.1:8787/health >/dev/null 2>&1; then
+    echo "[services] headroom: proxy healthy on 127.0.0.1:8787 (9router Token Saver ready)"
+  else
+    echo "[services] headroom: not answering yet — Restart=always will keep retrying"
+  fi
+fi
+
 # --- Hermes gateway: یونیت user روت ---
 # v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
 # بوت‌های بعدی از راه استاندارد (همین یونیت) بالا می‌آیند.
