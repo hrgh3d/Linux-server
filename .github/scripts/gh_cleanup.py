@@ -52,6 +52,34 @@ LIVE_STATUSES = {"in_progress", "queued", "waiting", "requested", "pending",
 #  می‌خوانند. اگر روزی تگ دیگری اضافه شد، همین‌جا ثبتش کنید.)
 PROTECTED_RELEASE_TAGS = {"state"}
 
+# v6.37.1 — فقط این workflowها تاریخچهٔ اخیرشان لازم است.
+# دلیل دقیق (از watchdog.sh خط ۲۵ و ۳۱): واچ‌داگ لیست ران‌ها را می‌خواند و
+# دنبال ران in_progress با path == main.yml می‌گردد؛ watchdog-fast هم خودش را
+# با همین روش پیدا می‌کند تا دوباره‌کاری نکند. بقیهٔ workflowها هیچ مصرف‌کنندهٔ
+# تاریخچه‌ای ندارند، پس نگه‌داشتن ران‌های قدیمی‌شان فقط صفحه را شلوغ می‌کند.
+HISTORY_CRITICAL_PATHS = {
+    ".github/workflows/main.yml",
+    ".github/workflows/watchdog-fast.yml",
+}
+
+# v6.37.2 — workflowهای «ابزاری»: اجراهایشان فقط نویز عملیاتی‌اند و هیچ ارزش
+# تاریخی ندارند. ops-exec ابزار اجرای دستور روی سرور است و به‌تنهایی بیش از
+# نیمی از صفحهٔ Actions را پر می‌کند؛ واچ‌داگ‌ها هم هر چند دقیقه یک بار اجرا
+# می‌شوند. این‌ها با --tool-hours یک پنجرهٔ نگهداری *خیلی کوتاه‌تر* می‌گیرند،
+# در حالی که ران‌های main.yml (خودِ سرور) با --days کامل حفظ می‌شوند.
+# نکته: ران زندهٔ این‌ها همچنان مطلقاً محافظت می‌شود.
+TOOL_WORKFLOW_PATHS = {
+    ".github/workflows/ops-exec.yml",
+    ".github/workflows/watchdog.yml",
+    ".github/workflows/watchdog-b.yml",
+    ".github/workflows/watchdog-fast.yml",
+    ".github/workflows/send-backup.yml",
+    ".github/workflows/gh-cleanup.yml",
+    ".github/workflows/ops-notify-test.yml",
+    ".github/workflows/ops-server-check.yml",
+    ".github/workflows/keepalive-monthly.yml",
+}
+
 _last_call = [0.0]
 
 
@@ -134,10 +162,27 @@ def parse_ts(s):
 
 
 # ------------------------------------------------------------------ تحلیل
-def plan_runs(repo, token, days, keep_per_wf, now):
+def live_workflow_ids(repo, token):
+    """شناسه و مسیر workflowهایی که *واقعاً* در مخزن وجود دارند.
+
+    v6.37.1: ران‌هایی که workflow آن‌ها حذف شده (مثل ops-emg*/diag) در صفحهٔ
+    Actions به‌عنوان ورودی‌های یتیم باقی می‌مانند و سایدبار را شلوغ می‌کنند.
+    این‌ها هیچ نگهبانی ندارند و باید بدون قید سنی پاک شوند.
+    """
+    st, d = req("GET", f"/repos/{repo}/actions/workflows?per_page=100", token)
+    if st != 200:
+        return None  # نامشخص ⇒ محافظه‌کارانه رفتار می‌کنیم
+    return {w["id"]: w.get("path", "") for w in d.get("workflows", [])}
+
+
+def plan_runs(repo, token, days, keep_per_wf, now, purge_orphans=True,
+              tool_hours=None):
     """تصمیم‌گیری دربارهٔ هر run. خروجی: (لیست حذف, لیست نگه‌داشتن+دلیل, آمار)."""
     runs = paginate(f"/repos/{repo}/actions/runs", token, "workflow_runs")
     cutoff = now - datetime.timedelta(days=days)
+    tool_cutoff = (now - datetime.timedelta(hours=tool_hours)
+                   if tool_hours else None)
+    existing = live_workflow_ids(repo, token)
 
     # ران‌ها را per-workflow مرتب می‌کنیم تا «N تای آخر» را نگه داریم
     by_wf = {}
@@ -146,10 +191,13 @@ def plan_runs(repo, token, days, keep_per_wf, now):
     for v in by_wf.values():
         v.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
+    # v6.37.1: تاریخچهٔ اخیر فقط برای workflowهای حیاتی نگه داشته می‌شود.
     recent_ids = set()
-    for v in by_wf.values():
-        for r in v[:keep_per_wf]:
-            recent_ids.add(r["id"])
+    for wf_id, v in by_wf.items():
+        path = (v[0].get("path") or "") if v else ""
+        if path in HISTORY_CRITICAL_PATHS:
+            for r in v[:keep_per_wf]:
+                recent_ids.add(r["id"])
 
     delete, keep = [], []
     for r in runs:
@@ -166,26 +214,44 @@ def plan_runs(repo, token, days, keep_per_wf, now):
             "created_at": r.get("created_at"),
             "html_url": r.get("html_url"),
         }
-        # --- خط قرمز ۱: ران زنده
+        # --- خط قرمز ۱: ران زنده (همیشه مقدم بر هر قانون دیگری)
         if status in LIVE_STATUSES:
             item["keep_reason"] = f"LIVE ({status}) — deleting would kill the server"
             keep.append(item)
             continue
-        # --- خط قرمز ۲: جزو N تای آخرِ این workflow
+        # --- یتیم: workflow آن دیگر در مخزن نیست ⇒ بدون قید سنی پاک می‌شود
+        orphan = (existing is not None
+                  and r.get("workflow_id") not in existing)
+        if orphan and purge_orphans:
+            item["age_days"] = round((now - created).total_seconds() / 86400, 2) if created else None
+            item["reason"] = "orphan — workflow file no longer exists"
+            delete.append(item)
+            continue
+        # --- خط قرمز ۲: جزو N تای آخرِ یک workflow حیاتی
         if rid in recent_ids:
-            item["keep_reason"] = f"within newest {keep_per_wf} of its workflow (watchdog needs history)"
+            item["keep_reason"] = f"within newest {keep_per_wf} of a history-critical workflow (watchdog reads it)"
             keep.append(item)
             continue
         # --- خط قرمز ۳: داخل پنجرهٔ نگهداری
-        if created and created > cutoff:
+        # v6.37.2: workflowهای ابزاری پنجرهٔ کوتاه‌تری دارند (--tool-hours)
+        path = r.get("path") or ""
+        is_tool = tool_cutoff is not None and path in TOOL_WORKFLOW_PATHS
+        eff_cutoff = tool_cutoff if is_tool else cutoff
+        if created and created > eff_cutoff:
             age_h = (now - created).total_seconds() / 3600
-            item["keep_reason"] = f"only {age_h:.1f}h old (< {days}d retention)"
+            window = (f"< {tool_hours}h tool-retention" if is_tool
+                      else f"< {days}d retention")
+            item["keep_reason"] = f"only {age_h:.1f}h old ({window})"
             keep.append(item)
             continue
+        if is_tool:
+            item["reason"] = f"tool workflow older than {tool_hours}h"
         item["age_days"] = round((now - created).total_seconds() / 86400, 2) if created else None
         delete.append(item)
 
-    stats = {"total": len(runs), "delete": len(delete), "keep": len(keep)}
+    orphans = sum(1 for d in delete if d.get("reason", "").startswith("orphan"))
+    stats = {"total": len(runs), "delete": len(delete), "keep": len(keep),
+             "orphans": orphans}
     return delete, keep, stats
 
 
@@ -255,6 +321,11 @@ def main():
     ap.add_argument("--backup-dir", default="/tmp/gh-cleanup-backups")
     ap.add_argument("--include-releases", action="store_true",
                     help="ریلیزهای یتیم قدیمی را هم حذف کن (تگ‌های محافظت‌شده هرگز)")
+    ap.add_argument("--tool-hours", type=float, default=None,
+                    help="پنجرهٔ نگهداری کوتاه‌تر (ساعت) برای workflowهای ابزاری "
+                         "مثل ops-exec و واچ‌داگ‌ها؛ main.yml تحت --days می‌ماند")
+    ap.add_argument("--keep-orphans", action="store_true",
+                    help="ران‌های workflowهای حذف‌شده را هم نگه دار (پیش‌فرض: پاک می‌شوند)")
     ap.add_argument("--skip-artifacts", action="store_true")
     ap.add_argument("--skip-caches", action="store_true")
     ap.add_argument("--json", action="store_true", help="خروجی ماشین‌خوان")
@@ -272,13 +343,21 @@ def main():
     print(f"=== gh_cleanup v6.37 — {args.repo} — {mode} ===")
     print(f"    retention={args.days}d  keep_per_workflow={args.keep_per_workflow}  "
           f"max_delete={args.max_delete}")
+    if args.tool_hours:
+        print(f"    tool-retention={args.tool_hours}h for: "
+              f"{', '.join(sorted(p.split('/')[-1] for p in TOOL_WORKFLOW_PATHS))}")
     print(f"    protected release tags: {sorted(PROTECTED_RELEASE_TAGS)}")
 
     print("\n[1/4] analysing workflow runs...")
     del_runs, keep_runs, stats = plan_runs(args.repo, token, args.days,
-                                           args.keep_per_workflow, now)
+                                           args.keep_per_workflow, now,
+                                           purge_orphans=not args.keep_orphans,
+                                           tool_hours=args.tool_hours)
     live = [k for k in keep_runs if "LIVE" in k.get("keep_reason", "")]
     print(f"    total={stats['total']}  to_delete={stats['delete']}  keep={stats['keep']}")
+    if stats.get("orphans"):
+        print(f"    🧹 {stats['orphans']} run(s) belong to DELETED workflows "
+              f"(ops-emg*/diag style) — purged regardless of age")
     if live:
         print(f"    🛡  {len(live)} LIVE run(s) protected:")
         for k in live:

@@ -13,9 +13,13 @@ on:
   workflow_dispatch:
     inputs:
       days:
-        description: "حذف ران‌های قدیمی‌تر از این تعداد روز"
+        description: "حذف ران‌های قدیمی‌تر از این تعداد روز (ران‌های خودِ سرور)"
         required: false
         default: "2"
+      tool_hours:
+        description: "پنجرهٔ کوتاه‌تر (ساعت) برای ops-exec و واچ‌داگ‌ها"
+        required: false
+        default: "12"
       apply:
         description: "true = حذف واقعی، false = فقط گزارش"
         required: false
@@ -45,6 +49,7 @@ jobs:
           # داخلی به مخزن state دسترسی ندارد، پس اول PAT را امتحان می‌کنیم.
           CLEANUP_TOKEN: ${{ secrets.PERSIST_TOKEN || secrets.GITHUB_TOKEN }}
           DAYS: ${{ inputs.days || '2' }}
+          TOOLH: ${{ inputs.tool_hours || '12' }}
           APPLY: ${{ inputs.apply || 'false' }}
           INCREL: ${{ inputs.include_releases || 'false' }}
         run: |
@@ -63,7 +68,8 @@ jobs:
           for REPO in "${{ github.repository }}" "${{ github.repository_owner }}/Linux-server-state"; do
             echo "::group::cleanup $REPO"
             python3 .github/scripts/gh_cleanup.py --repo "$REPO" \
-              --days "$DAYS" --keep-per-workflow 5 --max-delete 400 \
+              --days "$DAYS" --tool-hours "$TOOLH" \
+              --keep-per-workflow 5 --max-delete 400 \
               --backup-dir "$BK" $MODE $REL || RC=1
             echo "::endgroup::"
           done
@@ -75,7 +81,8 @@ jobs:
             echo "| تنظیم | مقدار |"
             echo "|---|---|"
             echo "| حالت | \`${MODE:-dry-run}\` |"
-            echo "| نگهداری | ${DAYS} روز |"
+            echo "| نگهداری (سرور) | ${DAYS} روز |"
+            echo "| نگهداری (ابزارها) | ${TOOLH} ساعت |"
             echo "| ریلیزها | ${INCREL} |"
           } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           exit $RC
