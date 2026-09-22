@@ -207,6 +207,15 @@ def _openclaw_keep(rel):
     return not _openclaw_drop(rel)
 
 
+def _in_site_packages(rel):
+    """v6.39: آیا مسیر داخل درخت پکیج‌های نصب‌شدهٔ پایتون است؟
+
+    داخل site-packages/dist-packages نام پوشه معنای «کش» نمی‌دهد؛
+    زیرماژول واقعی است (headroom/cache, urllib3/contrib/tmp, ...).
+    """
+    return "/site-packages/" in rel or "/dist-packages/" in rel
+
+
 def prune_dir(rel):
     # v5.3: hermes-agent venv must persist (gateway needs it), so exempt it from venv prune
     if rel.startswith("usr/local/lib/hermes-agent/venv") or rel.startswith("usr/local/lib/hermes-agent/.venv"):
@@ -224,6 +233,13 @@ def prune_dir(rel):
     if _under_openclaw(rel):
         return _openclaw_drop(rel)
     name = rel.rstrip("/").rsplit("/", 1)[-1]
+    # v6.39: مهم — داخل درخت site-packages / dist-packages، پوشه‌هایی مثل
+    # cache, logs, tmp, venv, target «کش» نیستند؛ زیرپکیج واقعی پایتون‌اند.
+    # حذفشان کتابخانه را خراب می‌کند. نمونهٔ واقعی: headroom/cache حذف شد و
+    # سرویس با ModuleNotFoundError: No module named 'headroom.cache' وارد
+    # کرش‌لوپ شد (۸۲۷ ری‌استارت). فقط __pycache__ داخل پکیج‌ها دورریختنی است.
+    if _in_site_packages(rel):
+        return name == "__pycache__"
     if name in PRUNE_DIR_NAMES:
         # extra check: if parent is hermes-agent, keep venv
         if "hermes-agent" in rel and name in ("venv", ".venv"):
