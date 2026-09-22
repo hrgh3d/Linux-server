@@ -217,6 +217,10 @@ def _in_site_packages(rel):
 
 
 def prune_dir(rel):
+    # v6.39: __pycache__ همیشه دورریختنی است — این بررسی باید *قبل* از هر
+    # معافیتی بیاید، وگرنه معافیت venv هرمس آن را هم نگه می‌دارد (حجم اضافه).
+    if rel.rstrip("/").rsplit("/", 1)[-1] == "__pycache__":
+        return True
     # v5.3: hermes-agent venv must persist (gateway needs it), so exempt it from venv prune
     if rel.startswith("usr/local/lib/hermes-agent/venv") or rel.startswith("usr/local/lib/hermes-agent/.venv"):
         return False
