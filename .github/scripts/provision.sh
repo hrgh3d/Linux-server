@@ -307,6 +307,57 @@ provision_hermes() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# v6.39: کلاینت‌های CLI هوش مصنوعی (Claude Code + Grok CLI)
+# همان الگوی 9router/OpenClaw: «تنظیمات می‌ماند، کد بازنصب می‌شود».
+#   * تنظیمات کاربر : /root/.claude و /root/.grok و /etc/profile.d/ai-clients.sh
+#                     → زیر /root و /etc هستند، پس در آرشیو حفظ می‌شوند.
+#   * کد npm        : /usr/local/lib/node_modules/... → آرشیو نمی‌شود
+#                     (حجیم و پر از node_modules) و اینجا بازنصب می‌شود.
+# هر دو کلاینت به 9router محلی وصل‌اند، پس بدون 9router بی‌معنا هستند.
+# ---------------------------------------------------------------------------
+provision_ai_clients() {
+  local pkg bin name
+  for spec in "@anthropic-ai/claude-code:claude:Claude Code" \
+              "@vibe-kit/grok-cli:grok:Grok CLI"; do
+    pkg="${spec%%:*}"; rest="${spec#*:}"; bin="${rest%%:*}"; name="${rest#*:}"
+    if command -v "$bin" >/dev/null 2>&1; then
+      note "${name}: present — kept (Mode 2)"
+      continue
+    fi
+    log "${name}: binary missing — reinstalling..."
+    if ensure_npm && timeout 600 $SUDO env PATH="$PATH" npm install -g "$pkg" \
+         --no-fund --no-audit >"${LOG_DIR}/${bin}.log" 2>&1; then
+      note "${name}: REINSTALLED"
+    else
+      note "${name}: reinstall FAILED (non-fatal)"
+      tail -10 "${LOG_DIR}/${bin}.log" 2>/dev/null | tee -a "${LOG_DIR}/summary.txt"
+    fi
+  done
+
+  # اگر فایل env مشترک گم شده بود، از روی کلید 9router در کانفیگ OpenClaw بسازش
+  if [ ! -f /etc/profile.d/ai-clients.sh ] && [ -f /root/.openclaw/openclaw.json ]; then
+    local key
+    key=$(python3 -c "import json;print(json.load(open('/root/.openclaw/openclaw.json'))['models']['providers']['ninerouter']['apiKey'])" 2>/dev/null || true)
+    if [ -n "$key" ]; then
+      $SUDO tee /etc/profile.d/ai-clients.sh >/dev/null <<PROF
+export ANTHROPIC_BASE_URL=http://127.0.0.1:20128
+export ANTHROPIC_AUTH_TOKEN=${key}
+export ANTHROPIC_MODEL=Agentic
+export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=128000
+export GROK_BASE_URL=http://127.0.0.1:20128/v1
+export GROK_API_KEY=${key}
+export GROK_MODEL=Agentic
+export OPENAI_BASE_URL=http://127.0.0.1:20128/v1
+export OPENAI_API_KEY=${key}
+PROF
+      $SUDO chmod 644 /etc/profile.d/ai-clients.sh
+      note "ai-clients: /etc/profile.d/ai-clients.sh rebuilt"
+    fi
+  fi
+}
+
 provision_xui() {
   note "3x-ui: disabled by user — skip (Mode 2)"
 }
@@ -339,6 +390,7 @@ provision_cloudflared() {
 }
 
 log "=== provisioning start (Mode 2 + recovery v4.5.5 venv-valid check) ==="
+provision_ai_clients
 provision_9router
 provision_openclaw
 provision_hermes
