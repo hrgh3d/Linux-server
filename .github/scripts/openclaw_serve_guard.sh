@@ -65,6 +65,7 @@ SERVE_MAP="
 9443|9119||Hermes Dashboard
 9444|9121||9Router
 9445|30141|pi-web.service|Pi Web
+9446|9446|aihub.service|AI Hub
 "
 
 ensure_route() {   # $1=https_port $2=local_port $3=unit $4=label

@@ -435,6 +435,66 @@ UNIT
 ensure_piweb
 
 
+# ---------------------------------------------------------------- AI Hub
+# پنل یکپارچهٔ مدیریت همهٔ برنامه‌های AI روی پورت 9446.
+# درس v6.x: start-services.sh یونیت‌ها را خودکار کشف نمی‌کند، پس هر سرویس
+# جدید باید صراحتاً اینجا اضافه شود وگرنه بعد از چرخش رانر برنمی‌گردد.
+ensure_aihub() {
+  local SRC="$SCRIPT_DIR/../../aihub"
+  [ -d "$SRC/app" ] || { echo "[services] aihub source missing, skip"; return 0; }
+
+  sudo mkdir -p /opt/aihub
+  sudo cp -r "$SRC/app" "$SRC/static" "$SRC/requirements.txt" /opt/aihub/ 2>/dev/null || true
+
+  if [ ! -x /opt/aihub/venv/bin/python ]; then
+    echo "[services] creating aihub venv"
+    sudo python3 -m venv /opt/aihub/venv >/tmp/aihub-venv.log 2>&1 || {
+      echo "[services] aihub venv failed"; return 0; }
+  fi
+  # نصب فقط وقتی fastapi غایب است تا هر بوت چند دقیقه تلف نشود
+  if ! /opt/aihub/venv/bin/python -c "import fastapi" >/dev/null 2>&1; then
+    echo "[services] installing aihub deps"
+    sudo /opt/aihub/venv/bin/pip -q install -r /opt/aihub/requirements.txt \
+      >/tmp/aihub-pip.log 2>&1 || {
+      echo "[services] aihub pip failed: $(tail -2 /tmp/aihub-pip.log | tr '\n' ' ')"; return 0; }
+  fi
+
+  sudo tee /etc/systemd/system/aihub.service >/dev/null <<'AIHUBUNIT'
+[Unit]
+Description=AI Hub - unified control panel for all AI programs
+After=network-online.target 9router.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/aihub
+EnvironmentFile=-/etc/profile.d/ai-clients.sh
+Environment=PYTHONUNBUFFERED=1
+Environment=XDG_RUNTIME_DIR=/run/user/0
+ExecStart=/opt/aihub/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 9446 --no-access-log
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
+AIHUBUNIT
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable aihub.service >/dev/null 2>&1 || true
+  sudo systemctl restart aihub.service || true
+  local i
+  for i in $(seq 1 10); do
+    curl -fsS -m 3 -o /dev/null http://127.0.0.1:9446/api/health 2>/dev/null && break
+    sleep 2
+  done
+  echo "[services] aihub: $(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:9446/api/health)"
+}
+ensure_aihub
+
+
 ensure_cloudcli
 # v6.44: وصله‌های سمت مرورگر (فونت گوگل + service worker) هر بوت دوباره اعمال
 # می‌شوند، چون dist زیر node_modules است و با هر بازنصب npm تازه می‌شود.

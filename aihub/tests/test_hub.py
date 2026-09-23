@@ -66,8 +66,11 @@ def fake_fs():
     ]
     (base / "root/.pi/agent/sessions/--root--/2026-09-23T10-00_330c582d.jsonl"
      ).write_text("\n".join(json.dumps(r) for r in pr), encoding="utf-8")
+    # کلیدهای واقعی Pi (تأییدشده روی سرور): defaultProvider / defaultModel
     (base / "root/.pi/agent/settings.json").write_text(
-        json.dumps({"model": "Agentic"}), encoding="utf-8")
+        json.dumps({"defaultProvider": "ninerouter", "defaultModel": "Agentic",
+                    "defaultThinkingLevel": "off",
+                    "enabledModels": ["ninerouter/*"]}), encoding="utf-8")
 
     # --- OpenClaw: نشست‌ها در session_nodes، session_conversations خالی ---
     db = base / "root/.openclaw/agents/main/agent/openclaw-agent.sqlite"
@@ -86,8 +89,20 @@ def fake_fs():
                int(time.time() * 1000), "active", 0, "dashboard", "user", "hamid"))
     c.commit()
     c.close()
-    (base / "root/.openclaw/openclaw.json").write_text(
-        json.dumps({"model": "Agentic"}), encoding="utf-8")
+    # ساختار واقعی OpenClaw: agents.defaults.model + models.providers.*
+    (base / "root/.openclaw/openclaw.json").write_text(json.dumps({
+        "agents": {"defaults": {"workspace": "/root/.openclaw/workspace",
+                                "model": "ninerouter/Agentic"}},
+        "models": {"mode": "merge", "providers": {"ninerouter": {
+            "baseUrl": "http://127.0.0.1:20128/v1",
+            "models": [{"id": "ultimate"}, {"id": "Agentic"}, {"id": "Brain"}]}}},
+        "gateway": {"port": 18789}}), encoding="utf-8")
+
+    # Hermes config.yaml — بلوک model در ستون صفر
+    (base / "root/.hermes").mkdir(parents=True, exist_ok=True)
+    (base / "root/.hermes/config.yaml").write_text(
+        "model:\n  provider: custom\n  model: ox-alpha\n"
+        "other:\n  model: should-not-win\n", encoding="utf-8")
 
     # --- 9Router ---
     rdb = base / "root/.9router/db/data.sqlite"
@@ -369,3 +384,55 @@ def test_old_sessions_are_idle_not_working():
     from app.adapters import ClaudeAdapter, PiAdapter
     states = {s.state for s in ClaudeAdapter().sessions() + PiAdapter().sessions()}
     assert states == {"idle"}, f"stale sessions marked active: {states}"
+
+
+# ------------------------------------------- real config-key regressions
+
+
+def test_pi_reads_defaultModel_key():
+    """رگرسیون: کلید واقعی defaultModel است، نه model."""
+    from app.adapters import PiAdapter
+    assert PiAdapter().status().model == "Agentic"
+
+
+def test_pi_set_model_writes_real_keys(tmp_path):
+    from app.adapters import PiAdapter
+    ok, msg = PiAdapter().set_model("Brain")
+    assert ok, msg
+    d = json.load(open(Path(ROOT) / "root/.pi/agent/settings.json"))
+    assert d["defaultModel"] == "Brain"
+    assert d["defaultProvider"] == "ninerouter"
+    # کلیدهای دیگر نباید گم شوند
+    assert d["enabledModels"] == ["ninerouter/*"]
+    PiAdapter().set_model("Agentic")
+
+
+def test_openclaw_model_from_agents_defaults():
+    """رگرسیون: مسیر واقعی agents.defaults.model است، نه models.default."""
+    from app.adapters import OpenClawAdapter
+    assert OpenClawAdapter().current_model() == "Agentic"
+
+
+def test_openclaw_set_model_preserves_other_keys():
+    """بازنویسی config نباید gateway/plugins را پاک کند."""
+    from app.adapters import OpenClawAdapter
+    a = OpenClawAdapter()
+    ok, msg = a.set_model("Brain")
+    assert ok, msg
+    d = json.load(open(a.CFG))
+    assert d["agents"]["defaults"]["model"] == "ninerouter/Brain"
+    assert d["agents"]["defaults"]["workspace"] == "/root/.openclaw/workspace"
+    assert d["gateway"]["port"] == 18789, "unrelated config was destroyed"
+    assert "models" in d
+    a.set_model("Agentic")
+
+
+def test_openclaw_models_from_providers():
+    from app.adapters import OpenClawAdapter
+    assert "Agentic" in OpenClawAdapter().models()
+
+
+def test_hermes_model_from_config_yaml():
+    """باید بلوک اول model: را بخواند و به 'other:' نشتی نکند."""
+    from app.adapters import HermesAdapter
+    assert HermesAdapter._config_model() == "ox-alpha"

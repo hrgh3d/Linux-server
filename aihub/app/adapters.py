@@ -236,8 +236,35 @@ class HermesAdapter(Adapter):
             st.error = str(exc)[:160]
             st.running = unit_active("hermes-dashboard.service")
             st.detail = "api unreachable"
+        st.model = self._config_model()
         st.session_count = len(self.sessions())
         return st
+
+    @staticmethod
+    def _config_model() -> str | None:
+        """
+        /root/.hermes/config.yaml با «model:» در ستون صفر شروع می‌شود و
+        زیرکلید model دارد. بدون PyYAML همان بلوک اول را دستی می‌خوانیم تا
+        وابستگی اضافه‌ای به سرویس تحمیل نشود. حلقه به محض رسیدن به کلید
+        بعدیِ ستون صفر می‌شکند تا مقدار بلوک‌های دیگر برداشته نشود.
+        """
+        try:
+            lines = open(rp("/root/.hermes/config.yaml"),
+                         encoding="utf-8", errors="replace").read().splitlines()
+        except Exception:                                      # noqa: BLE001
+            return None
+        inside = False
+        for ln in lines[:80]:
+            if re.match(r"^model:\s*$", ln):
+                inside = True
+                continue
+            if inside:
+                if ln.strip() and not ln.startswith((" ", "\t")):
+                    break
+                m = re.match(r"""\s+(?:model|name|id):\s*['"]?([^'"#\s]+)""", ln)
+                if m:
+                    return m.group(1)
+        return None
 
     def sessions(self) -> list[Session]:
         """
@@ -375,7 +402,7 @@ class PiAdapter(Adapter):
         rc, out = _sh(["pi", "--version"], timeout=10)
         st.running = rc == 0
         st.version = out.strip().split("\n")[0][:20] if rc == 0 else None
-        st.model = self._settings().get("model")
+        st.model = self._settings().get("defaultModel")
         st.session_count = len(self.sessions())
         st.detail = "web ui " + ("up" if http_code("http://127.0.0.1:30141/") else "down")
         return st
@@ -437,26 +464,32 @@ class PiAdapter(Adapter):
     def models(self) -> list[str]:
         try:
             d = json.load(open(rp("/root/.pi/agent/models.json")))
-            return [m["id"] for m in d["providers"]["ninerouter"]["models"]]
+            provs = d.get("providers") or {}
+            ms = (provs.get("ninerouter") or {}).get("models") or []
+            out = [m.get("id") for m in ms if isinstance(m, dict) and m.get("id")]
+            if out:
+                return out
         except Exception:                                      # noqa: BLE001
-            return list_9router_combos()
+            pass
+        return list_9router_combos()
 
     def set_model(self, model: str) -> tuple[bool, str]:
+        """کلیدهای واقعی settings.json: defaultProvider / defaultModel."""
         path = rp("/root/.pi/agent/settings.json")
         try:
             d = json.load(open(path))
-            d["provider"] = "ninerouter"
-            d["model"] = model
+            d["defaultProvider"] = "ninerouter"
+            d["defaultModel"] = model
             json.dump(d, open(path, "w"), indent=2)
-            return True, f"pi default model = {model}"
+            return True, f"pi defaultModel = {model}"
         except Exception as exc:                               # noqa: BLE001
             return False, str(exc)
 
     def send(self, text: str, session_id: str | None = None) -> tuple[bool, str]:
         s = self._settings()
         cmd = ["pi", "-p", text,
-               "--provider", s.get("provider", "ninerouter"),
-               "--model", s.get("model", "Agentic"),
+               "--provider", s.get("defaultProvider", "ninerouter"),
+               "--model", s.get("defaultModel", "Agentic"),
                "--thinking", "off"]
         rc, out = _sh(cmd, timeout=180)
         return rc == 0, out[-4000:]
@@ -479,8 +512,7 @@ class OpenClawAdapter(Adapter):
         code = http_code("http://127.0.0.1:18789/health")
         st.running = code == 200
         st.detail = "healthy" if st.running else f"health {code}"
-        cfg = self._cfg()
-        st.model = (cfg.get("models", {}) or {}).get("default")
+        st.model = self.current_model()
         rc, out = _sh(["openclaw", "--version"], timeout=10)
         if rc == 0:
             st.version = out.strip().split("\n")[0][:24]
@@ -545,22 +577,43 @@ class OpenClawAdapter(Adapter):
         return out
 
     def models(self) -> list[str]:
+        """مسیر واقعی: models.providers.ninerouter.models[].id"""
         cfg = self._cfg()
         try:
-            ms = cfg["models"]["providers"]["ninerouter"]["models"]
-            return [m["id"] if isinstance(m, dict) else str(m) for m in ms]
+            ms = (((cfg.get("models") or {}).get("providers") or {})
+                  .get("ninerouter") or {}).get("models") or []
+            out = [m.get("id") for m in ms if isinstance(m, dict) and m.get("id")]
+            if out:
+                return out
         except Exception:                                      # noqa: BLE001
-            return list_9router_combos()
+            pass
+        return list_9router_combos()
+
+    def current_model(self) -> str | None:
+        """مسیر واقعی: agents.defaults.model = 'ninerouter/Agentic'"""
+        try:
+            m = ((self._cfg().get("agents") or {})
+                 .get("defaults") or {}).get("model")
+            return str(m).split("/")[-1] if m else None
+        except Exception:                                      # noqa: BLE001
+            return None
 
     def set_model(self, model: str) -> tuple[bool, str]:
+        """
+        در agents.defaults.model می‌نویسیم (مسیر تأییدشده روی سرور).
+        فایل کامل خوانده و بازنویسی می‌شود تا هیچ کلید دیگری گم نشود.
+        """
         try:
             cfg = json.load(open(self.CFG))
-            cfg.setdefault("models", {})["default"] = f"ninerouter/{model}"
-            json.dump(cfg, open(self.CFG, "w"), indent=2)
-            return True, f"openclaw default = ninerouter/{model} (restart to apply)"
+            cfg.setdefault("agents", {}).setdefault("defaults", {})["model"] = \
+                f"ninerouter/{model}"
+            tmp = self.CFG + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(cfg, fh, indent=2, ensure_ascii=False)
+            os.replace(tmp, self.CFG)
+            return True, f"openclaw model = ninerouter/{model} (restart to apply)"
         except Exception as exc:                               # noqa: BLE001
             return False, str(exc)
-
 
 # ================================================================ 9Router
 

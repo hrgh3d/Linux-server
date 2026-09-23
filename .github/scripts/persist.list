@@ -31,3 +31,6 @@
 # داده‌های عمومی سرویس‌ها (دیتابیس و …)
 /var/lib
 /var/opt
+/opt/aihub/app
+/opt/aihub/static
+/opt/aihub/requirements.txt
