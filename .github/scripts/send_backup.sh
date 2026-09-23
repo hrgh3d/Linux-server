@@ -154,6 +154,18 @@ EXCL=(
   --exclude=./root/.9router/logs        --exclude=root/.9router/logs
   --exclude=*/node_modules              --exclude=*/__pycache__
   --exclude=*.sock                      --exclude=*.pid
+  # v6.51 — اندازه‌گیری‌شده روی سرور: اینها ۳۲۴MB از ۳۶MB بودجه می‌خوردند و
+  # باعث SKIP شدن openclaw.tar.gz و home-root.tar.gz می‌شدند؛ یعنی باندل
+  # «موفق» بدون کانفیگ اوپن‌کلاو و بدون /root تحویل می‌شد.
+  --exclude=./root/backups              --exclude=root/backups
+  --exclude=./root/.local               --exclude=root/.local
+  --exclude=./root/.headroom            --exclude=root/.headroom
+  --exclude=./root/.nvm                 --exclude=root/.nvm
+  --exclude=./root/.bun                 --exclude=root/.bun
+  --exclude=./root/go                   --exclude=root/go
+  # workspace اوپن‌کلاو ۲۱۴MB است: خروجی کار و کلون ریپوهاست، نه پیکربندی.
+  # چیزی که واقعاً لازم است (config + state + agents) جداگانه گرفته می‌شود.
+  --exclude=./root/.openclaw/workspace  --exclude=root/.openclaw/workspace
   # آرشیوهای نجات/بکاپ قبلی داخل /root — خودشان بکاپ‌اند، نباید تودرتو بیایند
   --exclude=./root/*.tar.gz             --exclude=root/*.tar.gz
   --exclude=./root/hermes-rescue-*      --exclude=root/hermes-rescue-*
@@ -371,7 +383,14 @@ verify_bundle() {
   if [ "$missing" -eq 0 ]; then
     VERDICT="✅ کامل — $ok جزء،${deep}"
   else
-    VERDICT="⚠️ ناقص — $missing ایراد بحرانی،${deep}"
+    # v6.51: نام اجزای غایب را هم بگو، وگرنه «⚠️ ناقص — ۲ ایراد» یعنی هیچ.
+    local miss_names=""
+    for crit in openclaw.tar.gz home-root.tar.gz aihub.tar.gz \
+                tailscale-state.tar.gz app-code.tar.gz services.tar.gz \
+                sqlite/aihub-hub.sqlite sqlite/openclaw-state.sqlite; do
+      printf '%s\n' "$list" | grep -q "$crit" || miss_names="${miss_names} ${crit%%.tar.gz}"
+    done
+    VERDICT="⚠️ ناقص — $missing ایراد:${miss_names},${deep}"
   fi
   echo "[verify] members=$ok missing=$missing deep=${deep}"
   return 0
@@ -394,9 +413,19 @@ else
   for f in /tmp/bk-part-*; do i=$((i+1)); send_doc "$f" "${CAP} — بخش ${i}/${n}" && echo "[backup] part ${i}/${n} sent" || echo "[backup] WARN: part ${i} failed"; done
 fi
 
-# ---------- ۳) حالت DR: ارسال اسنپ‌شات state ----------
+# ---------- ۳) حالت DR: اشاره به اسنپ‌شات state ----------
+# v6.51 — قبلاً کل state (روی این سیستم **۱.۷ گیگابایت**) دانلود و به ۴۱ تکهٔ
+# ۴۰MB تقسیم و به تلگرام فرستاده می‌شد. در اجرای واقعی هر ۴۱ تکه رد شد
+# («state part N failed») و فقط ۱۵ دقیقه وقت رانر سوخت. تلگرام برای آرشیو
+# گیگابایتی ساخته نشده و لازم هم نیست: state همیشه روی ریلیز گیت‌هاب هست.
+#
+# منطق تازه: به‌جای فرستادن، **آدرس و اثرانگشتش** را می‌فرستیم. باندل
+# اصلی خودکفاست (repo + کلیدها + دادهٔ سرور) و RECOVERY.md می‌گوید چطور
+# state را در صورت نیاز از ریلیز بردارد. اگر state آنقدر کوچک بود که
+# در یک پیام جا شود، همان را می‌فرستیم.
+STATE_MAX_SEND=$((120 * 1024 * 1024))
 if [ "$DR_MODE" = "true" ]; then
-  echo "[backup] DR mode: downloading state snapshot"
+  echo "[backup] DR mode: locating state snapshot"
   TOKX="${STATE_TOKEN:-${PERSIST_TOKEN:-}}"
   if [ -n "$TOKX" ] && [ -n "${STATE_REPO:-}" ]; then
     ASSET_URL=$(curl -sS -m 60 -H "Authorization: token ${TOKX}" -H "Accept: application/vnd.github+json" \
@@ -406,13 +435,27 @@ if [ "$DR_MODE" = "true" ]; then
       curl -sSL -m 900 -H "Authorization: token ${TOKX}" -H "Accept: application/octet-stream" "$ASSET_URL" -o /tmp/state.tar.gz \
         && { STATE_SIZE=$(stat -c%s /tmp/state.tar.gz); echo "[backup] state size=${STATE_SIZE}"; }
       if [ -s /tmp/state.tar.gz ]; then
-        split -b "$PART" -d -a 2 /tmp/state.tar.gz /tmp/state.part-
-        n=$(ls /tmp/state.part-* | wc -l); i=0
-        for f in /tmp/state.part-*; do
-          i=$((i+1))
-          send_doc "$f" "🧩 اسنپ‌شات state سیستم ${VPS_NAME} — بخش ${i}/${n} (${n} بخش؛ برای استفاده: cat state.part-* > state.tar.gz)" \
-            && echo "[backup] state part ${i}/${n} sent" || echo "[backup] WARN: state part ${i} failed"
-        done
+        STATE_SHA=$(sha256sum /tmp/state.tar.gz | cut -c1-16)
+        STATE_MB=$(( STATE_SIZE / 1024 / 1024 ))
+        if [ "$STATE_SIZE" -le "$STATE_MAX_SEND" ]; then
+          split -b "$PART" -d -a 2 /tmp/state.tar.gz /tmp/state.part-
+          n=$(ls /tmp/state.part-* | wc -l); i=0
+          for f in /tmp/state.part-*; do
+            i=$((i+1))
+            send_doc "$f" "🧩 اسنپ‌شات state ${VPS_NAME} — بخش ${i}/${n} (cat state.part-* > state.tar.gz)" \
+              && echo "[backup] state part ${i}/${n} sent" || echo "[backup] WARN: state part ${i} failed"
+          done
+        else
+          echo "[backup] state is ${STATE_MB}MB (> $((STATE_MAX_SEND/1024/1024))MB) — sending pointer instead of parts"
+          rpt_text "🧩 اسنپ‌شات state ${VPS_NAME}
+حجم: ${STATE_MB}MB · sha256: ${STATE_SHA}…
+برای تلگرام بزرگ است، پس فرستاده نشد. باندل بالا **خودکفاست** و برای
+بازگرداندن کل سیستم کافی است.
+اگر state را هم خواستی:
+  ریلیز \`state\` در ریپوی ${STATE_REPO}
+  یا: gh release download state -R ${STATE_REPO} -p 'state-*.tar.gz'
+جزئیات در RECOVERY.md بخش ۲." || true
+        fi
       fi
     else
       echo "[backup] WARN: state asset not found"

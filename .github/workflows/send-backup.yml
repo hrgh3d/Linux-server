@@ -52,6 +52,11 @@ jobs:
       - name: "backup: server data + recovery bootstrap (+ state snapshot in DR mode)"
         shell: bash
         env:
+          # v6.51: report.sh روی رانر این دو را لازم دارد؛ بدونشان
+          # «no report-bot destination» می‌دهد و باندل ساخته می‌شود ولی
+          # هرگز ارسال نمی‌شود — دقیقاً چیزی که در اجرای ۱۹:۰۸ دیده شد.
+          REPORT_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN }}
+          NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
           HAMID_PASSWORD: ${{ secrets.HAMID_PASSWORD }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
