@@ -139,7 +139,11 @@ set -u
 B=/tmp/bkbuild; rm -rf "$B"; mkdir -p "$B"
 MAN="$B/manifest.txt"; : > "$MAN"
 add() { printf '  %s\n' "$1" >> "$MAN"; }
-BUDGET=$((36000 * 1024))
+# v6.51 — بودجه از ۳۶MB به ۴۴MB. اندازه‌گیری واقعی بعد از حذف بازساختنی‌ها:
+# openclaw 19MB (شامل دیتابیس ۴۵MB گفت‌وگوها) + app-code 9MB + home-root 9MB
+# + بقیه ≈ ۳۴MB. سقف ۴۴MB یعنی همه جا می‌شوند و باندل نهایی هنوز زیر حد
+# ۴۵MBـی split می‌ماند ⇒ یک فایل تلگرام، بدون تکه‌تکه شدن.
+BUDGET=$((44000 * 1024))
 total=0
 
 # v6.35 — مسیرهایی که هرگز نباید در باندل بیایند: بازساختنی‌اند ولی حجیم‌اند و
@@ -166,6 +170,14 @@ EXCL=(
   # workspace اوپن‌کلاو ۲۱۴MB است: خروجی کار و کلون ریپوهاست، نه پیکربندی.
   # چیزی که واقعاً لازم است (config + state + agents) جداگانه گرفته می‌شود.
   --exclude=./root/.openclaw/workspace  --exclude=root/.openclaw/workspace
+  # باینری‌های دانلودی داخل agents (fd و امثالش، ۳.۵MB هرکدام) و نسخهٔ
+  # legacy که فقط کپی قدیمی همان است. خودِ openclaw-agent.sqlite (۴۵MB،
+  # ۱۹MB فشرده) عمداً می‌ماند: تاریخچهٔ گفت‌وگوهاست و بازساختنی نیست.
+  --exclude=./root/.openclaw/agents/*/agent/bin
+  --exclude=root/.openclaw/agents/*/agent/bin
+  --exclude=./root/.openclaw/agents/*/agent.legacy-*
+  --exclude=root/.openclaw/agents/*/agent.legacy-*
+  --exclude=*.jsonl.deleted.*.zst
   # آرشیوهای نجات/بکاپ قبلی داخل /root — خودشان بکاپ‌اند، نباید تودرتو بیایند
   --exclude=./root/*.tar.gz             --exclude=root/*.tar.gz
   --exclude=./root/hermes-rescue-*      --exclude=root/hermes-rescue-*
