@@ -115,9 +115,13 @@ def fake_fs():
               "provider,model,connectionId,apiKey,endpoint,promptTokens,"
               "completionTokens,cost,status,tokens,meta)")
     r.execute("create table usageDaily(dateKey primary key,data)")
-    r.execute("create table combos(id integer primary key,name,data)")
-    for i, (m, pt, ct) in enumerate([("Agentic", 1200, 340),
-                                     ("Brain", 800, 120), ("vps", 400, 90)]):
+    # ساختار واقعی combos روی سرور: cols = id,name,kind,models,createdAt,updatedAt
+    r.execute("create table combos(id text primary key,name,kind,models,"
+              "createdAt,updatedAt)")
+    # مهم: usageHistory نام مدل **واقعی** را ذخیره می‌کند نه نام کامبو
+    for i, (m, pt, ct) in enumerate([("gemini-3.6-flash", 1200, 340),
+                                     ("deepseek-v4.1-flash:free", 800, 120),
+                                     ("qwen/qwen3.8-max:free", 400, 90)]):
         r.execute("insert into usageHistory values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (i + 1, int(time.time() * 1000), "p", m, "c", "k", "/v1",
                    pt, ct, 0.01, "ok", pt + ct, "{}"))
@@ -130,9 +134,29 @@ def fake_fs():
                                     "completionTokens": 2578,
                                     "cost": 0.2282 - d * 0.02,
                                     "byProvider": {}})))
-    for n in ["ultimate", "Agentic", "Image", "Brain", "ox-alpha", "vps"]:
-        r.execute("insert into combos(name,data) values(?,?)",
-                  (n, json.dumps({"models": []})))
+    # اعضای واقعی که از سرور خوانده شد — resolver باید از نام مدلِ
+    # usageHistory به کامبو برسد، پس اعضا باید واقع‌نما باشند.
+    real_combos = {
+        "Agentic": ["gemini/gemini-3.6-flash",
+                    "openrouter/deepseek/deepseek-v4-flash-0731",
+                    "openrouter/xiaomi/mimo-v2.5", "oc/mimo-v2.5-free",
+                    "cf/@cf/qwen/qwen2.5-coder-32b-instruct",
+                    "cf/@cf/zai-org/glm-4.7-flash", "oc/nemotron-3-ultra-free",
+                    "oc/hy3-free", "openrouter/deepseek/deepseek-v4-flash",
+                    "oc/deepseek-v4-flash-free",
+                    "openrouter/openai/gpt-5.6-luna",
+                    "cf/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"],
+        "Brain": ["cl/deepseek/deepseek-v4.1-flash",
+                  "tkbr/deepseek-v4.1-flash:free"],
+        "ox-alpha": ["openrouter/openai/gpt-5.6-luna"],
+        "vps": ["gemini/gemini-3.6-flash"],
+        "Image": ["oc/hy3-free"],
+        "ultimate": ["oc/broken-provider"],
+    }
+    for i, (n, ms) in enumerate(real_combos.items()):
+        r.execute("insert into combos(id,name,kind,models,createdAt,updatedAt)"
+                  " values(?,?,?,?,?,?)",
+                  (f"c{i}", n, "roundrobin", json.dumps(ms), 0, 0))
     r.commit()
     r.close()
     yield base
@@ -328,27 +352,29 @@ def test_index_serves_html(client):
 def test_frontend_has_rtl_support():
     html = (Path(__file__).parent.parent / "static/index.html").read_text(encoding="utf-8")
     assert "unicode-bidi:plaintext" in html, "Persian text will break without this"
-    assert "rtl-auto" in html
+    assert 'class="rtl"' in html
 
 
 def test_frontend_chrome_is_english():
     html = (Path(__file__).parent.parent / "static/index.html").read_text(encoding="utf-8")
-    for label in ["Dashboard", "Sessions", "Control", "Insight",
-                  "Send", "Apply", "Restart", "Compare"]:
+    for label in ["Sessions", "Projects", "Hand off", "Permissions",
+                  "Rename", "Archive", "Race combos"]:
         assert label in html, f"missing English label: {label}"
 
 
 def test_frontend_confirms_destructive_actions():
     html = (Path(__file__).parent.parent / "static/index.html").read_text(encoding="utf-8")
-    assert "confirmDanger" in html
-    # هر فراخوانی restart باید از مسیر تأیید عبور کند
-    assert html.count("confirmDanger(") >= 3
+    assert "confirmDlg" in html
+    # هر کار مخرب باید از مسیر تأیید عبور کند
+    assert html.count("confirmDlg(") >= 3
 
 
 def test_frontend_escapes_user_content():
     """پیام‌های نشست ممکن است HTML داشته باشند — باید esc شوند."""
     html = (Path(__file__).parent.parent / "static/index.html").read_text(encoding="utf-8")
-    assert "const esc =" in html
+    flat = html.replace(" ", "")
+    assert "constesc=" in flat, "no HTML-escape helper"
+    assert "&amp;" in html and "&lt;" in html, "escape map incomplete"
     assert "esc(m.text)" in html and "esc(h.snippet)" in html
 
 
@@ -356,7 +382,8 @@ def test_frontend_is_mobile_first():
     html = (Path(__file__).parent.parent / "static/index.html").read_text(encoding="utf-8")
     assert "width=device-width" in html
     assert "safe-area-inset" in html, "iPhone notch handling missing"
-    assert "<nav>" in html, "bottom navigation missing"
+    assert "@media(max-width:860px)" in html, "no mobile breakpoint"
+    assert ".sb.open" in html, "no mobile sidebar drawer"
 
 
 def test_frontend_has_no_external_dependencies():

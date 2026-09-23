@@ -443,7 +443,7 @@ ensure_aihub() {
   local SRC="$SCRIPT_DIR/../../aihub"
   [ -d "$SRC/app" ] || { echo "[services] aihub source missing, skip"; return 0; }
 
-  sudo mkdir -p /opt/aihub
+  sudo mkdir -p /opt/aihub /opt/aihub/data
   sudo cp -r "$SRC/app" "$SRC/static" "$SRC/requirements.txt" /opt/aihub/ 2>/dev/null || true
 
   if [ ! -x /opt/aihub/venv/bin/python ]; then

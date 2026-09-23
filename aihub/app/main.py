@@ -27,10 +27,11 @@ from pydantic import BaseModel
 
 from .adapters import (ADAPTERS, rp, RouterAdapter, _sh, list_9router_combos,
                        set_env_model, unit_active)
+from . import store, resolver, orchestra
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC = APP_DIR.parent / "static"
-VERSION = "1.0.0"
+VERSION = "2.0.0"
 
 app = FastAPI(title="AI Hub", version=VERSION, docs_url="/api/docs")
 
@@ -116,7 +117,8 @@ async def overview():
 
 
 @app.get("/api/sessions")
-async def sessions(app_key: str | None = Query(None, alias="app")):
+async def sessions(app_key: str | None = Query(None, alias="app"),
+                   include_archived: bool = False):
     """نشست‌های همهٔ برنامه‌ها، مرتب‌شده بر اساس آخرین فعالیت."""
     def build():
         out = []
@@ -127,9 +129,32 @@ async def sessions(app_key: str | None = Query(None, alias="app")):
                 out.extend(asdict(s) for s in ad.sessions())
             except Exception:                                  # noqa: BLE001
                 continue
-        out.sort(key=lambda s: (s.get("last_active") or ""), reverse=True)
-        return out
-    return await cached(f"sessions:{app_key or 'all'}", build)
+        # متادیتای دلخواه کاربر روی نشست واقعی سوار می‌شود. نام اصلی در
+        # real_title نگه داشته می‌شود تا هیچ اطلاعاتی گم نشود.
+        meta = store.meta_all()
+        for s in out:
+            m = meta.get(f"{s['source']}:{s['id']}")
+            if not m:
+                continue
+            s["real_title"] = s.get("title")
+            if m.get("title"):
+                s["title"] = m["title"]
+            for k in ("icon", "color", "note"):
+                if m.get(k):
+                    s[k] = m[k]
+            s["pinned"] = bool(m.get("pinned"))
+            s["archived"] = bool(m.get("archived"))
+            s["tags"] = [t for t in (m.get("tags") or "").split(",") if t]
+        if not include_archived:
+            out = [s for s in out if not s.get("archived")]
+        out.sort(key=lambda s: (not s.get("pinned"),
+                                "" if s.get("pinned") else
+                                (s.get("last_active") or "")), reverse=False)
+        pinned = [s for s in out if s.get("pinned")]
+        rest = sorted([s for s in out if not s.get("pinned")],
+                      key=lambda s: (s.get("last_active") or ""), reverse=True)
+        return pinned + rest
+    return await cached(f"sessions:{app_key or 'all'}:{int(include_archived)}", build)
 
 
 @app.get("/api/attention")
@@ -372,3 +397,422 @@ async def index():
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  v2 — session metadata, live models, projects, skills, governance
+# ═══════════════════════════════════════════════════════════════════
+
+
+class MetaBody(BaseModel):
+    title: str | None = None
+    icon: str | None = None
+    color: str | None = None
+    pinned: int | None = None
+    archived: int | None = None
+    tags: str | None = None
+    note: str | None = None
+
+
+class ProjBody(BaseModel):
+    name: str
+    goal: str = ""
+    icon: str = "📁"
+    mode: str = "manual"
+    budget: float = 1.0
+
+
+class ProjPatch(BaseModel):
+    name: str | None = None
+    goal: str | None = None
+    icon: str | None = None
+    status: str | None = None
+    mode: str | None = None
+    budget_usd: float | None = None
+
+
+class RoleBody(BaseModel):
+    app: str
+    role: str = ""
+    ord: int = 0
+
+
+class MemBody(BaseModel):
+    text: str
+    app: str | None = None
+    kind: str = "fact"
+    pinned: int = 0
+
+
+class RunBody(BaseModel):
+    app: str | None = None
+    extra: str = ""
+    mode: str | None = None
+
+
+class SkillBody(BaseModel):
+    name: str
+    body: str
+    icon: str = "⚡"
+    apps: str = ""
+
+
+class SkillRun(BaseModel):
+    skill_id: str
+    app: str
+    extra: str = ""
+
+
+class RaceBody(BaseModel):
+    text: str
+    combos: list[str]
+
+
+class HandoffBody(BaseModel):
+    from_app: str
+    from_sid: str
+    to_app: str
+    note: str = ""
+
+
+class PermBody(BaseModel):
+    app: str
+    mode: str
+
+
+class ReviewBody(BaseModel):
+    receipt_id: str
+    reviewer: str
+    project_id: str | None = None
+
+
+# ───────────────────────────────────────── live model resolution
+
+
+@app.get("/api/models/live")
+async def models_live():
+    """
+    کدام مدل واقعی پشت هر کامبو کار می‌کند.
+    `exact=false` یعنی آن مدل عضو چند کامبوست و انتساب قطعی نیست.
+    """
+    def build():
+        per = resolver.live()
+        agents = {}
+        for k, ad in ADAPTERS.items():
+            try:
+                combo = ad.status().model
+            except Exception:                                  # noqa: BLE001
+                combo = None
+            agents[k] = resolver.agent_live_model(combo)
+        return {"combos": per, "agents": agents, "ts": time.time()}
+    return await cached("models_live", build, ttl=5)
+
+
+@app.get("/api/models/members/{combo}")
+async def combo_members(combo: str):
+    def build():
+        return {"combo": combo, "members": resolver.member_detail(combo),
+                "live": resolver.for_combo(combo)}
+    return await cached(f"members:{combo}", build, ttl=10)
+
+
+@app.get("/api/health/combos")
+async def combo_health():
+    return {"latest": store.health_latest()}
+
+
+@app.post("/api/health/scan")
+async def combo_health_scan():
+    combos = list_9router_combos()
+    res = await orchestra.health_scan(combos)
+    invalidate()
+    return {"results": res}
+
+
+# ───────────────────────────────────────── session metadata
+
+
+@app.patch("/api/session/{app_key}/{sid:path}/meta")
+async def session_meta(app_key: str, sid: str, body: MetaBody):
+    if app_key not in ADAPTERS:
+        raise HTTPException(404, "unknown app")
+    m = store.meta_set(app_key, sid,
+                       **{k: v for k, v in body.model_dump().items()
+                          if v is not None})
+    invalidate("sessions")
+    return {"ok": True, "meta": m}
+
+
+@app.delete("/api/session/{app_key}/{sid:path}")
+async def session_delete(app_key: str, sid: str, hard: int = 0):
+    """
+    hard=0 → فقط آرشیو (برگشت‌پذیر).
+    hard=1 → حذف فایل واقعی، ولی همیشه یک کپی در سطل زباله می‌ماند.
+    """
+    if app_key not in ADAPTERS:
+        raise HTTPException(404, "unknown app")
+    if not hard:
+        store.meta_set(app_key, sid, archived=1)
+        invalidate("sessions")
+        return {"ok": True, "mode": "archived"}
+
+    import glob as _g
+    pats = {"claude": rp("/root/.claude/projects/*/*.jsonl"),
+            "pi": rp("/root/.pi/agent/sessions/*/*.jsonl")}
+    removed, backup = [], None
+    for f in _g.glob(pats.get(app_key, "")):
+        if sid in f:
+            backup = store.trash_put(f)
+            try:
+                os.remove(f)
+                removed.append(f)
+            except Exception as exc:                           # noqa: BLE001
+                raise HTTPException(500, f"delete failed: {exc}")
+            break
+    store.meta_del(app_key, sid)
+    store.tl(None, app_key, "delete", f"session {sid[:24]} deleted")
+    invalidate()
+    return {"ok": bool(removed), "removed": removed, "backup": backup}
+
+
+@app.post("/api/session/new/{app_key}")
+async def session_new(app_key: str):
+    """نشست جدید مخصوص همین ایجنت — دکمهٔ ＋ هر گروه در سایدبار."""
+    ad = ADAPTERS.get(app_key)
+    if ad is None:
+        raise HTTPException(404, "unknown app")
+    if "send" not in ad.capabilities:
+        raise HTTPException(400, f"{ad.name} cannot start sessions")
+    store.tl(None, app_key, "session", f"new {app_key} session requested")
+    return {"ok": True, "app": app_key,
+            "hint": "send the first message to materialise the session"}
+
+
+# ───────────────────────────────────────── projects
+
+
+@app.get("/api/projects")
+async def projects():
+    return {"projects": store.proj_list()}
+
+
+@app.post("/api/projects")
+async def project_create(b: ProjBody):
+    p = store.proj_create(b.name, b.goal, b.icon, b.mode, b.budget)
+    return {"ok": True, "project": p}
+
+
+@app.get("/api/projects/{pid}")
+async def project_get(pid: str):
+    p = store.proj_get(pid)
+    if not p:
+        raise HTTPException(404, "not found")
+    return p
+
+
+@app.patch("/api/projects/{pid}")
+async def project_patch(pid: str, b: ProjPatch):
+    p = store.proj_update(pid, **{k: v for k, v in b.model_dump().items()
+                                  if v is not None})
+    if not p:
+        raise HTTPException(404, "not found")
+    return {"ok": True, "project": p}
+
+
+@app.delete("/api/projects/{pid}")
+async def project_delete(pid: str):
+    store.proj_delete(pid)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{pid}/role")
+async def project_role(pid: str, b: RoleBody):
+    store.role_set(pid, b.app, b.role, b.ord)
+    return {"ok": True, "project": store.proj_get(pid)}
+
+
+@app.delete("/api/projects/{pid}/role/{app_key}")
+async def project_role_del(pid: str, app_key: str):
+    store.role_del(pid, app_key)
+    return {"ok": True, "project": store.proj_get(pid)}
+
+
+@app.post("/api/projects/{pid}/memory")
+async def memory_add(pid: str, b: MemBody):
+    m = store.mem_add(pid, b.text, b.app, b.kind, b.pinned)
+    return {"ok": True, "entry": m}
+
+
+@app.delete("/api/memory/{mid}")
+async def memory_del(mid: str):
+    store.mem_del(mid)
+    return {"ok": True}
+
+
+@app.post("/api/memory/{mid}/pin")
+async def memory_pin(mid: str, on: int = 1):
+    store.mem_pin(mid, on)
+    return {"ok": True}
+
+
+@app.get("/api/projects/{pid}/context/{app_key}")
+async def project_context(pid: str, app_key: str):
+    """پیش‌نمایش دقیق متنی که به ایجنت تزریق می‌شود — شفافیت کامل."""
+    txt = store.build_context(pid, app_key)
+    return {"context": txt, "chars": len(txt),
+            "approx_tokens": len(txt) // 4}
+
+
+@app.post("/api/projects/{pid}/run")
+async def project_run(pid: str, b: RunBody):
+    if b.app:
+        r = await orchestra.run_role(pid, b.app, b.extra)
+    else:
+        r = await orchestra.run_project(pid, b.mode)
+    invalidate()
+    return r
+
+
+@app.post("/api/projects/{pid}/cancel")
+async def project_cancel(pid: str):
+    return {"ok": orchestra.cancel(pid)}
+
+
+# ───────────────────────────────────────── receipts / Aegis
+
+
+@app.get("/api/receipts")
+async def receipts(project_id: str | None = None):
+    return {"receipts": store.receipt_list(project_id)}
+
+
+@app.post("/api/receipts/review")
+async def receipts_review(b: ReviewBody):
+    return await orchestra.review(b.project_id, b.receipt_id, b.reviewer)
+
+
+# ───────────────────────────────────────── skills
+
+
+@app.get("/api/skills")
+async def skills():
+    store.seed_skills()
+    return {"skills": store.skill_list()}
+
+
+@app.post("/api/skills")
+async def skill_create(b: SkillBody):
+    return {"ok": True, "skill": store.skill_add(b.name, b.body, b.icon, b.apps)}
+
+
+@app.delete("/api/skills/{sid}")
+async def skill_delete(sid: str):
+    store.skill_del(sid)
+    return {"ok": True}
+
+
+@app.post("/api/skills/run")
+async def skill_run(b: SkillRun):
+    sk = next((s for s in store.skill_list() if s["id"] == b.skill_id), None)
+    if not sk:
+        raise HTTPException(404, "skill not found")
+    ad = ADAPTERS.get(b.app)
+    if ad is None or "send" not in ad.capabilities:
+        raise HTTPException(400, "app cannot run skills")
+    store.skill_bump(b.skill_id)
+    text = sk["body"] + ("\n\n" + b.extra if b.extra else "")
+    loop = asyncio.get_running_loop()
+    ok, out = await loop.run_in_executor(POOL, lambda: ad.send(text, None))
+    store.tl(None, b.app, "skill", f"ran skill '{sk['name']}'")
+    return {"ok": ok, "output": out}
+
+
+# ───────────────────────────────────────── handoff
+
+
+@app.post("/api/handoff")
+async def handoff(b: HandoffBody):
+    """یک گفتگو را به ایجنت دیگری منتقل می‌کند — هستهٔ «تعامل بین برنامه‌ها»."""
+    src = ADAPTERS.get(b.from_app)
+    dst = ADAPTERS.get(b.to_app)
+    if src is None or dst is None:
+        raise HTTPException(404, "unknown app")
+    if "send" not in dst.capabilities:
+        raise HTTPException(400, f"{dst.name} cannot receive a handoff")
+    d = await session_detail(b.from_app, b.from_sid)
+    summary = orchestra.handoff_summary(d.get("messages") or [])
+    if b.note:
+        summary += f"\n\nOperator note: {b.note}"
+    loop = asyncio.get_running_loop()
+    ok, out = await loop.run_in_executor(POOL, lambda: dst.send(summary, None))
+    store.tl(None, b.to_app, "handoff",
+             f"{b.from_app} → {b.to_app}")
+    invalidate()
+    return {"ok": ok, "output": out, "summary_chars": len(summary)}
+
+
+# ───────────────────────────────────────── race / permissions / timeline
+
+
+@app.post("/api/race")
+async def race(b: RaceBody):
+    r = await orchestra.race(b.text, b.combos)
+    invalidate()
+    return r
+
+
+@app.get("/api/perms")
+async def perms():
+    return {"perms": store.perm_all()}
+
+
+@app.post("/api/perms")
+async def perms_set(b: PermBody):
+    store.perm_set(b.app, b.mode)
+    return {"ok": True, "perms": store.perm_all()}
+
+
+@app.get("/api/timeline")
+async def timeline(project_id: str | None = None, limit: int = 40):
+    return {"events": store.tl_recent(limit, project_id)}
+
+
+@app.get("/api/graph")
+async def graph():
+    """گراف رابطه: ایجنت‌ها، پروژه‌ها و پیوندهایشان برای نمایش بصری."""
+    def build():
+        nodes, edges = [], []
+        for k, ad in ADAPTERS.items():
+            try:
+                st = ad.status()
+                nodes.append({"id": f"app:{k}", "label": ad.name, "type": "agent",
+                              "icon": ad.icon, "up": st.running,
+                              "model": st.model, "n": st.session_count})
+            except Exception:                                  # noqa: BLE001
+                nodes.append({"id": f"app:{k}", "label": ad.name,
+                              "type": "agent", "icon": ad.icon, "up": False})
+        for p in store.proj_list():
+            nodes.append({"id": f"proj:{p['id']}", "label": p["name"],
+                          "type": "project", "icon": p.get("icon") or "📁",
+                          "status": p.get("status")})
+            for r in p.get("roles") or []:
+                edges.append({"from": f"proj:{p['id']}", "to": f"app:{r['app']}",
+                              "label": (r.get("role") or "")[:40],
+                              "status": r.get("status")})
+        return {"nodes": nodes, "edges": edges}
+    return await cached("graph", build, ttl=8)
+
+
+@app.get("/api/overview2")
+async def overview2():
+    """نمای کامل v2: وضعیت + مدل زنده + پروژه‌ها + رویدادها در یک درخواست."""
+    base = await overview()
+    def extra():
+        return {"projects": store.proj_list(),
+                "timeline": store.tl_recent(25),
+                "meta": store.meta_all(),
+                "perms": store.perm_all(),
+                "health": store.health_latest()}
+    ex = await cached("overview2x", extra, ttl=4)
+    live = await models_live()
+    return {**base, **ex, "live": live}

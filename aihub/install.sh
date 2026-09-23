@@ -10,6 +10,8 @@ mkdir -p "$DEST"
 SRC="${SRC:-$(cd "$(dirname "$0")" && pwd)}"
 cp -r "$SRC/app" "$SRC/static" "$SRC/requirements.txt" "$DEST"/
 
+mkdir -p "$DEST/data"
+
 echo "== 2) venv =="
 if [ ! -x "$DEST/venv/bin/python" ]; then
   python3 -m venv "$DEST/venv"

@@ -1,0 +1,829 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AI Hub — Workspace (design preview)</title>
+<style>
+:root{
+  --bg:#0a0c10; --panel:#0f1218; --panel2:#141821; --raised:#1a1f2b;
+  --line:#222835; --line2:#2d3546;
+  --txt:#e8ecf4; --dim:#8b95a8; --faint:#5b6577;
+  --accent:#e07a4a; --accent2:#f0a077;
+  --blue:#4a8fe0; --ok:#3ecf8e; --warn:#e0b34a; --bad:#e05a5a; --purple:#9b7ae0;
+  --sb:280px; --ctx:300px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--txt);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",system-ui,sans-serif;
+  display:flex;flex-direction:column}
+.rtl{unicode-bidi:plaintext;text-align:start}
+button{font:inherit;color:inherit;background:0;border:0;cursor:pointer}
+input,textarea{font:inherit;color:inherit;background:0;border:0;outline:0}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:9px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ══════════════ TOP BAR ══════════════ */
+.top{height:46px;flex:none;display:flex;align-items:center;gap:10px;
+  padding:0 12px;background:var(--panel);border-bottom:1px solid var(--line);z-index:40}
+.brand{display:flex;align-items:center;gap:8px;font-weight:650;font-size:14px;
+  letter-spacing:-.2px;padding-right:6px}
+.brand .lg{width:22px;height:22px;border-radius:6px;flex:none;
+  background:linear-gradient(135deg,var(--accent),#c4563a);
+  display:grid;place-items:center;font-size:12px}
+.mbtn{display:none;width:32px;height:32px;border-radius:8px;place-items:center;
+  font-size:17px;color:var(--dim)}
+.mbtn:hover{background:var(--raised)}
+.omni{flex:1;max-width:460px;height:30px;border-radius:8px;background:var(--panel2);
+  border:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 10px;
+  color:var(--faint);font-size:12.5px;cursor:pointer;transition:border-color .15s}
+.omni:hover{border-color:var(--line2)}
+.omni kbd{margin-left:auto;font:11px ui-monospace,monospace;background:var(--raised);
+  border:1px solid var(--line2);border-radius:4px;padding:1px 5px;color:var(--dim)}
+.tstats{margin-left:auto;display:flex;align-items:center;gap:6px}
+.tchip{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--dim);
+  background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:4px 9px;
+  white-space:nowrap}
+.tchip b{color:var(--txt);font-weight:600}
+.tchip.hide-sm{}
+.iconb{width:30px;height:30px;border-radius:7px;display:grid;place-items:center;
+  color:var(--dim);font-size:15px}
+.iconb:hover{background:var(--raised);color:var(--txt)}
+.iconb.on{background:var(--raised);color:var(--accent)}
+
+/* ══════════════ SHELL ══════════════ */
+.shell{flex:1;display:flex;min-height:0;position:relative}
+
+/* ══════════════ SIDEBAR ══════════════ */
+.sb{width:var(--sb);flex:none;background:var(--panel);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0;z-index:30}
+.sbhead{padding:10px 10px 8px;display:flex;gap:7px;align-items:center}
+.newbtn{flex:1;height:32px;border-radius:8px;background:var(--accent);color:#fff;
+  font-weight:600;font-size:13px;display:flex;align-items:center;justify-content:center;gap:6px}
+.newbtn:hover{background:var(--accent2)}
+.filt{padding:0 10px 8px}
+.filt input{width:100%;height:29px;border-radius:7px;background:var(--panel2);
+  border:1px solid var(--line);padding:0 9px;font-size:12.5px}
+.filt input:focus{border-color:var(--line2)}
+.filt input::placeholder{color:var(--faint)}
+.sblist{flex:1;overflow-y:auto;padding:0 6px 10px}
+
+.grp{margin-bottom:3px}
+.grph{display:flex;align-items:center;gap:7px;padding:6px 7px;border-radius:7px;
+  cursor:pointer;user-select:none}
+.grph:hover{background:var(--panel2)}
+.grph .tw{font-size:9px;color:var(--faint);width:9px;transition:transform .15s}
+.grph.closed .tw{transform:rotate(-90deg)}
+.grph .ic{font-size:14px;width:17px;text-align:center}
+.grph .nm{font-weight:600;font-size:12.5px;flex:1}
+.grph .dot{width:6px;height:6px;border-radius:50%}
+.dot.up{background:var(--ok);box-shadow:0 0 6px #3ecf8e77}
+.dot.down{background:var(--bad)}
+.dot.busy{background:var(--warn);animation:pulse 1.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.grph .ct{font-size:10.5px;color:var(--faint);
+  background:var(--panel2);border-radius:20px;padding:1px 6px;min-width:18px;text-align:center}
+.grpb{overflow:hidden}
+.grph.closed+.grpb{display:none}
+
+.si{display:flex;gap:8px;align-items:flex-start;padding:6px 8px 6px 24px;border-radius:7px;
+  cursor:pointer;position:relative}
+.si:hover{background:var(--panel2)}
+.si.sel{background:var(--raised)}
+.si.sel::before{content:'';position:absolute;left:10px;top:9px;bottom:9px;width:2px;
+  border-radius:2px;background:var(--accent)}
+.si .sb2{flex:1;min-width:0}
+.si .t{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;display:flex;align-items:center;gap:6px}
+.si .p{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;margin-top:1px}
+.si .tm{font-size:10px;color:var(--faint);flex:none;padding-top:2px}
+.livedot{width:5px;height:5px;border-radius:50%;background:var(--warn);flex:none;
+  animation:pulse 1.4s infinite}
+.needdot{width:5px;height:5px;border-radius:50%;background:var(--blue);flex:none}
+
+.sbfoot{flex:none;border-top:1px solid var(--line);padding:8px 10px}
+.spend{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim)}
+.bar{flex:1;height:4px;border-radius:4px;background:var(--panel2);overflow:hidden}
+.bar i{display:block;height:100%;border-radius:4px;
+  background:linear-gradient(90deg,var(--accent),var(--warn))}
+
+/* ══════════════ MAIN ══════════════ */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;
+  background:var(--bg)}
+.mhead{height:46px;flex:none;display:flex;align-items:center;gap:9px;padding:0 14px;
+  border-bottom:1px solid var(--line);background:var(--panel)}
+.mhead .ic{font-size:15px}
+.mhead .ti{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:34%}
+.pill{display:flex;align-items:center;gap:5px;height:25px;padding:0 9px;border-radius:7px;
+  background:var(--panel2);border:1px solid var(--line);font-size:11.5px;color:var(--dim);
+  white-space:nowrap}
+.pill.click{cursor:pointer}
+.pill.click:hover{border-color:var(--line2);color:var(--txt)}
+.pill.model{color:var(--purple);border-color:#3a2d5c}
+.pill.live{color:var(--warn);border-color:#4a3d1a}
+.mhead .sp{margin-left:auto;display:flex;gap:6px;align-items:center}
+
+.msgs{flex:1;overflow-y:auto;padding:20px 0 8px}
+.wrap{max-width:780px;margin:0 auto;padding:0 22px}
+
+.m{display:flex;gap:11px;margin-bottom:20px}
+.av{width:25px;height:25px;border-radius:7px;flex:none;display:grid;place-items:center;
+  font-size:11px;font-weight:700;margin-top:1px}
+.av.u{background:var(--raised);color:var(--dim);border:1px solid var(--line2)}
+.av.a{background:linear-gradient(135deg,var(--accent),#c4563a);color:#fff}
+.mb{flex:1;min-width:0}
+.mn{font-size:11.5px;font-weight:600;color:var(--dim);margin-bottom:4px;
+  display:flex;align-items:center;gap:7px}
+.mn .tm{font-weight:400;color:var(--faint);font-size:10.5px}
+.mt{font-size:14px;line-height:1.72;white-space:pre-wrap;word-break:break-word}
+.mt code{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
+  padding:1px 5px;font:12.5px ui-monospace,monospace;color:var(--accent2)}
+
+.tool{border:1px solid var(--line);border-radius:9px;background:var(--panel);
+  margin:9px 0;overflow:hidden}
+.toolh{display:flex;align-items:center;gap:8px;padding:8px 11px;font-size:12px;
+  background:var(--panel2);cursor:pointer}
+.toolh .nm{font-weight:600;font-family:ui-monospace,monospace;font-size:11.5px}
+.toolh .st{margin-left:auto;font-size:10.5px;color:var(--ok)}
+.toolb{padding:10px 11px;font:11.5px/1.65 ui-monospace,monospace;color:var(--dim);
+  border-top:1px solid var(--line);white-space:pre-wrap;max-height:180px;overflow:auto}
+
+.approve{border:1px solid #5c4a1a;border-radius:9px;background:#1f1a0c;margin:9px 0}
+.apph{padding:9px 12px;font-size:12.5px;font-weight:600;color:var(--warn);
+  display:flex;align-items:center;gap:7px;border-bottom:1px solid #3d3216}
+.appb{padding:10px 12px;font:11.5px/1.6 ui-monospace,monospace;color:var(--dim)}
+.appf{padding:9px 12px;display:flex;gap:7px;border-top:1px solid #3d3216}
+.sm{height:27px;padding:0 11px;border-radius:7px;font-size:12px;font-weight:600;
+  display:flex;align-items:center;gap:5px}
+.sm.pri{background:var(--accent);color:#fff}
+.sm.pri:hover{background:var(--accent2)}
+.sm.gh{background:var(--raised);border:1px solid var(--line2);color:var(--dim)}
+.sm.gh:hover{color:var(--txt)}
+.sm.dg{background:#4a1f1f;border:1px solid #6b2d2d;color:#f0a0a0}
+
+.typing{display:flex;gap:4px;padding:5px 0}
+.typing i{width:5px;height:5px;border-radius:50%;background:var(--faint);
+  animation:bob 1.3s infinite}
+.typing i:nth-child(2){animation-delay:.16s}
+.typing i:nth-child(3){animation-delay:.32s}
+@keyframes bob{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+
+/* ══════════════ COMPOSER ══════════════ */
+.comp{flex:none;padding:10px 22px 14px;border-top:1px solid var(--line);background:var(--panel)}
+.cwrap{max-width:780px;margin:0 auto;position:relative}
+.cbox{border:1px solid var(--line2);border-radius:12px;background:var(--panel2);
+  transition:border-color .15s}
+.cbox:focus-within{border-color:var(--accent)}
+.cbox textarea{width:100%;padding:11px 13px 5px;font-size:14px;line-height:1.6;resize:none;
+  max-height:170px;min-height:44px;display:block}
+.cbox textarea::placeholder{color:var(--faint)}
+.crow{display:flex;align-items:center;gap:6px;padding:5px 8px 7px 11px}
+.ctool{height:26px;padding:0 8px;border-radius:6px;font-size:11.5px;color:var(--faint);
+  display:flex;align-items:center;gap:5px}
+.ctool:hover{background:var(--raised);color:var(--txt)}
+.send{margin-left:auto;width:29px;height:29px;border-radius:8px;background:var(--accent);
+  color:#fff;display:grid;place-items:center;font-size:13px}
+.send:hover{background:var(--accent2)}
+.chint{text-align:center;font-size:10.5px;color:var(--faint);margin-top:7px}
+
+.slash{position:absolute;bottom:calc(100% + 7px);left:0;right:0;background:var(--raised);
+  border:1px solid var(--line2);border-radius:11px;overflow:hidden;display:none;
+  box-shadow:0 14px 40px rgba(0,0,0,.6);max-height:270px;overflow-y:auto}
+.slash.on{display:block}
+.slash .sh{padding:7px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.7px;
+  color:var(--faint);border-bottom:1px solid var(--line)}
+.sr{display:flex;align-items:center;gap:10px;padding:8px 12px;cursor:pointer}
+.sr:hover,.sr.hl{background:var(--panel2)}
+.sr .cmd{font:12.5px ui-monospace,monospace;color:var(--accent2);font-weight:600;
+  min-width:92px}
+.sr .ds{font-size:12px;color:var(--dim);flex:1}
+.sr .kb{font:10px ui-monospace,monospace;color:var(--faint);border:1px solid var(--line2);
+  border-radius:4px;padding:1px 5px}
+
+/* ══════════════ FLEET (home) ══════════════ */
+.fleet{flex:1;overflow-y:auto;padding:22px}
+.fwrap{max-width:980px;margin:0 auto}
+.fh{font-size:19px;font-weight:650;letter-spacing:-.3px;margin-bottom:3px}
+.fsub{font-size:13px;color:var(--dim);margin-bottom:18px}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr));gap:11px;
+  margin-bottom:24px}
+.fc{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:13px;
+  cursor:pointer;transition:border-color .15s,transform .1s}
+.fc:hover{border-color:var(--line2)}
+.fc:active{transform:scale(.995)}
+.fct{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.fct .ic{width:31px;height:31px;border-radius:9px;background:var(--panel2);
+  border:1px solid var(--line);display:grid;place-items:center;font-size:15px;flex:none}
+.fct .nb{flex:1;min-width:0}
+.fct .nm{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:6px}
+.fct .vr{font-size:10.5px;color:var(--faint)}
+.fmeta{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.tag{font-size:10.5px;padding:2px 7px;border-radius:5px;background:var(--panel2);
+  border:1px solid var(--line);color:var(--dim)}
+.tag.m{color:var(--purple);border-color:#3a2d5c}
+.tag.s{color:var(--blue);border-color:#1f3a5c}
+.facts{display:flex;gap:6px}
+.facts .sm{flex:1;justify-content:center}
+.srow{display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:9px;
+  background:var(--panel);border:1px solid var(--line);margin-bottom:6px;cursor:pointer}
+.srow:hover{border-color:var(--line2)}
+.srow .ic{font-size:14px}
+.srow .tx{flex:1;min-width:0}
+.srow .t1{font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.srow .t2{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+
+/* ══════════════ CONTEXT RAIL ══════════════ */
+.ctx{width:var(--ctx);flex:none;background:var(--panel);border-left:1px solid var(--line);
+  overflow-y:auto;z-index:30}
+.ctx.off{display:none}
+.cs{padding:13px;border-bottom:1px solid var(--line)}
+.csh{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:var(--faint);
+  margin-bottom:9px;font-weight:600}
+.kv{display:flex;justify-content:space-between;gap:9px;font-size:12px;padding:3.5px 0}
+.kv .k{color:var(--faint)}
+.kv .v{font-weight:500;text-align:right;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.mini{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.mc{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px;
+  text-align:center}
+.mc .v{font-size:15px;font-weight:650;letter-spacing:-.3px}
+.mc .l{font-size:9.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.4px;
+  margin-top:2px}
+.qa{display:flex;flex-direction:column;gap:5px}
+.qb{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;
+  background:var(--panel2);border:1px solid var(--line);font-size:12px;color:var(--dim);
+  text-align:left;width:100%}
+.qb:hover{border-color:var(--line2);color:var(--txt)}
+.qb .g{font-size:12px;width:15px}
+.ev{display:flex;gap:8px;font-size:11.5px;padding:5px 0;align-items:flex-start}
+.ev .d{width:5px;height:5px;border-radius:50%;margin-top:6px;flex:none}
+.ev .x{flex:1;min-width:0;color:var(--dim);line-height:1.5}
+.ev .x b{color:var(--txt);font-weight:600}
+.ev .t{font-size:10px;color:var(--faint);flex:none}
+.spark{display:flex;align-items:flex-end;gap:3px;height:38px;margin-top:8px}
+.spark i{flex:1;border-radius:2px 2px 0 0;background:linear-gradient(180deg,var(--accent),#7a3a22);
+  min-height:3px;opacity:.85}
+
+/* ══════════════ PALETTE ══════════════ */
+.mask{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.66);display:none;
+  align-items:flex-start;justify-content:center;padding-top:11vh;backdrop-filter:blur(3px)}
+.mask.on{display:flex}
+.pal{width:min(600px,92vw);background:var(--raised);border:1px solid var(--line2);
+  border-radius:14px;overflow:hidden;box-shadow:0 26px 70px rgba(0,0,0,.66)}
+.pali{display:flex;align-items:center;gap:10px;padding:13px 15px;
+  border-bottom:1px solid var(--line)}
+.pali input{flex:1;font-size:15px}
+.palr{max-height:52vh;overflow-y:auto;padding:5px}
+.pg{padding:7px 11px 4px;font-size:9.5px;text-transform:uppercase;letter-spacing:.8px;
+  color:var(--faint);font-weight:600}
+.pi{display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:8px;
+  cursor:pointer}
+.pi:hover,.pi.hl{background:var(--panel2)}
+.pi .g{width:19px;text-align:center;font-size:14px}
+.pi .tt{flex:1;font-size:13px}
+.pi .tt small{display:block;color:var(--faint);font-size:11px}
+.pi .kb{font:10px ui-monospace,monospace;color:var(--faint);border:1px solid var(--line2);
+  border-radius:4px;padding:1px 5px}
+
+/* ══════════════ MODAL ══════════════ */
+.dlg{width:min(430px,92vw);background:var(--raised);border:1px solid var(--line2);
+  border-radius:14px;padding:18px;box-shadow:0 26px 70px rgba(0,0,0,.66)}
+.dlg h3{font-size:15px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.dlg p{font-size:13px;color:var(--dim);line-height:1.6;margin-bottom:15px}
+.dlgf{display:flex;gap:8px;justify-content:flex-end}
+.mlist{max-height:300px;overflow-y:auto;margin:-4px -4px 12px}
+.mrow{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;
+  cursor:pointer}
+.mrow:hover{background:var(--panel2)}
+.mrow.sel{background:var(--panel2)}
+.mrow .nm{flex:1;font-size:13px;font-weight:500}
+.mrow .ct{font-size:11px;color:var(--faint)}
+.mrow .ck{color:var(--accent);font-size:13px}
+
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(14px);
+  background:var(--raised);border:1px solid var(--line2);border-radius:10px;
+  padding:10px 16px;font-size:13px;z-index:200;opacity:0;transition:all .22s;
+  pointer-events:none;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+
+.scrim{display:none}
+
+/* ══════════════ RESPONSIVE ══════════════ */
+@media(max-width:1180px){ .ctx{display:none} .ctx.force{display:block} }
+@media(max-width:860px){
+  .mbtn{display:grid}
+  .sb{position:absolute;left:0;top:0;bottom:0;transform:translateX(-100%);
+    transition:transform .22s;box-shadow:0 0 40px rgba(0,0,0,.6);width:290px}
+  .sb.open{transform:none}
+  .ctx{position:absolute;right:0;top:0;bottom:0;transform:translateX(100%);
+    transition:transform .22s;display:block;width:290px;box-shadow:0 0 40px rgba(0,0,0,.6)}
+  .ctx.force{transform:none}
+  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:25}
+  .scrim.on{display:block}
+  .tchip.hide-sm{display:none}
+  .omni{max-width:none}
+  .omni span{display:none}
+  .wrap,.cwrap{padding:0 14px}
+  .comp{padding:9px 10px 12px}
+  .fleet{padding:14px}
+  .fgrid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ TOP ═══════════ -->
+<div class="top">
+  <button class="mbtn" id="mbSb">☰</button>
+  <div class="brand"><div class="lg">◆</div>AI Hub</div>
+  <div class="omni" id="omni">
+    <span style="font-size:12px">⌕</span>
+    <span>Search sessions, run commands, switch models…</span>
+    <kbd>⌘K</kbd>
+  </div>
+  <div class="tstats">
+    <div class="tchip hide-sm"><span class="dot up" style="width:6px;height:6px;border-radius:50%"></span> <b>5</b>/5 up</div>
+    <div class="tchip hide-sm">⚡ <b>223k</b> tok</div>
+    <div class="tchip">$<b>0.228</b></div>
+    <button class="iconb" id="mbCtx" title="Toggle context panel">◨</button>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="scrim" id="scrim"></div>
+
+  <!-- ═══════════ SIDEBAR ═══════════ -->
+  <aside class="sb" id="sb">
+    <div class="sbhead">
+      <button class="newbtn" id="btnNew">＋ New session</button>
+      <button class="iconb" title="Home" id="btnHome">⌂</button>
+    </div>
+    <div class="filt"><input id="filt" placeholder="Filter sessions…"></div>
+    <div class="sblist" id="tree"></div>
+    <div class="sbfoot">
+      <div class="spend">
+        <span>Today</span>
+        <div class="bar"><i style="width:23%"></i></div>
+        <span style="color:var(--txt);font-weight:600">$0.228</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══════════ MAIN ═══════════ -->
+  <main class="main">
+    <div class="mhead" id="mhead"></div>
+    <div id="stage"></div>
+    <div class="comp" id="comp" style="display:none">
+      <div class="cwrap">
+        <div class="slash" id="slash"></div>
+        <div class="cbox">
+          <textarea id="ta" class="rtl" rows="1"
+            placeholder="Message the agent…  press / for commands"></textarea>
+          <div class="crow">
+            <button class="ctool" id="cmdBtn">/ commands</button>
+            <button class="ctool">📎 attach</button>
+            <button class="ctool" id="modelBtn2">◆ <span id="mLbl">Agentic</span></button>
+            <button class="send" id="send">➤</button>
+          </div>
+        </div>
+        <div class="chint">⏎ send · ⇧⏎ newline · ⌘K palette · Persian and English both render correctly</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ═══════════ CONTEXT ═══════════ -->
+  <aside class="ctx" id="ctx"></aside>
+</div>
+
+<div class="mask" id="mask"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ══════════════════ MOCK DATA — mirrors the real server ══════════════════ */
+const APPS = [
+  {k:'hermes',  n:'Hermes',      i:'🤖', v:'0.21.3',  up:1, model:'ox-alpha', port:9443,
+   caps:['send','model','restart'], note:'gateway running · update available'},
+  {k:'claude',  n:'Claude Code', i:'💻', v:'2.1.280', up:1, model:'Agentic',  port:8443,
+   caps:['send','model'], note:'idle'},
+  {k:'pi',      n:'Pi',          i:'🥧', v:'0.87.1',  up:1, model:'Agentic',  port:9445,
+   caps:['send','model'], note:'web ui up'},
+  {k:'openclaw',n:'OpenClaw',    i:'🐾', v:'2026.9.5',up:1, model:'Agentic',  port:443,
+   caps:['model','restart'], note:'healthy'},
+  {k:'router',  n:'9Router',     i:'🔀', v:'0.5.86',  up:1, model:null,       port:9444,
+   caps:[], note:'31 requests today'},
+];
+const COMBOS=[{n:'Agentic',c:12},{n:'ox-alpha',c:12},{n:'vps',c:8},{n:'Image',c:7},
+              {n:'Brain',c:2},{n:'ultimate',c:1,bad:1}];
+const SESS = [
+  {id:'s1',app:'claude',t:'root',p:'سلام',n:5,m:'Agentic',ago:'2m',state:'live',cost:0.012},
+  {id:'s2',app:'pi', t:'root',p:'Pi has no native web UI built in.',n:16,m:'Agentic',ago:'14m',state:'need',cost:0.031},
+  {id:'s3',app:'openclaw',t:'dashboard',p:'operator',n:8,m:'Agentic',ago:'22m',state:'',cost:0.004},
+  {id:'s4',app:'hermes',t:'گزارش روزانه',p:'خلاصهٔ وضعیت سرور',n:12,m:'ox-alpha',ago:'1h',state:'',cost:0.055},
+  {id:'s5',app:'claude',t:'root',p:'OK_ox-alpha',n:2,m:'ox-alpha',ago:'2h',state:'',cost:0.003},
+  {id:'s6',app:'claude',t:'root',p:'COMBO_BRAIN_OK',n:3,m:'Brain',ago:'3h',state:'',cost:0.002},
+  {id:'s7',app:'pi', t:'pit2',p:'File `rot.txt` created.',n:3,m:'Agentic',ago:'4h',state:'',cost:0.001},
+  {id:'s8',app:'pi', t:'root',p:'PI_SURVIVED_ROTATION',n:2,m:'Agentic',ago:'5h',state:'',cost:0.001},
+  {id:'s9',app:'hermes',t:'session 330f4b5d',p:'tool run completed',n:7,m:'ox-alpha',ago:'6h',state:'',cost:0.021},
+  {id:'s10',app:'openclaw',t:'main agent',p:'heartbeat ok',n:31,m:'Agentic',ago:'8h',state:'',cost:0.018},
+];
+const THREAD = {
+  s1:[
+    {r:'u',x:'سلام، وضعیت سرور رو خلاصه بگو',t:'09:00'},
+    {r:'a',x:'سلام. خلاصهٔ وضعیت:',t:'09:00',tool:{n:'Bash',c:'systemctl is-active 9router cloudcli openclaw-gateway pi-web',o:'active\nactive\nactive\nactive'}},
+    {r:'a',x:'هر پنج سرویس بالا هستند. مصرف امروز ۳۱ درخواست و ۲۲۳٬۸۵۵ توکن بوده که تقریباً معادل `$0.228` است.\n\nتنها نکته: Hermes نسخهٔ کانفیگ ۴۱ دارد ولی آخرین نسخه ۴۵ است.',t:'09:01'},
+    {r:'u',x:'خوبه. حالا یه فایل تست بساز توی tmp',t:'09:02'},
+    {r:'a',x:'',t:'09:02',approve:{n:'Write',c:'path: /tmp/health-check.txt\ncontent: "all systems nominal — 2026-09-23"'}},
+  ],
+  s2:[
+    {r:'u',x:'Does Pi have a web UI?',t:'10:19'},
+    {r:'a',x:'Pi has no native web UI built in.\n\n2 ways to use via web:\n\n1. **Web Terminal** — wrap the `pi` CLI in ttyd or gotty\n2. **`@agegr/pi-web`** — a prebuilt Next.js front-end on npm that reads the same `~/.pi/agent/sessions/**.jsonl` files, so terminal and browser stay in sync',t:'10:20'},
+    {r:'u',x:'which one is installed here?',t:'10:20'},
+    {r:'a',x:'',t:'10:20',typing:1},
+  ],
+  s4:[
+    {r:'u',x:'گزارش روزانهٔ سرور رو آماده کن',t:'08:30'},
+    {r:'a',x:'گزارش روزانه آماده شد:\n\n• ۵ سرویس فعال، صفر خطای بحرانی\n• ۳۱ درخواست، ۲۲۳ هزار توکن، ۰٫۲۲۸ دلار\n• بیشترین مصرف: کامبوی `Agentic`\n• فضای دیسک: ۷۴ گیگ آزاد\n• حافظه: ۱۲ گیگ آزاد\n\nنکتهٔ نیازمند توجه: کامبوی `ultimate` همچنان خطا می‌دهد.',t:'08:31'},
+  ],
+};
+const EVENTS=[
+  {a:'claude',x:'<b>Claude Code</b> requested Write approval',t:'now',c:'var(--warn)'},
+  {a:'pi',x:'<b>Pi</b> is generating a reply',t:'1m',c:'var(--warn)'},
+  {a:'router',x:'<b>9Router</b> routed 4 requests via Agentic',t:'3m',c:'var(--ok)'},
+  {a:'hermes',x:'<b>Hermes</b> session completed · $0.055',t:'12m',c:'var(--ok)'},
+  {a:'openclaw',x:'<b>OpenClaw</b> heartbeat ok',t:'22m',c:'var(--ok)'},
+  {a:'router',x:'<b>ultimate</b> combo returned an error',t:'1h',c:'var(--bad)'},
+];
+const CMDS=[
+  {c:'/model',   d:'Switch the model for this session', k:'⌘M'},
+  {c:'/compare', d:'Ask several models the same question in parallel'},
+  {c:'/search',  d:'Search across every session of every app', k:'⌘F'},
+  {c:'/cost',    d:'Token and spend breakdown'},
+  {c:'/restart', d:'Restart a service (asks for confirmation)'},
+  {c:'/handoff', d:'Move this conversation to another agent'},
+  {c:'/new',     d:'Start a new session', k:'⌘N'},
+  {c:'/logs',    d:'Tail the service log'},
+];
+
+/* ══════════════════ STATE ══════════════════ */
+let sel=null, closed={}, filt='';
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const app=k=>APPS.find(a=>a.k===k);
+const md=s=>esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+
+function toast(m){const t=$('#toast');t.textContent=m;t.className='toast on';
+  clearTimeout(t._h);t._h=setTimeout(()=>t.className='toast',2200);}
+
+/* ══════════════════ SIDEBAR TREE ══════════════════ */
+function tree(){
+  const q=filt.toLowerCase();
+  $('#tree').innerHTML=APPS.filter(a=>a.k!=='router').map(a=>{
+    const ss=SESS.filter(s=>s.app===a.k &&
+      (!q||(s.t+s.p).toLowerCase().includes(q)));
+    if(q && !ss.length) return '';
+    const live=ss.some(s=>s.state);
+    return `<div class="grp">
+      <div class="grph ${closed[a.k]&&!q?'closed':''}" data-g="${a.k}">
+        <span class="tw">▼</span><span class="ic">${a.i}</span>
+        <span class="nm">${a.n}</span>
+        <span class="dot ${live?'busy':(a.up?'up':'down')}"></span>
+        <span class="ct">${ss.length}</span>
+      </div>
+      <div class="grpb">${ss.map(s=>`
+        <div class="si ${sel===s.id?'sel':''}" data-s="${s.id}">
+          <div class="sb2">
+            <div class="t rtl">${s.state==='live'?'<span class="livedot"></span>':
+              s.state==='need'?'<span class="needdot"></span>':''}${esc(s.t)}</div>
+            <div class="p rtl">${esc(s.p)}</div>
+          </div>
+          <div class="tm">${s.ago}</div>
+        </div>`).join('')}</div>
+    </div>`;
+  }).join('');
+  $$('.grph').forEach(g=>g.onclick=()=>{closed[g.dataset.g]=!closed[g.dataset.g];tree();});
+  $$('.si').forEach(e=>e.onclick=()=>{open(e.dataset.s);closeDrawers();});
+}
+
+/* ══════════════════ HOME / FLEET ══════════════════ */
+function home(){
+  sel=null; tree();
+  $('#mhead').innerHTML=`<span class="ic">◆</span><span class="ti">Workspace</span>
+    <span class="pill">${SESS.length} sessions</span>
+    <div class="sp">
+      <button class="sm gh" onclick="pal()">⌕ Search</button>
+      <button class="sm pri" onclick="newSession()">＋ New</button>
+    </div>`;
+  $('#comp').style.display='none';
+  $('#stage').outerHTML=`<div class="fleet" id="stage"><div class="fwrap">
+    <div class="fh">Good evening, Hamid</div>
+    <div class="fsub">5 agents online · 2 sessions need you · $0.228 spent today</div>
+    <div class="fgrid">${APPS.map(a=>{
+      const ss=SESS.filter(s=>s.app===a.k);
+      const act=ss.filter(s=>s.state).length;
+      return `<div class="fc" data-a="${a.k}">
+        <div class="fct">
+          <div class="ic">${a.i}</div>
+          <div class="nb">
+            <div class="nm">${a.n}<span class="dot ${act?'busy':'up'}"></span></div>
+            <div class="vr">v${a.v}</div>
+          </div>
+        </div>
+        <div class="fmeta">
+          ${a.model?`<span class="tag m">◆ ${a.model}</span>`:''}
+          ${ss.length?`<span class="tag s">${ss.length} sessions</span>`:''}
+          ${act?`<span class="tag" style="color:var(--warn);border-color:#4a3d1a">${act} active</span>`:''}
+          <span class="tag">${a.note}</span>
+        </div>
+        <div class="facts">
+          ${a.caps.includes('send')?`<button class="sm pri" data-act="chat" data-a="${a.k}">Chat</button>`:''}
+          ${a.caps.includes('model')?`<button class="sm gh" data-act="model" data-a="${a.k}">Model</button>`:''}
+          <button class="sm gh" data-act="panel" data-a="${a.k}">Panel ↗</button>
+        </div>
+      </div>`;}).join('')}</div>
+
+    <div class="fh" style="font-size:14px;margin-bottom:9px">Needs your attention</div>
+    ${SESS.filter(s=>s.state).map(s=>`
+      <div class="srow" data-s="${s.id}">
+        <span class="ic">${app(s.app).i}</span>
+        <div class="tx"><div class="t1 rtl">${esc(s.t)} — ${app(s.app).n}</div>
+        <div class="t2 rtl">${esc(s.p)}</div></div>
+        <span class="tag" style="color:${s.state==='live'?'var(--warn)':'var(--blue)'}">
+          ${s.state==='live'?'generating':'waiting for you'}</span>
+      </div>`).join('')}
+
+    <div class="fh" style="font-size:14px;margin:20px 0 9px">Recent</div>
+    ${SESS.filter(s=>!s.state).slice(0,5).map(s=>`
+      <div class="srow" data-s="${s.id}">
+        <span class="ic">${app(s.app).i}</span>
+        <div class="tx"><div class="t1 rtl">${esc(s.t)}</div>
+        <div class="t2 rtl">${esc(s.p)}</div></div>
+        <span class="tag m">${s.m}</span><span class="tag">${s.ago}</span>
+      </div>`).join('')}
+  </div></div>`;
+  $$('#stage .fc').forEach(c=>c.onclick=e=>{
+    if(e.target.dataset.act) return;
+    const ss=SESS.find(s=>s.app===c.dataset.a); ss?open(ss.id):newSession();});
+  $$('#stage [data-act]').forEach(b=>b.onclick=e=>{e.stopPropagation();
+    const a=b.dataset.a;
+    if(b.dataset.act==='chat'){const s=SESS.find(x=>x.app===a);s?open(s.id):newSession();}
+    if(b.dataset.act==='model') modelDlg(a);
+    if(b.dataset.act==='panel') toast('Opens :'+app(a).port+' in a new tab');});
+  $$('#stage .srow').forEach(r=>r.onclick=()=>open(r.dataset.s));
+  rail(null);
+}
+
+/* ══════════════════ SESSION VIEW ══════════════════ */
+function open(id){
+  sel=id; tree();
+  const s=SESS.find(x=>x.id===id), a=app(s.app);
+  $('#mhead').innerHTML=`<span class="ic">${a.i}</span>
+    <span class="ti rtl">${esc(s.t)}</span>
+    <span class="pill model click" id="mp">◆ ${s.m}</span>
+    ${s.state==='live'?'<span class="pill live">● generating</span>':''}
+    <div class="sp">
+      <span class="pill">${s.n} msgs</span>
+      <button class="iconb" title="Handoff to another agent" onclick="handoff()">⇄</button>
+      <button class="iconb" title="More">⋯</button>
+    </div>`;
+  $('#mp').onclick=()=>modelDlg(s.app);
+  $('#mLbl').textContent=s.m;
+
+  const th=THREAD[id]||[{r:'a',x:'No messages loaded for this session yet.',t:''}];
+  $('#stage').outerHTML=`<div class="msgs" id="stage"><div class="wrap">
+    ${th.map(m=>`<div class="m">
+      <div class="av ${m.r==='u'?'u':'a'}">${m.r==='u'?'H':a.i}</div>
+      <div class="mb">
+        <div class="mn">${m.r==='u'?'You':a.n}<span class="tm">${m.t}</span></div>
+        ${m.x?`<div class="mt rtl">${md(m.x)}</div>`:''}
+        ${m.tool?`<div class="tool">
+          <div class="toolh"><span>⚙</span><span class="nm">${esc(m.tool.n)}</span>
+            <span class="st">✓ done</span></div>
+          <div class="toolb">$ ${esc(m.tool.c)}\n\n${esc(m.tool.o)}</div></div>`:''}
+        ${m.approve?`<div class="approve">
+          <div class="apph">⚠ ${esc(m.approve.n)} — approval required</div>
+          <div class="appb">${esc(m.approve.c)}</div>
+          <div class="appf">
+            <button class="sm pri" onclick="toast('Approved')">✓ Approve <span style="opacity:.6">⌘⏎</span></button>
+            <button class="sm gh" onclick="toast('Denied')">✕ Deny</button>
+            <button class="sm gh" onclick="toast('Auto-approving safe edits for this session')">Always allow edits</button>
+          </div></div>`:''}
+        ${m.typing?`<div class="typing"><i></i><i></i><i></i></div>`:''}
+      </div></div>`).join('')}
+  </div></div>`;
+  $('#comp').style.display='';
+  $('#stage').scrollTop=9e5;
+  rail(s);
+}
+
+/* ══════════════════ CONTEXT RAIL ══════════════════ */
+function rail(s){
+  const a=s?app(s.app):null;
+  $('#ctx').innerHTML=`
+  ${s?`<div class="cs">
+    <div class="csh">Session</div>
+    <div class="kv"><span class="k">Agent</span><span class="v">${a.i} ${a.n}</span></div>
+    <div class="kv"><span class="k">Model</span><span class="v" style="color:var(--purple)">${s.m}</span></div>
+    <div class="kv"><span class="k">Messages</span><span class="v">${s.n}</span></div>
+    <div class="kv"><span class="k">Cost</span><span class="v">$${s.cost.toFixed(3)}</span></div>
+    <div class="kv"><span class="k">Last active</span><span class="v">${s.ago} ago</span></div>
+  </div>
+  <div class="cs">
+    <div class="csh">Quick actions</div>
+    <div class="qa">
+      <button class="qb" onclick="modelDlg('${s.app}')"><span class="g">◆</span>Switch model</button>
+      <button class="qb" onclick="handoff()"><span class="g">⇄</span>Hand off to another agent</button>
+      <button class="qb" onclick="toast('Comparing across 4 combos…')"><span class="g">⚖</span>Compare models</button>
+      <button class="qb" onclick="toast('Opens ${a.n} panel on :${a.port}')"><span class="g">↗</span>Open ${a.n} panel</button>
+      ${a.caps.includes('restart')?`<button class="qb" onclick="confirmDlg('Restart ${a.n}?','The service stops and starts again. Work in progress may be lost.','Restart')"><span class="g">↻</span>Restart service</button>`:''}
+      <button class="qb" onclick="confirmDlg('Delete session?','This permanently removes the transcript.','Delete')"><span class="g">🗑</span>Delete session</button>
+    </div>
+  </div>`:`
+  <div class="cs">
+    <div class="csh">Today</div>
+    <div class="mini">
+      <div class="mc"><div class="v">31</div><div class="l">requests</div></div>
+      <div class="mc"><div class="v">223k</div><div class="l">tokens</div></div>
+      <div class="mc"><div class="v">$0.228</div><div class="l">cost</div></div>
+      <div class="mc"><div class="v">6</div><div class="l">combos</div></div>
+    </div>
+    <div class="spark">${[38,52,30,66,44,88,100].map(h=>`<i style="height:${h}%"></i>`).join('')}</div>
+  </div>`}
+  <div class="cs">
+    <div class="csh">Live activity</div>
+    ${EVENTS.map(e=>`<div class="ev"><span class="d" style="background:${e.c}"></span>
+      <span class="x rtl">${e.x}</span><span class="t">${e.t}</span></div>`).join('')}
+  </div>
+  <div class="cs">
+    <div class="csh">Combos</div>
+    ${COMBOS.map(c=>`<div class="kv"><span class="k">${c.bad?'⚠ ':''}${c.n}</span>
+      <span class="v" style="color:var(--faint)">${c.c} models</span></div>`).join('')}
+  </div>`;
+}
+
+/* ══════════════════ DIALOGS ══════════════════ */
+function mask(html){$('#mask').innerHTML=html;$('#mask').classList.add('on');}
+function close(){$('#mask').classList.remove('on');}
+$('#mask').onclick=e=>{if(e.target.id==='mask')close();};
+window.close_=close;
+
+function modelDlg(k){
+  const a=app(k), cur=a.model;
+  mask(`<div class="dlg"><h3>◆ Model for ${a.n}</h3>
+    <p>9Router combos. Switching is instant and needs no confirmation.</p>
+    <div class="mlist">${COMBOS.map(c=>`<div class="mrow ${c.n===cur?'sel':''}" data-m="${c.n}">
+      <span class="nm">${c.bad?'⚠ ':''}${c.n}</span>
+      <span class="ct">${c.c} models</span>
+      ${c.n===cur?'<span class="ck">✓</span>':''}</div>`).join('')}</div>
+    <div class="dlgf">
+      <button class="sm gh" onclick="close_()">Cancel</button>
+      <button class="sm gh" onclick="close_();toast('Applied to all 4 agents')">Apply to all agents</button>
+    </div></div>`);
+  $$('.mrow').forEach(r=>r.onclick=()=>{a.model=r.dataset.m;close();
+    if(sel){const s=SESS.find(x=>x.id===sel);s.m=r.dataset.m;open(sel);}else home();
+    toast(a.n+' → '+r.dataset.m);});
+}
+
+function handoff(){
+  mask(`<div class="dlg"><h3>⇄ Hand off this conversation</h3>
+    <p>The transcript is summarised and sent to another agent, so you can continue where you left off.</p>
+    <div class="mlist">${APPS.filter(a=>a.caps.includes('send')).map(a=>
+      `<div class="mrow" onclick="close_();toast('Handed off to '+'${a.n}')">
+        <span style="font-size:15px">${a.i}</span><span class="nm">${a.n}</span>
+        <span class="ct">${a.model||''}</span></div>`).join('')}</div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button></div></div>`);
+}
+window.handoff=handoff;
+
+function confirmDlg(t,b,ok){
+  mask(`<div class="dlg"><h3>⚠ ${esc(t)}</h3><p>${esc(b)}</p>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
+    <button class="sm dg" onclick="close_();toast('${esc(ok)} done')">${esc(ok)}</button></div></div>`);
+}
+window.confirmDlg=confirmDlg;
+
+function newSession(){
+  mask(`<div class="dlg"><h3>＋ New session</h3><p>Pick the agent to start a conversation with.</p>
+    <div class="mlist">${APPS.filter(a=>a.caps.includes('send')).map(a=>
+      `<div class="mrow" onclick="close_();toast('New '+'${a.n}'+' session')">
+        <span style="font-size:15px">${a.i}</span>
+        <span class="nm">${a.n}</span><span class="ct">${a.model}</span></div>`).join('')}</div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button></div></div>`);
+}
+window.newSession=newSession;
+
+/* ══════════════════ COMMAND PALETTE ══════════════════ */
+function pal(){
+  mask(`<div class="pal">
+    <div class="pali"><span style="color:var(--faint)">⌕</span>
+      <input id="pq" placeholder="Search sessions, run a command…" autocomplete="off"></div>
+    <div class="palr" id="pr"></div></div>`);
+  const draw=()=>{
+    const q=($('#pq').value||'').toLowerCase();
+    const cs=CMDS.filter(c=>!q||(c.c+c.d).toLowerCase().includes(q));
+    const ss=SESS.filter(s=>q&&(s.t+s.p+app(s.app).n).toLowerCase().includes(q));
+    const as=APPS.filter(a=>!q||a.n.toLowerCase().includes(q));
+    $('#pr').innerHTML=
+      (cs.length?`<div class="pg">Commands</div>`+cs.map(c=>
+        `<div class="pi" data-c="${c.c}"><span class="g">⌘</span>
+         <div class="tt">${c.c}<small>${c.d}</small></div>
+         ${c.k?`<span class="kb">${c.k}</span>`:''}</div>`).join(''):'')+
+      (ss.length?`<div class="pg">Sessions</div>`+ss.map(s=>
+        `<div class="pi" data-s="${s.id}"><span class="g">${app(s.app).i}</span>
+         <div class="tt rtl">${esc(s.t)}<small>${esc(s.p)}</small></div>
+         <span class="kb">${s.ago}</span></div>`).join(''):'')+
+      (as.length?`<div class="pg">Agents</div>`+as.map(a=>
+        `<div class="pi" data-a="${a.k}"><span class="g">${a.i}</span>
+         <div class="tt">${a.n}<small>${a.model?'◆ '+a.model+' · ':''}${a.note}</small></div>
+         </div>`).join(''):'');
+    $$('#pr .pi').forEach(p=>p.onclick=()=>{
+      close();
+      if(p.dataset.s) open(p.dataset.s);
+      else if(p.dataset.a){const s=SESS.find(x=>x.app===p.dataset.a);s?open(s.id):home();}
+      else runCmd(p.dataset.c);});
+  };
+  $('#pq').oninput=draw; draw(); setTimeout(()=>$('#pq').focus(),40);
+}
+window.pal=pal;
+
+function runCmd(c){
+  if(c==='/model'){ modelDlg(sel?SESS.find(s=>s.id===sel).app:'claude'); return; }
+  if(c==='/new'){ newSession(); return; }
+  if(c==='/handoff'){ handoff(); return; }
+  if(c==='/restart'){ confirmDlg('Restart a service?','Pick the service in the next step.','Continue'); return; }
+  if(c==='/compare'){
+    mask(`<div class="dlg" style="width:min(560px,92vw)"><h3>⚖ Compare models</h3>
+      <p>The same question goes to every selected combo in parallel. Answers land side by side with timing.</p>
+      <div class="mlist">${COMBOS.slice(0,4).map((c,i)=>
+        `<div class="mrow"><input type="checkbox" ${i<2?'checked':''}
+          style="width:16px;height:16px;accent-color:var(--accent)">
+         <span class="nm">${c.n}</span><span class="ct">${c.c} models</span></div>`).join('')}</div>
+      <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
+      <button class="sm pri" onclick="close_();toast('Running 2 models in parallel…')">Run</button></div></div>`);
+    return;
+  }
+  toast('Command '+c);
+}
+
+/* ══════════════════ SLASH MENU ══════════════════ */
+const ta=$('#ta');
+function slashDraw(q){
+  const l=CMDS.filter(c=>c.c.includes(q));
+  if(!l.length){$('#slash').classList.remove('on');return;}
+  $('#slash').innerHTML=`<div class="sh">Commands</div>`+l.map((c,i)=>
+    `<div class="sr ${i===0?'hl':''}" data-c="${c.c}">
+      <span class="cmd">${c.c}</span><span class="ds">${c.d}</span>
+      ${c.k?`<span class="kb">${c.k}</span>`:''}</div>`).join('');
+  $('#slash').classList.add('on');
+  $$('#slash .sr').forEach(r=>r.onclick=()=>{
+    $('#slash').classList.remove('on'); ta.value=''; runCmd(r.dataset.c);});
+}
+ta.addEventListener('input',()=>{
+  ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,170)+'px';
+  const v=ta.value;
+  if(v.startsWith('/')&&!v.includes(' ')) slashDraw(v); else $('#slash').classList.remove('on');
+});
+ta.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){$('#slash').classList.remove('on');}
+  if(e.key==='Enter'&&!e.shiftKey){
+    e.preventDefault();
+    const hl=$('#slash.on .sr.hl');
+    if(hl){$('#slash').classList.remove('on');ta.value='';runCmd(hl.dataset.c);return;}
+    if(ta.value.trim()){toast('Sent to agent');ta.value='';ta.style.height='auto';}
+  }
+});
+$('#send').onclick=()=>{if(ta.value.trim()){toast('Sent to agent');ta.value='';ta.style.height='auto';}};
+$('#cmdBtn').onclick=()=>{ta.value='/';ta.focus();slashDraw('/');};
+$('#modelBtn2').onclick=()=>modelDlg(sel?SESS.find(s=>s.id===sel).app:'claude');
+
+/* ══════════════════ WIRING ══════════════════ */
+$('#omni').onclick=pal;
+$('#btnNew').onclick=newSession;
+$('#btnHome').onclick=home;
+$('#filt').oninput=e=>{filt=e.target.value;tree();};
+function closeDrawers(){$('#sb').classList.remove('open');$('#ctx').classList.remove('force');
+  $('#scrim').classList.remove('on');}
+$('#mbSb').onclick=()=>{const o=$('#sb').classList.toggle('open');
+  $('#scrim').classList.toggle('on',o);$('#ctx').classList.remove('force');};
+$('#mbCtx').onclick=()=>{
+  if(innerWidth>860){$('#ctx').classList.toggle('off');return;}
+  const o=$('#ctx').classList.toggle('force');
+  $('#scrim').classList.toggle('on',o);$('#sb').classList.remove('open');};
+$('#scrim').onclick=closeDrawers;
+addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();pal();}
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='n'){e.preventDefault();newSession();}
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='m'){e.preventDefault();
+    modelDlg(sel?SESS.find(s=>s.id===sel).app:'claude');}
+  if(e.key==='Escape')close();
+});
+
+tree(); home();
+</script>
+</body>
+</html>
