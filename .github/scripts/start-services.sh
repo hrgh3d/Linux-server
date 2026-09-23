@@ -249,9 +249,10 @@ UNIT
 ensure_cloudcli
 if [ -f /etc/systemd/system/cloudcli.service ] && [ -s /etc/cloudcli.env ]; then
   start_system cloudcli.service
-  for _i in 1 2 3; do
+  # CloudCLI کند بالا می‌آید (اسکن نشست‌ها + ساخت ایندکس). ۱۵ ثانیه کم بود.
+  for _i in $(seq 1 12); do
     curl -fsS -m 3 -o /dev/null http://127.0.0.1:3001/ 2>/dev/null && break
-    sleep 3
+    sleep 5
   done
   # مسیر Serve روی 8443 بعد از چرخش/ری‌استارت tailscaled از بین می‌رود
   if ! tailscale serve status 2>/dev/null | grep -q '127.0.0.1:3001'; then

@@ -320,10 +320,17 @@ provision_hermes() {
 # ---------------------------------------------------------------------------
 provision_ai_clients() {
   local pkg bin name
-  for spec in "@anthropic-ai/claude-code:claude:Claude Code" \
-              "@earendil-works/pi-coding-agent:pi:Pi" \
-              "@cloudcli-ai/cloudcli:cloudcli:CloudCLI UI"; do
-    pkg="${spec%%:*}"; rest="${spec#*:}"; bin="${rest%%:*}"; name="${rest#*:}"
+  # قالب: پکیج:باینری:نام:فلگ‌های npm
+  # ⚠️ درس v6.43.1: --ignore-scripts را نمی‌شود سراسری داد. CloudCLI ماژول
+  # نیتیو better-sqlite3 دارد و بدون postinstall باینری .node ساخته نمی‌شود
+  # («Could not locate the bindings file») و سرویس در حلقهٔ کرش می‌افتد.
+  # Pi خودش توصیه به --ignore-scripts کرده، پس فلگ per-package است.
+  local flags
+  for spec in "@anthropic-ai/claude-code:claude:Claude Code:" \
+              "@earendil-works/pi-coding-agent:pi:Pi:--ignore-scripts" \
+              "@cloudcli-ai/cloudcli:cloudcli:CloudCLI UI:"; do
+    pkg="${spec%%:*}"; rest="${spec#*:}"; bin="${rest%%:*}"; rest="${rest#*:}"
+    name="${rest%%:*}"; flags="${rest#*:}"
     if command -v "$bin" >/dev/null 2>&1; then
       note "${name}: present — kept (Mode 2)"
       continue
@@ -335,8 +342,7 @@ provision_ai_clients() {
       note "${name}: dangling symlink cleared"
     fi
     log "${name}: binary missing — reinstalling..."
-    # --ignore-scripts طبق توصیهٔ خود Pi؛ برای Claude Code هم بی‌ضرر است.
-    if ensure_npm && timeout 600 $SUDO env PATH="$PATH" npm install -g --ignore-scripts "$pkg" \
+    if ensure_npm && timeout 900 $SUDO env PATH="$PATH" npm install -g $flags "$pkg" \
          --no-fund --no-audit >"${LOG_DIR}/${bin}.log" 2>&1; then
       note "${name}: REINSTALLED"
     else
