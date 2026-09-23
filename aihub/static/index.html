@@ -432,6 +432,9 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
 
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+// نشانگر قطعیت انتساب مدل: '' یعنی قطعی، '~' یعنی این مدل در چند
+// کامبو هست و نمی‌توان مطمئن بود. هرگز حدس را قطعی نشان نده.
+const mark=e=>e===true?'':'~';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const md=s=>esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
 const num=n=>(n??0).toLocaleString('en-US');
@@ -579,7 +582,7 @@ function home(){
         <div class="fmeta">
           ${a.model?`<span class="tag m">◆ ${esc(a.model)}</span>`:''}
           ${lm.real?`<span class="tag" title="real model behind the combo">
-            ${lm.exact?'':'~'}${esc(lm.real)}</span>`:''}
+            ${mark(lm.exact)}${esc(lm.real)}</span>`:''}
           ${ss.length?`<span class="tag s">${ss.length} sessions</span>`:''}
           ${act?`<span class="tag w">${act} active</span>`:''}
         </div>
@@ -642,7 +645,7 @@ async function openSession(a,id){
   $('#mhead').innerHTML=`<span class="ic">${s.icon||A.icon}</span>
     <span class="ti rtl">${esc(s.title||id)}</span>
     <span class="pill model click" id="mp">◆ ${esc(s.model||A.model||'model')}
-      ${lm.real?`<span class="real">${lm.exact?'':'~'}${esc(lm.real)}</span>`:''}</span>
+      ${lm.real?`<span class="real">${mark(lm.exact)}${esc(lm.real)}</span>`:''}</span>
     ${s.state==='working'?'<span class="pill live hide-sm">● generating</span>':''}
     <div class="sp">
       <span class="pill hide-sm">${s.msg_count||0} msgs</span>
@@ -753,7 +756,7 @@ async function modelDlg(k){
     return `<div class="mrow ${c.name===cur?'sel':''}" data-m="${esc(c.name)}">
       <span class="nm">${esc(c.name)}
         ${L.current?`<div style="font-size:10.5px;color:var(--faint)">
-          ${L.exact?'→':'~'} ${esc(L.current)}${L.age_s!=null?' · '+agoS(L.age_s)+' ago':''}</div>`:
+          ${L.exact===true?'→':'~'} ${esc(L.current)}${L.age_s!=null?' · '+agoS(L.age_s)+' ago':''}</div>`:
           '<div style="font-size:10.5px;color:var(--faint)">no recent traffic</div>'}</span>
       ${h?`<span class="ct" style="color:${h.ok?'var(--ok)':'var(--bad)'}">${h.ok?'ok':'fail'}</span>`:''}
       <span class="ct">${c.count} models</span>
@@ -782,7 +785,7 @@ async function membersDlg(combo){
     const L=d.live||{};
     $('#mm').innerHTML=`<p style="font-size:12.5px">
       ${L.current?`Currently answering: <b style="color:var(--purple)">${esc(L.current)}</b>
-        ${L.exact?'':'<span style="color:var(--warn)"> (this model is in more than one combo, '+
+        ${L.exact===true?'':'<span style="color:var(--warn)"> (this model is in more than one combo, '+
         'so the match is inferred)</span>'}`:'No recent traffic through this combo.'}</p>
       ${d.members.map(m=>`<div class="mrow">
         <span class="nm" style="font-size:12.5px">${esc(m.short)}
@@ -1057,7 +1060,7 @@ function rail(s,proj){
     <div class="kv"><span class="k">Agent</span><span class="v">${a.icon} ${esc(a.name)}</span></div>
     <div class="kv"><span class="k">Combo</span><span class="v" style="color:var(--purple)">${esc(s.model||'—')}</span></div>
     ${lm.real?`<div class="kv"><span class="k">Real model</span>
-      <span class="v" style="font-size:11px">${lm.exact?'':'~'}${esc(lm.real)}</span></div>`:''}
+      <span class="v" style="font-size:11px">${mark(lm.exact)}${esc(lm.real)}</span></div>`:''}
     <div class="kv"><span class="k">Messages</span><span class="v">${s.msg_count||0}</span></div>
     <div class="kv"><span class="k">Last active</span><span class="v">${ago(s.last_active)} ago</span></div>
     ${(s.tags||[]).length?`<div class="kv"><span class="k">Tags</span>

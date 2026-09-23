@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from .adapters import rp
@@ -77,11 +78,21 @@ def combo_members() -> dict[str, list[str]]:
 
 
 def _index() -> dict[str, list[str]]:
-    """مدل ساده‌شده -> کامبوهایی که عضوش هستند."""
+    """
+    مدل ساده‌شده -> کامبوهایی که عضوش هستند.
+
+    نکتهٔ مهم: یک کامبو می‌تواند یک مدل را از دو ارائه‌دهنده داشته باشد؛
+    مثلاً Brain هم 'cl/deepseek/deepseek-v4.1-flash' دارد و هم
+    'tkbr/deepseek-v4.1-flash:free' که هر دو به یک نام ساده می‌رسند.
+    بدون یکتاسازی، کامبو دوبار شمرده می‌شد و انتساب قطعی را به‌غلط
+    «مبهم» نشان می‌داد. پس هر کامبو فقط یک‌بار ثبت می‌شود.
+    """
     idx: dict[str, list[str]] = {}
     for combo, ms in combo_members().items():
         for m in ms:
-            idx.setdefault(_bare(m), []).append(combo)
+            owners = idx.setdefault(_bare(m), [])
+            if combo not in owners:
+                owners.append(combo)
     return idx
 
 
@@ -100,9 +111,28 @@ def recent(limit: int = 60) -> list[dict]:
 
 
 def _ts(v: Any) -> float | None:
+    """
+    ستون timestamp در usageHistory همیشه عدد نیست؛ رشتهٔ ISO هم دیده می‌شود.
+    هر سه حالت را می‌پذیریم وگرنه «چند ثانیه پیش» همیشه خالی می‌ماند.
+    """
+    if isinstance(v, bool) or v is None:
+        return None
     if isinstance(v, (int, float)):
         return v / 1000.0 if v > 1e11 else float(v)
-    return None
+    s = str(v).strip()
+    if not s:
+        return None
+    if s.replace(".", "", 1).isdigit():                  # عدد در قالب رشته
+        f = float(s)
+        return f / 1000.0 if f > 1e11 else f
+    try:                                                 # ISO-8601
+        t = s.replace("Z", "+00:00")
+        d = datetime.fromisoformat(t)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.timestamp()
+    except Exception:                                    # noqa: BLE001
+        return None
 
 
 def live() -> dict[str, Any]:
@@ -122,7 +152,7 @@ def live() -> dict[str, Any]:
     nowt = time.time()
 
     per: dict[str, dict] = {
-        c: {"combo": c, "members": len(ms), "current": None, "exact": False,
+        c: {"combo": c, "members": len(ms), "current": None, "exact": None,
             "age_s": None, "provider": None, "breakdown": {}, "requests": 0,
             "cost": 0.0}
         for c, ms in members.items()}

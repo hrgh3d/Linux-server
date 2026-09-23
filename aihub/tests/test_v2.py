@@ -453,3 +453,60 @@ def test_frontend_escapes_everything_user_supplied():
     for expr in ("esc(s.title", "esc(m.text", "esc(p.name", "esc(t.text)",
                  "esc(s.preview", "esc(r.task)"):
         assert expr in h, f"unescaped render: {expr}"
+
+
+# ── رگرسیون: دو باگی که فقط روی دادهٔ واقعی سرور خودش را نشان داد
+
+
+def test_combo_with_same_model_twice_is_still_exact(tmp_path, monkeypatch):
+    """
+    Brain واقعی همان مدل را از دو ارائه‌دهنده دارد:
+      cl/deepseek/deepseek-v4.1-flash  +  tkbr/deepseek-v4.1-flash:free
+    هر دو به یک نام ساده می‌رسند. اگر ایندکس یکتا نشود کامبو دوبار
+    شمرده می‌شود و انتساب درست، به‌غلط «مبهم» علامت می‌خورد.
+    """
+    from app import resolver
+    monkeypatch.setattr(resolver, "combo_members", lambda: {
+        "Brain": ["cl/deepseek/deepseek-v4.1-flash",
+                  "tkbr/deepseek-v4.1-flash:free"],
+        "Other": ["gemini/gemini-3.6-flash"],
+    })
+    idx = resolver._index()
+    assert idx["deepseek-v4.1-flash"] == ["Brain"], "combo counted twice"
+
+    monkeypatch.setattr(resolver, "recent", lambda n=140: [
+        {"id": 9, "timestamp": 1790000000000, "provider": "cl",
+         "model": "deepseek-v4.1-flash:free", "cost": 0.001, "status": "ok"}])
+    assert resolver.live()["Brain"]["exact"] is True
+
+
+def test_timestamp_accepts_iso_strings():
+    """ستون timestamp همیشه عدد نیست؛ اگر رشته را رد کنیم سن همیشه خالی است."""
+    from app.resolver import _ts
+    assert _ts(1790000000000) == 1790000000.0        # میلی‌ثانیه
+    assert _ts(1790000000) == 1790000000.0           # ثانیه
+    assert _ts("1790000000000") == 1790000000.0      # عدد رشته‌ای
+    assert _ts("2026-09-23T14:30:00Z") is not None   # ISO
+    assert _ts("2026-09-23T14:30:00+00:00") is not None
+    assert _ts(None) is None and _ts("") is None and _ts("junk") is None
+
+
+def test_age_is_reported_for_live_model(monkeypatch):
+    import time as _t
+    from app import resolver
+    monkeypatch.setattr(resolver, "combo_members", lambda: {
+        "Agentic": ["gemini/gemini-3.6-flash"]})
+    monkeypatch.setattr(resolver, "recent", lambda n=140: [
+        {"id": 1, "timestamp": int((_t.time() - 90) * 1000), "provider": "gemini",
+         "model": "gemini-3.6-flash", "cost": 0.0, "status": "ok"}])
+    a = resolver.live()["Agentic"]["age_s"]
+    assert a is not None and 80 <= a <= 100, f"age wrong: {a}"
+
+
+def test_unused_combo_reports_unknown_not_false(monkeypatch):
+    """کامبویی که اصلاً استفاده نشده «نامعلوم» است، نه «مبهم»."""
+    from app import resolver
+    monkeypatch.setattr(resolver, "combo_members", lambda: {"Image": ["a/b"]})
+    monkeypatch.setattr(resolver, "recent", lambda n=140: [])
+    c = resolver.live()["Image"]
+    assert c["current"] is None and c["exact"] is None
