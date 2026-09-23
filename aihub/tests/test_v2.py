@@ -990,3 +990,46 @@ def test_frontend_apply_all_uses_clicked_model_not_current():
     seg = h[h.index("const pick=async(model)"):h.index("const drawCombos")]
     assert "post('/api/model/default',{model})" in seg.replace(" ", "")
     assert "cur||" not in seg
+
+
+def test_pi_native_includes_its_own_model_store(tmp_path, monkeypatch):
+    """
+    Pi کاتالوگ بومی خودش را در models-store.json دارد (anthropic 15 +
+    openai 41). قبلاً فقط models.json خوانده می‌شد که همان ۶ کامبو بود،
+    پس فهرست بومی Pi خالی نشان داده می‌شد.
+    """
+    import json as _j
+    (tmp_path / "models.json").write_text(_j.dumps(
+        {"providers": {"ninerouter": {"models": [{"id": "Agentic"}]}}}))
+    (tmp_path / "models-store.json").write_text(_j.dumps(
+        {"anthropic": {"models": [{"id": "claude-fable-5"}]},
+         "openai": {"models": [{"id": "gpt-6-sol"}]}}))
+    (tmp_path / "auth.json").write_text("{}")
+    from app import catalog
+    monkeypatch.setattr(catalog, "rp",
+                        lambda p: str(tmp_path / p.rsplit("/", 1)[-1]))
+    got = catalog._pi_native()
+    ids = {m["id"] for m in got}
+    assert "anthropic/claude-fable-5" in ids
+    assert "openai/gpt-6-sol" in ids
+    assert "Agentic" in ids
+
+
+def test_pi_flags_models_without_credentials(tmp_path, monkeypatch):
+    """auth.json خالی است — نباید وانمود کنیم این مدل‌ها آمادهٔ کارند."""
+    import json as _j
+    (tmp_path / "models.json").write_text("{}")
+    (tmp_path / "models-store.json").write_text(_j.dumps(
+        {"anthropic": {"models": [{"id": "claude-fable-5"}]}}))
+    (tmp_path / "auth.json").write_text("{}")
+    from app import catalog
+    monkeypatch.setattr(catalog, "rp",
+                        lambda p: str(tmp_path / p.rsplit("/", 1)[-1]))
+    m = catalog._pi_native()[0]
+    assert m["needs_key"] is True
+
+
+def test_frontend_warns_about_models_without_credentials():
+    h = _html()
+    assert "needs_key" in h, "UI never surfaces the missing-credential flag"
+    assert "no credentials for this provider" in h

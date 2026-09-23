@@ -141,9 +141,33 @@ def _openclaw_native() -> list[dict]:
     return res
 
 
+def _pi_auth() -> set[str]:
+    """کدام providerهای Pi اعتبارنامه دارند. auth.json خالی = هیچ‌کدام."""
+    try:
+        d = json.load(open(rp("/root/.pi/agent/auth.json")))
+        return {k for k in d} if isinstance(d, dict) else set()
+    except Exception:                                          # noqa: BLE001
+        return set()
+
+
 def _pi_native() -> list[dict]:
-    """models.json خود Pi."""
+    """
+    دو منبع برای Pi:
+
+      models.json        providerهای *پیکربندی‌شده* (اینجا فقط ninerouter
+                         با همان ۶ کامبو — که چون کامبواند جدا نشان داده
+                         می‌شوند و اینجا تکرار نمی‌شوند)
+      models-store.json  کاتالوگ بومیِ خود Pi که با `pi update --models`
+                         تازه می‌شود: anthropic (۱۵) و openai (۴۱).
+
+    نکتهٔ صادقانه: `auth.json` روی این سرور **خالی** است، یعنی برای
+    anthropic/openai هیچ کلیدی ثبت نشده. مدل‌ها را نشان می‌دهیم چون خود Pi
+    می‌شناسدشان، ولی با پرچم needs_key تا کاربر انتظار نداشته باشد بدون
+    کلید کار کنند.
+    """
     out: list[dict] = []
+    have = _pi_auth()
+
     try:
         d = json.load(open(rp("/root/.pi/agent/models.json")))
         for prov, v in (d.get("providers") or {}).items():
@@ -152,7 +176,28 @@ def _pi_native() -> list[dict]:
                     out.append({"id": m["id"], "provider": prov})
     except Exception:                                          # noqa: BLE001
         pass
-    return out
+
+    try:
+        store_ = json.load(open(rp("/root/.pi/agent/models-store.json")))
+        for prov, v in (store_ or {}).items():
+            if not isinstance(v, dict):
+                continue
+            for m in (v.get("models") or []):
+                mid = m.get("id") if isinstance(m, dict) else m
+                if not mid:
+                    continue
+                out.append({"id": f"{prov}/{mid}", "provider": prov,
+                            "needs_key": prov not in have})
+    except Exception:                                          # noqa: BLE001
+        pass
+
+    seen, uniq = set(), []
+    for m in out:
+        if m["id"] in seen:
+            continue
+        seen.add(m["id"])
+        uniq.append(m)
+    return uniq
 
 
 # نام‌های مستعار بومی Claude Code (از `claude --help`).

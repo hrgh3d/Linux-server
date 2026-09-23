@@ -1005,8 +1005,11 @@ async function modelDlg(k){
       <div class="pg">${esc(g.provider)} · ${g.count}</div>
       ${g.models.map(m=>`<div class="mrow ${m.id===cur?'sel':''}" data-m="${esc(m.id)}">
         <span class="nm">${esc(m.id)}${m.alias?'<div class="sub">alias — '+
-          'Anthropic decides the exact version</div>':''}</span>
+          'Anthropic decides the exact version</div>':''}${
+          m.needs_key?'<div class="sub" style="color:var(--warn)">'+
+          'no credentials for this provider — it will fail until you add a key</div>':''}</span>
         ${m.configured?'<span class="ct" style="color:var(--ok)">configured</span>':''}
+        ${m.needs_key?'<span class="ct" style="color:var(--warn)">no key</span>':''}
         ${m.id===cur?'<span class="ck">✓</span>':''}</div>`).join('')}`).join('')
       :`<div class="empty">${esc(A.name)} exposes no model list of its own.<br>
          Use a 9router combo instead.</div>`;
