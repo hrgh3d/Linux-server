@@ -321,7 +321,8 @@ provision_hermes() {
 provision_ai_clients() {
   local pkg bin name
   for spec in "@anthropic-ai/claude-code:claude:Claude Code" \
-              "@earendil-works/pi-coding-agent:pi:Pi"; do
+              "@earendil-works/pi-coding-agent:pi:Pi" \
+              "@cloudcli-ai/cloudcli:cloudcli:CloudCLI UI"; do
     pkg="${spec%%:*}"; rest="${spec#*:}"; bin="${rest%%:*}"; name="${rest#*:}"
     if command -v "$bin" >/dev/null 2>&1; then
       note "${name}: present — kept (Mode 2)"
@@ -403,6 +404,37 @@ PYEOF
   }
 PISET
     note "Pi: settings.json rebuilt"
+  fi
+
+  # v6.43 — CloudCLI UI: فایل env را زیر /etc نگه می‌داریم، نه داخل پوشهٔ
+  # پکیج npm. خود CloudCLI به‌صورت پیش‌فرض دنبال
+  # <install-dir>/.env می‌گردد که زیر node_modules است و هرگز آرشیو نمی‌شود،
+  # پس با هر چرخش رانر تنظیمات و اتصال به 9router از بین می‌رفت.
+  # یونیت systemd آن را با EnvironmentFile=/etc/cloudcli.env می‌خواند.
+  if [ ! -s /etc/cloudcli.env ] && [ -f /root/.openclaw/openclaw.json ]; then
+    local ckey
+    ckey=$(python3 -c "import json;print(json.load(open('/root/.openclaw/openclaw.json'))['models']['providers']['ninerouter']['apiKey'])" 2>/dev/null || true)
+    if [ -n "$ckey" ]; then
+      $SUDO tee /etc/cloudcli.env >/dev/null <<CCENV
+SERVER_PORT=3001
+HOST=0.0.0.0
+DATABASE_PATH=/root/.cloudcli/auth.db
+CLAUDE_CLI_PATH=/usr/local/bin/claude
+CONTEXT_WINDOW=128000
+VITE_CONTEXT_WINDOW=128000
+ANTHROPIC_BASE_URL=http://127.0.0.1:20128
+ANTHROPIC_AUTH_TOKEN=${ckey}
+ANTHROPIC_MODEL=Agentic
+ANTHROPIC_SMALL_FAST_MODEL=Agentic
+ANTHROPIC_DEFAULT_SONNET_MODEL=Agentic
+ANTHROPIC_DEFAULT_OPUS_MODEL=Agentic
+ANTHROPIC_DEFAULT_HAIKU_MODEL=Agentic
+CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=128000
+CCENV
+      $SUDO chmod 600 /etc/cloudcli.env
+      note "CloudCLI: /etc/cloudcli.env rebuilt"
+    fi
   fi
 }
 

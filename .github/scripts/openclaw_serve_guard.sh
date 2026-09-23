@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# openclaw_serve_guard.sh — v6.34
+# openclaw_serve_guard.sh — v6.43 (بود v6.34)
+#
+# v6.43: همین نگهبان حالا مسیر Serve رابط وب CloudCLI روی 8443 را هم بازمی‌سازد.
+#   دلیل یکی است: هر Stop/Start سرویس tailscaled مسیرهای Serve را می‌برد.
+#   چون بررسی 8443 مستقل است، اگر OpenClaw سالم باشد و فقط CloudCLI افتاده
+#   باشد باز هم ترمیم می‌شود (و برعکس).
 #
 # چرا لازم است:
 #   با gateway.tailscale.mode=serve، خودِ OpenClaw مسیر Tailscale Serve را
@@ -44,6 +49,30 @@ import sys,json
 try: print(json.load(sys.stdin).get('Self',{}).get('DNSName','').rstrip('.'))
 except Exception: pass" 2>/dev/null)
 [ -n "$DN" ] || exit 0
+
+# ---- v6.43: مسیر CloudCLI روی 8443 (مستقل از وضعیت OpenClaw) ----
+# قبل از هر چیز بررسی می‌شود تا اگر OpenClaw سالم بود و این اسکریپت زودتر
+# exit 0 کرد، CloudCLI بی‌نگهبان نماند.
+if systemctl is-active --quiet cloudcli.service 2>/dev/null; then
+  CC_LOOP=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "http://127.0.0.1:3001/" 2>/dev/null)
+  case "$CC_LOOP" in
+    2*|3*|401|403)
+      CC_HTTPS=$(curl -s -m 12 -o /dev/null -w '%{http_code}' "https://$DN:8443/" 2>/dev/null)
+      case "$CC_HTTPS" in
+        2*|3*|401|403) : ;;
+        *)
+          log "CLOUDCLI INGRESS DOWN: https://$DN:8443/ -> $CC_HTTPS while loopback -> $CC_LOOP"
+          timeout 60 tailscale serve --bg --https=8443 "http://127.0.0.1:3001" >>"$LOG" 2>&1
+          for i in 1 2 3 4 5; do
+            sleep 2
+            H=$(curl -s -m 8 -o /dev/null -w '%{http_code}' "https://$DN:8443/" 2>/dev/null)
+            case "$H" in 2*|3*|401|403) log "  CLOUDCLI RECOVERED after $((i*2))s (https -> $H)"; break ;; esac
+          done
+          ;;
+      esac
+      ;;
+  esac
+fi
 
 # ---- سیگنال ۱: همان چیزی که مرورگر می‌بیند ----
 HTTPS=$(curl -s -m 12 -o /dev/null -w '%{http_code}' "https://$DN/" 2>/dev/null)

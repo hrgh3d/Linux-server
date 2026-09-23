@@ -214,6 +214,58 @@ if [ -f /etc/systemd/system/headroom.service ]; then
   fi
 fi
 
+# --- CloudCLI UI (Claude Code web interface) — v6.43 -----------------------
+# رابط وب Claude Code روی 3001. سه چیز باید بعد از هر چرخش برگردد:
+#   ۱) یونیت systemd  ۲) فایل env زیر /etc  ۳) مسیر Tailscale Serve روی 8443
+# پورت 443 مال OpenClaw است، پس CloudCLI روی 8443 می‌نشیند.
+ensure_cloudcli() {
+  command -v cloudcli >/dev/null 2>&1 || return 0
+  if [ ! -f /etc/systemd/system/cloudcli.service ]; then
+    echo "[services] cloudcli: unit missing — writing it"
+    sudo tee /etc/systemd/system/cloudcli.service >/dev/null <<'UNIT'
+[Unit]
+Description=CloudCLI UI (Claude Code web interface)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+EnvironmentFile=/etc/cloudcli.env
+ExecStart=/usr/local/bin/cloudcli start
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    sudo systemctl daemon-reload
+  fi
+  mkdir -p /root/.cloudcli 2>/dev/null || true
+}
+ensure_cloudcli
+if [ -f /etc/systemd/system/cloudcli.service ] && [ -s /etc/cloudcli.env ]; then
+  start_system cloudcli.service
+  for _i in 1 2 3; do
+    curl -fsS -m 3 -o /dev/null http://127.0.0.1:3001/ 2>/dev/null && break
+    sleep 3
+  done
+  # مسیر Serve روی 8443 بعد از چرخش/ری‌استارت tailscaled از بین می‌رود
+  if ! tailscale serve status 2>/dev/null | grep -q '127.0.0.1:3001'; then
+    tailscale serve --bg --https=8443 http://127.0.0.1:3001 >/dev/null 2>&1 \
+      && echo "[services] cloudcli: tailscale serve 8443 re-established" \
+      || echo "[services] cloudcli: WARNING tailscale serve 8443 failed"
+  fi
+  if curl -fsS -m 3 -o /dev/null http://127.0.0.1:3001/ 2>/dev/null; then
+    echo "[services] cloudcli: UI healthy on 127.0.0.1:3001 (https :8443 via tailnet)"
+  else
+    echo "[services] cloudcli: not answering yet — Restart=always will keep retrying"
+  fi
+fi
+
 # --- Hermes gateway: یونیت user روت ---
 # v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
 # بوت‌های بعدی از راه استاندارد (همین یونیت) بالا می‌آیند.
