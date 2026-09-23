@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from .adapters import (ADAPTERS, rp, RouterAdapter, _sh, list_9router_combos,
                        set_env_model, unit_active)
-from . import store, resolver, orchestra
+from . import catalog, store, resolver, orchestra
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC = APP_DIR.parent / "static"
@@ -318,6 +318,69 @@ async def set_model(body: ModelBody):
     res = await loop.run_in_executor(POOL, run)
     invalidate()
     return {"results": res}
+
+
+@app.get("/api/catalog/{agent}")
+async def catalog_agent(agent: str):
+    """
+    چه مدل‌هایی را می‌شود به این ایجنت داد:
+      combos — ۶ کامبوی 9router (مسیریابی خودکار)
+      native — مدل‌هایی که خود این برنامه می‌شناسد
+    """
+    if agent not in ADAPTERS:
+        raise HTTPException(404, "unknown agent")
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(POOL, lambda: catalog.for_agent(agent))
+
+
+@app.get("/api/catalog")
+async def catalog_all():
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(POOL, catalog.all_agents)
+
+
+class DefaultBody(BaseModel):
+    model: str
+    only_supported: bool = True
+
+
+@app.post("/api/model/default")
+async def set_default_everywhere(b: DefaultBody):
+    """
+    یک کامبو (یا مدل) را روی **همهٔ** ایجنت‌ها به‌عنوان پیش‌فرض بنشان.
+
+    گزارش صادقانه می‌دهد: برای هر ایجنت جداگانه ok/خطا، و اگر ایجنتی
+    آن مدل را نمی‌شناسد صریح می‌گوید به‌جای اینکه وانمود کند موفق شد.
+    """
+    known = {c["id"] for c in catalog.combos()}
+
+    def run():
+        results = {}
+        for k, ad in ADAPTERS.items():
+            if k == "router" or "set_model" not in ad.capabilities:
+                results[k] = {"ok": False, "msg": "does not support switching",
+                              "skipped": True}
+                continue
+            # مدل بومی این ایجنت یا کامبو؟
+            if b.model not in known:
+                nat = {m["id"] for m in catalog.native(k)}
+                if b.only_supported and nat and b.model not in nat:
+                    results[k] = {"ok": False, "skipped": True,
+                                  "msg": f"{k} does not list this model"}
+                    continue
+            ok, msg = ad.set_model(b.model)
+            results[k] = {"ok": ok, "msg": msg}
+        return results
+
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(POOL, run)
+    invalidate()
+    catalog.invalidate()
+    applied = [k for k, v in res.items() if v.get("ok")]
+    store.tl(None, None, "model",
+             f"default model -> {b.model} on {', '.join(applied) or 'nothing'}")
+    return {"model": b.model, "results": res, "applied": applied,
+            "count": len(applied)}
 
 
 @app.post("/api/send")

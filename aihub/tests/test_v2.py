@@ -845,3 +845,148 @@ def test_raw_session_cache_is_not_poisoned_by_merge(client):
     assert a["title"] == "AAA" and b["title"] == "BBB"
     assert a["real_title"] == b["real_title"] == origin, \
         "real_title drifted — the cached object was mutated"
+
+
+# ═══════════ v2.2: کاتالوگ مدل بومی هر ایجنت + مدل پیش‌فرض سراسری
+
+
+def test_catalog_takes_only_combos_from_9router(monkeypatch):
+    """
+    تصحیح کاربر: از 9router فقط کامبوها را می‌خواهیم، نه هر ۱۵۲۷ مدلی
+    که روتر سرو می‌کند. اگر روزی کسی فهرست خام را برگرداند اینجا می‌شکند.
+    """
+    import inspect
+    from app import catalog
+    src = inspect.getsource(catalog)
+    assert "/v1/models" not in src, "must not pull the raw 1527-model list"
+    assert "select name, models from combos" in src
+
+
+def test_hermes_native_models_come_from_its_own_config(tmp_path, monkeypatch):
+    """مدل‌های بومی هرمس از بلوک custom_providers خودش خوانده می‌شوند."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "model:\n  default: Brain\n"
+        "database:\n  journal_mode: wal\n"
+        "custom_providers:\n"
+        "  - name: Railway\n"
+        "    base_url: http://127.0.0.1:20128/v1\n"
+        "    models:\n"
+        "      Agentic: {}\n"
+        "      gemini/gemini-3.8-flash: {}\n"
+        "      cf/@cf/qwen/qwq-32b: {}\n"
+        "telemetry:\n  enabled: false\n", encoding="utf-8")
+    from app import catalog
+    monkeypatch.setattr(catalog, "rp", lambda p: str(cfg)
+                        if "hermes" in p else p)
+    got = {m["id"] for m in catalog._hermes_native()}
+    assert "gemini/gemini-3.8-flash" in got
+    assert "cf/@cf/qwen/qwq-32b" in got
+    assert "Agentic" in got
+    # نباید از بلوک بعدی چیزی بردارد
+    assert not any("telemetry" in g or "enabled" in g for g in got)
+
+
+def test_pi_native_models_come_from_its_own_models_json(tmp_path, monkeypatch):
+    import json as _j
+    f = tmp_path / "models.json"
+    f.write_text(_j.dumps({"providers": {
+        "ninerouter": {"models": [{"id": "Agentic"}, {"id": "Brain"}]},
+        "google": {"models": [{"id": "gemini-x"}]}}}), encoding="utf-8")
+    from app import catalog
+    monkeypatch.setattr(catalog, "rp", lambda p: str(f) if "pi/" in p or
+                        "models.json" in p else p)
+    got = catalog._pi_native()
+    assert {"Agentic", "Brain", "gemini-x"} == {m["id"] for m in got}
+    assert {m["provider"] for m in got} == {"ninerouter", "google"}
+
+
+def test_catalog_does_not_duplicate_combos_into_native(monkeypatch):
+    from app import catalog
+    catalog.invalidate()
+    monkeypatch.setattr(catalog, "combos",
+                        lambda: [{"id": "Agentic", "members": 12, "kind": "combo"}])
+    monkeypatch.setattr(catalog, "native",
+                        lambda a: [{"id": "Agentic", "provider": "x"},
+                                   {"id": "gemini/g-1", "provider": "gemini"}])
+    c = catalog.for_agent("pi")
+    ids = [m["id"] for g in c["native_groups"] for m in g["models"]]
+    assert "Agentic" not in ids, "combo duplicated into the native list"
+    assert "gemini/g-1" in ids
+
+
+def test_default_model_applies_to_every_agent(client, monkeypatch):
+    """گزینهٔ «یک کامبو را روی همهٔ ایجنت‌ها بنشان»."""
+    from app import catalog
+    from app.adapters import ADAPTERS
+    catalog.invalidate()
+    monkeypatch.setattr(catalog, "combos",
+                        lambda: [{"id": "Brain", "members": 2, "kind": "combo"}])
+    calls = {}
+    for k, ad in ADAPTERS.items():
+        if "set_model" in ad.capabilities:
+            monkeypatch.setattr(
+                ad, "set_model",
+                lambda m, _k=k: (calls.__setitem__(_k, m), (True, f"{_k}={m}"))[1])
+    r = client.post("/api/model/default", json={"model": "Brain"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["count"] >= 3, d
+    assert set(d["applied"]) <= set(ADAPTERS)
+    for k in d["applied"]:
+        assert calls[k] == "Brain"
+
+
+def test_default_model_is_honest_about_agents_that_cannot_switch(client,
+                                                                monkeypatch):
+    """ایجنتی که پشتیبانی نمی‌کند باید صریح skip شود، نه وانمود به موفقیت."""
+    from app import catalog
+    catalog.invalidate()
+    monkeypatch.setattr(catalog, "combos", lambda: [{"id": "Brain",
+                                                     "members": 2,
+                                                     "kind": "combo"}])
+    d = client.post("/api/model/default", json={"model": "Brain"}).json()
+    assert "router" in d["results"]
+    assert d["results"]["router"]["skipped"] is True
+    assert d["results"]["router"]["ok"] is False
+
+
+def test_default_model_refuses_unknown_model_per_agent(client, monkeypatch):
+    """
+    اگر مدل نه کامبوست و نه در فهرست بومی آن ایجنت، نباید کورکورانه
+    ست شود — وگرنه ایجنت با مدلی می‌ماند که نمی‌شناسد و هر درخواست می‌شکند.
+    """
+    from app import catalog
+    catalog.invalidate()
+    monkeypatch.setattr(catalog, "combos", lambda: [])
+    monkeypatch.setattr(catalog, "native", lambda a: [{"id": "only-this",
+                                                       "provider": "p"}])
+    d = client.post("/api/model/default",
+                    json={"model": "does-not-exist"}).json()
+    assert d["count"] == 0
+    assert all(v.get("skipped") for v in d["results"].values())
+
+
+def test_frontend_model_dialog_shows_native_and_combos():
+    h = _html()
+    assert 'data-mt="combos"' in h and 'data-mt="native"' in h
+    assert "/api/catalog/" in h, "native catalog never fetched"
+    assert "native_groups" in h
+
+
+def test_frontend_can_set_default_on_all_agents():
+    h = _html()
+    assert 'id="applyAll"' in h
+    assert "/api/model/default" in h
+    assert "defaultReport" in h, "no per-agent result breakdown"
+
+
+def test_frontend_apply_all_uses_clicked_model_not_current():
+    """
+    باگ قبلی: «Apply to all» مدل جاری را می‌فرستاد نه مدلی که کاربر
+    کلیک کرده بود، پس عملاً هیچ تغییری نمی‌داد.
+    """
+    h = _html()
+    seg = h[h.index("const pick=async(model)"):h.index("const drawCombos")]
+    assert "post('/api/model/default',{model})" in seg.replace(" ", "")
+    assert "cur||" not in seg

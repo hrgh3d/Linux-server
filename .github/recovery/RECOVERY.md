@@ -4,8 +4,10 @@
 > سیستم را دقیقاً به شکل فعلی برگردانی.
 > ⚠️ فایل `secrets.env` کنار همین فایل، کلیدهای دسترسی را دارد (Base64). جای امن نگهش دار.
 >
-> **باندل با هر گزارش ربات به تلگرام می‌آید:** قطع/وصل سیستم (❌/✅)، تغییر آدرس هر داشبورد،
-> و کرون روزانه ۰۳:۴۷ UTC. dedup: داخل ۱۵ دقیقه باندل تکراری ارسال نمی‌شود.
+> **هر شب ۰۳:۴۷ UTC یک اسنپ‌شات کاملِ خودکفا** به تلگرام می‌آید (v6.50 — قبلاً
+> نسخهٔ کامل فقط شنبه‌ها بود و اگر سیستم چهارشنبه می‌مرد، تازه‌ترین باندلِ کامل
+> مال چهار روز قبل بود). باندل با رویدادهای قطع/وصل هم می‌آید.
+> dedup: داخل ۱۵ دقیقه باندل تکراری ارسال نمی‌شود.
 > **آخرین باندل در چت = تازه‌ترین نسخهٔ کامل.** اگر سرور موقع بکاپ‌گیری خاموش بوده،
 > فایل `SERVER-DATA-UNAVAILABLE.txt` داخلش است و باندل = `bootstrap` + `state.part-*`.
 >
@@ -26,6 +28,8 @@
 | `sqlite/openclaw-state.sqlite` | **جدول دستگاه‌های جفت‌شدهٔ OpenClaw** (VACUUM سالم) | ✅ |
 | `sqlite/9router-data.sqlite` | دیتابیس 9router (کلیدهای API، کاربران) | ✅ |
 | `app-code.tar.gz` | `/opt/9router`, `/root/.hermes`, `/var/www` | ✅ |
+| `aihub.tar.gz` | **AI Hub** — کد، رابط، پروژه‌ها، سطل زباله (بدون venv) | ✅ |
+| `sqlite/aihub-hub.sqlite` | **دادهٔ هاب**: نام نشست‌ها، پروژه‌های مشترک، حافظهٔ تیم، مهارت‌ها | ✅ |
 | `services.tar.gz` | `/etc/nginx`, `/etc/cron.d`, یونیت‌های systemd (system + user) | ✅ |
 | `bin-scripts.tar.gz` | `/usr/local/bin`, `/usr/local/sbin` (همهٔ نگهبان‌ها) | ✅ |
 | `home-root.tar.gz` | کل `/root` منهای cacheها | ✅ |
@@ -91,9 +95,11 @@ tar -xzf services.tar.gz      -C /
 tar -xzf bin-scripts.tar.gz   -C /
 
 # 3) دیتابیس‌های سالم را روی نسخه‌های احتمالاً torn بنشان
-mkdir -p /root/.openclaw/state /root/.9router/db
+mkdir -p /root/.openclaw/state /root/.9router/db /opt/aihub/data
 cp sqlite/openclaw-state.sqlite /root/.openclaw/state/openclaw.sqlite
 cp sqlite/9router-data.sqlite   /root/.9router/db/data.sqlite
+tar -xzf aihub.tar.gz -C /                       # کد + دادهٔ هاب
+cp sqlite/aihub-hub.sqlite /opt/aihub/data/hub.sqlite
 
 # 4) Node 24 ایزوله برای OpenClaw (Node سیستمی باید روی 22 بماند!)
 mkdir -p /opt/openclaw-node && cd /tmp
@@ -107,23 +113,33 @@ exec /opt/openclaw-node/bin/node /opt/openclaw-app/lib/node_modules/openclaw/ope
 W
 chmod +x /usr/local/bin/openclaw
 
-# 5) سرویس‌ها
+# 5) AI Hub — venv در بکاپ نیست چون ۷۱MB و بازساختنی است (~۲۰ ثانیه)
+python3 -m venv /opt/aihub/venv
+/opt/aihub/venv/bin/pip -q install -r /opt/aihub/requirements.txt
+# سلامت‌سنجی قبل از enable: اگر تست‌ها سبز نشدند چیزی ناقص برگشته
+AIHUB_ROOT=/tmp/t AIHUB_DATA=/tmp/t/d /opt/aihub/venv/bin/python -m pytest \
+  /opt/aihub/tests -q 2>/dev/null | tail -2
+
+# 6) سرویس‌ها
 systemctl daemon-reload
-systemctl enable --now openclaw-gateway 9router nginx
+systemctl enable --now openclaw-gateway 9router nginx aihub
 systemctl enable --now openclaw-serve-guard.timer hermes-gateway-guard.timer
 loginctl enable-linger root
 export XDG_RUNTIME_DIR=/run/user/0
 systemctl --user enable --now hermes-gateway.service
 
-# 6) مسیر HTTPS داشبورد (در /var/lib/tailscale ذخیره می‌شود)
+# 7) مسیر HTTPS داشبورد (در /var/lib/tailscale ذخیره می‌شود)
 DN=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
 tailscale cert "$DN"
 tailscale serve --bg --https=443 http://127.0.0.1:18789
 
-# 7) تأیید
+# 8) تأیید
 curl -s -o /dev/null -w 'dashboard=%{http_code}\n' "https://$DN/"
+curl -s -o /dev/null -w 'aihub=%{http_code}\n' http://127.0.0.1:9446/
 openclaw devices list         # گوشی‌های جفت‌شده باید همان‌ها باشند
-systemctl is-active openclaw-gateway 9router nginx tailscaled
+systemctl is-active openclaw-gateway 9router nginx tailscaled aihub
+# پروژه‌های مشترک و نام نشست‌ها باید سر جایشان باشند:
+curl -s http://127.0.0.1:9446/api/projects | head -c 200
 ```
 
 ### نکات حیاتی این مرحله
@@ -138,6 +154,10 @@ systemctl is-active openclaw-gateway 9router nginx tailscaled
   ```
 - اگر اپ موبایل `http101 403 forbidden` داد، دستگاه در صف Pending است:
   `openclaw devices list` سپس `openclaw devices approve <requestId>`.
+- **AI Hub:** `venv` عمداً در باندل نیست. اگر `hub.sqlite` را فراموش کنی سرویس
+  بالا می‌آید ولی همهٔ نام‌گذاری نشست‌ها، پروژه‌های مشترک و حافظهٔ تیم **خالی**
+  است — سرویسِ سالمِ بی‌داده. همیشه `sqlite/aihub-hub.sqlite` را هم بنشان.
+  هاب هیچ‌وقت در فایل خود ایجنت‌ها نمی‌نویسد، پس بازگرداندنش بی‌خطر است.
 
 ---
 

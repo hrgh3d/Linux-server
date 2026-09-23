@@ -284,6 +284,17 @@ input,textarea,select{font:inherit;color:inherit;background:0;border:0;outline:0
 .learned span{background:var(--panel2);border:1px solid var(--line);
   border-radius:11px;padding:2px 8px;unicode-bidi:plaintext}
 
+.mtabs{display:flex;gap:4px;margin:0 0 10px;background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:3px}
+.mtabs button{flex:1;padding:7px 10px;border-radius:6px;font-size:12.5px;
+  color:var(--dim);min-height:34px}
+.mtabs button.on{background:var(--raised);color:var(--txt);font-weight:600}
+.mrow .sub{font-size:10.5px;color:var(--faint);font-weight:400}
+.allck{display:flex;align-items:center;gap:7px;margin-right:auto;
+  font-size:12px;color:var(--dim);cursor:pointer;min-height:34px}
+.allck input{width:15px;height:15px;accent-color:var(--accent)}
+.mlist{max-height:52vh;overflow:auto}
+
 .cb{position:relative;margin:8px 0}
 .cb pre{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
   padding:11px 13px;overflow-x:auto;font:12px/1.6 ui-monospace,Menlo,monospace;
@@ -938,38 +949,94 @@ function tagDlg(a,id,s){
 async function modelDlg(k){
   const A=app(k), cur=A.model;
   mask(`<div class="dlg wide"><h3>◆ Model for ${esc(A.name)}</h3>
-    <p>Each combo routes to several real models. The one shown in grey is what
-       actually answered most recently.</p>
-    <div class="mlist" id="ml"><div class="empty">Loading live routing…</div></div>
-    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
-      <button class="sm gh" id="all">Apply to all agents</button></div></div>`);
-  let live={};
-  try{live=(await api('/api/models/live')).combos;}catch(e){}
-  $('#ml').innerHTML=(S.combos||[]).map(c=>{
-    const L=live[c.name]||{};
-    const h=S.health[c.name];
-    return `<div class="mrow ${c.name===cur?'sel':''}" data-m="${esc(c.name)}">
-      <span class="nm">${esc(c.name)}
-        ${L.current?`<div style="font-size:10.5px;color:var(--faint)">
-          ${L.exact===true?'→':'~'} ${esc(L.current)}${L.age_s!=null?' · '+agoS(L.age_s)+' ago':''}</div>`:
-          '<div style="font-size:10.5px;color:var(--faint)">no recent traffic</div>'}</span>
-      ${h?`<span class="ct" style="color:${h.ok?'var(--ok)':'var(--bad)'}">${h.ok?'ok':'fail'}</span>`:''}
-      <span class="ct">${c.count} models</span>
-      <button class="ct" data-info="${esc(c.name)}" title="Show members"
-        style="padding:3px 6px;border-radius:5px">ⓘ</button>
-      ${c.name===cur?'<span class="ck">✓</span>':''}</div>`;}).join('');
-  $$('#ml .mrow').forEach(r=>r.onclick=async e=>{
-    if(e.target.dataset.info){e.stopPropagation();membersDlg(e.target.dataset.info);return;}
+    <div class="mtabs">
+      <button class="on" data-mt="combos">9router combos</button>
+      <button data-mt="native">${esc(A.name)}'s own models</button>
+    </div>
+    <div class="mlist" id="ml"><div class="empty">Loading…</div></div>
+    <div class="dlgf">
+      <label class="allck"><input type="checkbox" id="applyAll">
+        <span>Set as default on <b>all</b> agents</span></label>
+      <button class="sm gh" onclick="close_()">Cancel</button></div></div>`);
+
+  let live={}, cat={combos:[],native_groups:[],native_total:0};
+  try{live=(await api('/api/models/live')).combos||{};}catch(e){}
+  try{cat=await api('/api/catalog/'+k);}catch(e){}
+
+  const pick=async(model)=>{
+    const all=$('#applyAll')&&$('#applyAll').checked;
     close_();
-    try{const res=await post('/api/model',{app:k,model:r.dataset.m});
-      toast(`${A.name} → ${r.dataset.m}`,'ok');refresh();}
-    catch(err){toast('Failed: '+err.message,'bad');}});
-  $('#all').onclick=()=>{close_();confirmDlg('Apply to every agent?',
-    'All agents that support model switching will use this combo.','Apply',async()=>{
-      const m=cur||(S.combos[0]||{}).name;
-      try{await post('/api/model',{app:'all',model:m});toast('Applied to all','ok');refresh();}
-      catch(e){toast('Failed','bad');}});};
+    try{
+      if(all){
+        const r=await post('/api/model/default',{model});
+        const bad=Object.entries(r.results).filter(([a,v])=>!v.ok&&!v.skipped);
+        toast(`${model} → ${r.count} agent(s)`+(bad.length?` · ${bad.length} failed`:''),
+              bad.length?'bad':'ok');
+        if(r.count<Object.keys(r.results).length) defaultReport(model,r);
+      }else{
+        await post('/api/model',{app:k,model});
+        toast(`${A.name} → ${model}`,'ok');
+      }
+      refresh();
+    }catch(err){toast('Failed: '+err.message,'bad');}
+  };
+
+  const drawCombos=()=>{
+    $('#ml').innerHTML=(cat.combos||[]).map(c=>{
+      const L=live[c.id]||{}, h=S.health[c.id];
+      return `<div class="mrow ${c.id===cur?'sel':''}" data-m="${esc(c.id)}">
+        <span class="nm">${esc(c.id)}
+          ${L.current?`<div class="sub">${L.exact===true?'→':'~'} ${esc(L.current)}${
+            L.age_s!=null?' · '+agoS(L.age_s)+' ago':''}</div>`:
+            '<div class="sub">no recent traffic</div>'}</span>
+        ${h?`<span class="ct" style="color:${h.ok?'var(--ok)':'var(--bad)'}">${
+          h.ok?'ok':'fail'}</span>`:''}
+        <span class="ct">${c.members} models</span>
+        <button class="ct" data-info="${esc(c.id)}" title="Show members"
+          style="padding:3px 6px;border-radius:5px">ⓘ</button>
+        ${c.id===cur?'<span class="ck">✓</span>':''}</div>`;}).join('')
+      ||'<div class="empty">No combos found.</div>';
+    bindRows();
+  };
+
+  const drawNative=()=>{
+    const gs=cat.native_groups||[];
+    $('#ml').innerHTML=gs.length?gs.map(g=>`
+      <div class="pg">${esc(g.provider)} · ${g.count}</div>
+      ${g.models.map(m=>`<div class="mrow ${m.id===cur?'sel':''}" data-m="${esc(m.id)}">
+        <span class="nm">${esc(m.id)}${m.alias?'<div class="sub">alias — '+
+          'Anthropic decides the exact version</div>':''}</span>
+        ${m.configured?'<span class="ct" style="color:var(--ok)">configured</span>':''}
+        ${m.id===cur?'<span class="ck">✓</span>':''}</div>`).join('')}`).join('')
+      :`<div class="empty">${esc(A.name)} exposes no model list of its own.<br>
+         Use a 9router combo instead.</div>`;
+    bindRows();
+  };
+
+  const bindRows=()=>{
+    $$('#ml .mrow').forEach(r=>r.onclick=e=>{
+      if(e.target.dataset.info){e.stopPropagation();membersDlg(e.target.dataset.info);return;}
+      pick(r.dataset.m);});
+  };
+
+  $$('.mtabs button').forEach(b=>b.onclick=()=>{
+    $$('.mtabs button').forEach(x=>x.classList.toggle('on',x===b));
+    b.dataset.mt==='combos'?drawCombos():drawNative();});
+  drawCombos();
 }
+
+// وقتی «همه» زده می‌شود ولی بعضی ایجنت‌ها نگرفتند، دقیق بگو چرا.
+function defaultReport(model,r){
+  mask(`<div class="dlg"><h3>◆ ${esc(model)} — result per agent</h3>
+    <div class="flist">${Object.entries(r.results).map(([a,v])=>`
+      <div class="mrow"><span class="nm">${ICON[a]||'•'} ${esc(a)}</span>
+        <span class="ct" style="color:${v.ok?'var(--ok)':(v.skipped?'var(--faint)':'var(--bad)')}">
+          ${v.ok?'applied':(v.skipped?'skipped':'failed')}</span>
+        <span class="sub" style="flex:1;text-align:right">${esc(v.msg||'')}</span>
+      </div>`).join('')}</div>
+    <div class="dlgf"><button class="sm pri" onclick="close_()">OK</button></div></div>`);
+}
+window.defaultReport=defaultReport;
 
 async function membersDlg(combo){
   mask(`<div class="dlg wide"><h3>◆ ${esc(combo)} — members</h3>

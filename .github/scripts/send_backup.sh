@@ -221,6 +221,9 @@ fi
 # --- v6.35: اسنپ‌شات دیتابیس‌های زنده قبل از tar ---
 snap_sqlite /root/.openclaw/state/openclaw.sqlite openclaw-state.sqlite
 snap_sqlite /root/.9router/db/data.sqlite 9router-data.sqlite
+# v6.50: دیتابیس خود هاب — نام نشست‌ها، پروژه‌ها، حافظهٔ مشترک، مهارت‌ها.
+# بدون این، بعد از بازیابی همهٔ نام‌گذاری‌ها و پروژه‌های مشترک صفر می‌شود.
+snap_sqlite /opt/aihub/data/hub.sqlite aihub-hub.sqlite
 
 # v6.35.1 — ترتیب بر اساس بحرانی بودن: اگر روزی بودجه پر شد، چیزهای
 # غیرقابل‌بازسازی باید از قبل داخل باندل باشند.
@@ -250,6 +253,12 @@ rm -f /tmp/binlist.z
 # ۵) کد و دادهٔ اپ‌ها (منهای /root/.hermes/bin که ۸۵MB باینری دانلودی است)
 try_tar app-code.tar.gz --exclude=root/.hermes/bin --exclude=./root/.hermes/bin \
   -- /opt/9router /root/9router /root/.hermes /var/www
+# v6.50: AI Hub — کد، رابط، و دادهٔ کاربر (پروژه‌ها/حافظه/سطل زباله).
+# venv عمداً نیست: ۷۱MB و با install.sh در چند ثانیه بازساخته می‌شود.
+try_tar aihub.tar.gz --exclude=opt/aihub/venv --exclude=./opt/aihub/venv \
+  --exclude=opt/aihub/data/hub.sqlite-wal --exclude=./opt/aihub/data/hub.sqlite-wal \
+  --exclude=opt/aihub/data/hub.sqlite-shm --exclude=./opt/aihub/data/hub.sqlite-shm \
+  -- /opt/aihub
 # ۶) باقی /root به‌عنوان تور ایمنی — بدون چیزهایی که جداگانه گرفته شدند یا
 #    بازساختنی‌اند (.codex 336M، .npm 311M، Documents/user_workspace/workspace.zip)
 try_tar home-root.tar.gz \
@@ -277,6 +286,12 @@ except Exception: pass" 2>/dev/null
   echo "  node(system): $(node -v 2>/dev/null)"
   echo "  node(openclaw): $(/opt/openclaw-node/bin/node -v 2>/dev/null)"
   echo "  hermes: $(/root/.hermes/bin/hermes --version 2>/dev/null | head -1)"
+  echo "  aihub: $(curl -s -m 5 http://127.0.0.1:9446/api/health 2>/dev/null | head -c 120)"
+  echo "--- enabled units (بازیابی باید همین‌ها را enable کند) ---"
+  systemctl list-unit-files --state=enabled --no-legend 2>/dev/null \
+    | awk '{print "  "$1}' | grep -iE "aihub|9router|openclaw|hermes|cloudcli|tailscale|nginx|headroom"
+  echo "  user-linger: $(loginctl show-user root -p Linger --value 2>/dev/null)"
+  echo "--- crontab ---"; crontab -l 2>/dev/null | grep -v "^#" | head -10
   echo "--- manifest ---"; cat "$MAN" 2>/dev/null
 } > "$B/info.txt" 2>/dev/null
 OUT=/tmp/$(hostname)-backup-$(date -u +%Y%m%d-%H%M).tar.gz
@@ -322,7 +337,8 @@ verify_bundle() {
     return 0
   fi
   for crit in tailscale-state.tar.gz openclaw.tar.gz sqlite/openclaw-state.sqlite \
-              app-code.tar.gz services.tar.gz bin-scripts.tar.gz home-root.tar.gz; do
+              app-code.tar.gz services.tar.gz bin-scripts.tar.gz home-root.tar.gz \
+              aihub.tar.gz sqlite/aihub-hub.sqlite sqlite/9router-data.sqlite; do
     printf '%s\n' "$list" | grep -q "$crit" || { echo "[verify] MISSING $crit"; missing=$((missing+1)); }
   done
   ok=$(printf '%s\n' "$list" | grep -c 'tar.gz\|sqlite')

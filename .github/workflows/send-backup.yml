@@ -1,10 +1,14 @@
 name: send-backup
 
-# بکاپ کامل و قابل‌بازگردانی → تلگرام (روزانه) + اسنپ‌شات state (هفتگی/دستی)
+# v6.50 — یک اسنپ‌شات **کامل** هر شب به تلگرام.
+#
+# قبلاً دو زمان‌بندی بود: روزانهٔ سبک (بدون اسنپ‌شات state) و هفتگیِ DR.
+# یعنی اگر سیستم روز چهارشنبه از دست می‌رفت، تازه‌ترین باندلِ کاملْ مال
+# شنبه بود. خواستهٔ کاربر صریح است: هر شب یک اسنپ‌شات کامل که با آن
+# بشود کل سیستم را روی حساب گیت‌هاب تازه سرپا کرد. پس DR همیشه روشن است.
 on:
   schedule:
-    - cron: '47 3 * * *'      # بکاپ روزانهٔ کامل (داده + بوت‌استرپ بازیابی)
-    - cron: '15 4 * * 6'      # شنبه‌ها: بکاپ DR + اسنپ‌شات state (بخش‌بخش)
+    - cron: '47 3 * * *'      # هر شب ۰۳:۴۷ UTC — اسنپ‌شات کامل DR
   workflow_dispatch:
     inputs:
       full:
@@ -32,7 +36,8 @@ env:
   TARGET_IP: '100.70.83.2'
   TELEGRAM_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || secrets.TELEGRAM_BOT_TOKEN }}
   NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
-  DR_MODE: ${{ (github.event.inputs.full == 'true') || (github.event.schedule == '15 4 * * 6') || (github.event_name == 'repository_dispatch') }}
+  # همیشه DR: هر اجرا باید یک باندل کاملِ خودکفا بدهد.
+  DR_MODE: 'true'
   FORCE: ${{ github.event.inputs.force || 'false' }}
   TRIGGER: ${{ github.event.schedule && 'cron' || github.event_name }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
