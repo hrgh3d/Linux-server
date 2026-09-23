@@ -310,8 +310,9 @@ provision_hermes() {
 # ---------------------------------------------------------------------------
 # v6.39: کلاینت CLI هوش مصنوعی (Claude Code)
 # v6.41: Grok حذف شد — کاربر Grok Bot می‌خواست که به 9router وصل نمی‌شود.
+# v6.42: Pi (@earendil-works/pi-coding-agent) جایگزین شد.
 # همان الگوی 9router/OpenClaw: «تنظیمات می‌ماند، کد بازنصب می‌شود».
-#   * تنظیمات کاربر : /root/.claude و /etc/profile.d/ai-clients.sh
+#   * تنظیمات کاربر : /root/.claude، /root/.pi و /etc/profile.d/ai-clients.sh
 #                     → زیر /root و /etc هستند، پس در آرشیو حفظ می‌شوند.
 #   * کد npm        : /usr/local/lib/node_modules/... → آرشیو نمی‌شود
 #                     (حجیم و پر از node_modules) و اینجا بازنصب می‌شود.
@@ -319,14 +320,22 @@ provision_hermes() {
 # ---------------------------------------------------------------------------
 provision_ai_clients() {
   local pkg bin name
-  for spec in "@anthropic-ai/claude-code:claude:Claude Code"; do
+  for spec in "@anthropic-ai/claude-code:claude:Claude Code" \
+              "@earendil-works/pi-coding-agent:pi:Pi"; do
     pkg="${spec%%:*}"; rest="${spec#*:}"; bin="${rest%%:*}"; name="${rest#*:}"
     if command -v "$bin" >/dev/null 2>&1; then
       note "${name}: present — kept (Mode 2)"
       continue
     fi
+    # درس v6.40.1: /usr/local/bin در آرشیو هست ولی node_modules نه، پس بعد از
+    # چرخش یک symlink شکسته باقی می‌ماند و npm با EEXIST رد می‌شود. اول پاکش کن.
+    if [ -L "/usr/local/bin/${bin}" ] && [ ! -e "/usr/local/bin/${bin}" ]; then
+      $SUDO rm -f "/usr/local/bin/${bin}"
+      note "${name}: dangling symlink cleared"
+    fi
     log "${name}: binary missing — reinstalling..."
-    if ensure_npm && timeout 600 $SUDO env PATH="$PATH" npm install -g "$pkg" \
+    # --ignore-scripts طبق توصیهٔ خود Pi؛ برای Claude Code هم بی‌ضرر است.
+    if ensure_npm && timeout 600 $SUDO env PATH="$PATH" npm install -g --ignore-scripts "$pkg" \
          --no-fund --no-audit >"${LOG_DIR}/${bin}.log" 2>&1; then
       note "${name}: REINSTALLED"
     else
@@ -352,6 +361,46 @@ PROF
       $SUDO chmod 644 /etc/profile.d/ai-clients.sh
       note "ai-clients: /etc/profile.d/ai-clients.sh rebuilt"
     fi
+  fi
+
+  # v6.42 — Pi: اگر models.json گم شده بود، از روی کلید 9router بازش بساز.
+  # نشست‌ها (~/.pi/agent/sessions) در آرشیو هستند و دست نمی‌خورند.
+  if [ ! -s /root/.pi/agent/models.json ] && [ -f /root/.openclaw/openclaw.json ]; then
+    mkdir -p /root/.pi/agent
+    if python3 - <<'PYEOF' >/dev/null 2>&1; then
+import json, os
+key = json.load(open('/root/.openclaw/openclaw.json'))['models']['providers']['ninerouter']['apiKey']
+combos = ["Agentic", "Brain", "ox-alpha", "vps"]   # ultimate عمداً نیست: provider خرابش Bzrlnk است
+cfg = {"providers": {"ninerouter": {
+    "baseUrl": "http://127.0.0.1:20128/v1",
+    "api": "openai-completions",
+    "apiKey": key,
+    "models": [{"id": c, "name": "9router " + c, "input": ["text"],
+                "contextWindow": 128000, "maxTokens": 8192} for c in combos]}}}
+p = "/root/.pi/agent/models.json"
+json.dump(cfg, open(p, "w"), indent=2)
+os.chmod(p, 0o600)
+PYEOF
+      note "Pi: models.json rebuilt (9router)"
+    else
+      note "Pi: models.json rebuild FAILED (non-fatal)"
+    fi
+  fi
+
+  # پیش‌فرض‌های Pi — فقط اگر نبودند؛ انتخاب‌های بعدی کاربر بازنویسی نمی‌شود.
+  if [ ! -s /root/.pi/agent/settings.json ]; then
+    mkdir -p /root/.pi/agent
+    cat >/root/.pi/agent/settings.json <<'PISET'
+{
+  "defaultProvider": "ninerouter",
+  "defaultModel": "Agentic",
+  "defaultThinkingLevel": "off",
+  "defaultProjectTrust": "always",
+  "enabledModels": ["ninerouter/*"],
+  "quietStartup": true
+}
+PISET
+    note "Pi: settings.json rebuilt"
   fi
 }
 
