@@ -343,6 +343,13 @@ provision_ai_clients() {
   if command -v grok >/dev/null 2>&1 && [ -x /root/.grok/bin/grok ]; then
     note "Grok Build: present — kept (Mode 2)"
   else
+    # پس از چرخش رانر، bin/ و downloads/ بازنگردانده می‌شوند، پس
+    # /root/.grok/bin/grok و /usr/local/bin/grok سیم‌لینک‌های شکسته‌اند.
+    # پاکشان کن تا نصب‌کننده تمیز کار کند.
+    for _l in /usr/local/bin/grok /usr/local/bin/agent \
+              /root/.grok/bin/grok /root/.grok/bin/agent; do
+      [ -L "$_l" ] && [ ! -e "$_l" ] && $SUDO rm -f "$_l" && log "Grok Build: removed dangling $_l"
+    done
     log "Grok Build: binary missing — reinstalling from x.ai..."
     if curl -fsSL --max-time 60 https://x.ai/cli/install.sh -o /tmp/grok-install.sh \
        && timeout 900 bash /tmp/grok-install.sh >"${LOG_DIR}/grok-build.log" 2>&1; then
