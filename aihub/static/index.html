@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0f17">
+<title>AI Hub — Command Center</title>
+<style>
+/* ---------- design tokens ---------- */
+:root{
+  --bg:#0b0f17; --surface:#131a26; --surface2:#1a2334; --line:#243044;
+  --txt:#e7edf7; --dim:#94a3b8; --faint:#64748b;
+  --accent:#3b82f6; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --purple:#a855f7;
+  --r:14px; --safe: env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Vazirmatn",system-ui,sans-serif}
+body{padding-bottom:calc(72px + var(--safe))}
+
+/* Persian text anywhere: auto direction so RTL never breaks the layout */
+.rtl-auto{unicode-bidi:plaintext;text-align:start}
+textarea,input{unicode-bidi:plaintext}
+
+/* ---------- header ---------- */
+header{position:sticky;top:0;z-index:50;background:rgba(11,15,23,.92);
+  backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top,0px) + 12px) 16px 12px}
+.hrow{display:flex;align-items:center;gap:10px}
+h1{font-size:17px;margin:0;font-weight:650;letter-spacing:-.2px}
+.pill{margin-left:auto;font-size:11px;padding:4px 10px;border-radius:99px;
+  background:var(--surface2);color:var(--dim);border:1px solid var(--line)}
+.pill.live{color:var(--ok);border-color:#14532d}
+.pill.err{color:var(--bad);border-color:#7f1d1d}
+
+/* ---------- layout ---------- */
+main{padding:14px;max-width:960px;margin:0 auto}
+.view{display:none}.view.on{display:block}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:var(--faint);
+  margin:22px 0 10px;font-weight:600}
+h2:first-child{margin-top:4px}
+
+/* ---------- cards ---------- */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  padding:14px;margin-bottom:10px}
+.app{display:flex;align-items:flex-start;gap:12px;cursor:pointer;
+  transition:border-color .15s,transform .1s}
+.app:active{transform:scale(.995)}
+.app .ico{font-size:24px;line-height:1.1;flex:none;width:30px;text-align:center}
+.app .body{flex:1;min-width:0}
+.app .top{display:flex;align-items:center;gap:8px}
+.app .nm{font-weight:600;font-size:15px}
+.app .ver{font-size:11px;color:var(--faint)}
+.app .sub{font-size:12.5px;color:var(--dim);margin-top:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dot.up{background:var(--ok);box-shadow:0 0 8px #22c55e88}
+.dot.down{background:var(--bad)}
+.dot.warn{background:var(--warn)}
+.chip{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--surface2);
+  border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.chip.model{color:var(--purple);border-color:#4c1d95}
+.chip.n{color:var(--accent);border-color:#1e3a8a}
+
+/* ---------- attention banner ---------- */
+.att{background:linear-gradient(135deg,#78350f,#451a03);border-color:#92400e}
+.att .t{font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px}
+.att .i{font-size:12.5px;color:#fde68a;margin-top:6px}
+
+/* ---------- stats ---------- */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:9px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:12px;text-align:center}
+.stat .v{font-size:19px;font-weight:680;letter-spacing:-.4px}
+.stat .l{font-size:10.5px;color:var(--faint);margin-top:3px;text-transform:uppercase;
+  letter-spacing:.4px}
+.spark{display:flex;align-items:flex-end;gap:3px;height:42px;margin-top:10px}
+.spark i{flex:1;background:linear-gradient(180deg,var(--accent),#1e40af);
+  border-radius:3px 3px 0 0;min-height:3px;opacity:.85}
+
+/* ---------- sessions ---------- */
+.s{display:flex;gap:10px;padding:11px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.s:last-child{border-bottom:0}
+.s .si{font-size:17px;flex:none;width:24px;text-align:center}
+.s .sb{flex:1;min-width:0}
+.s .st{font-weight:560;font-size:13.5px;display:flex;align-items:center;gap:7px}
+.s .sp{font-size:12px;color:var(--dim);margin-top:3px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.s .sm{font-size:10.5px;color:var(--faint);margin-top:4px}
+.badge{font-size:9.5px;padding:1.5px 6px;border-radius:5px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.3px}
+.badge.working{background:#1e3a8a;color:#93c5fd}
+.badge.idle{background:var(--surface2);color:var(--faint)}
+
+/* ---------- controls ---------- */
+label{display:block;font-size:11.5px;color:var(--faint);margin:0 0 6px;
+  text-transform:uppercase;letter-spacing:.5px}
+select,textarea,input[type=text]{width:100%;background:var(--surface2);color:var(--txt);
+  border:1px solid var(--line);border-radius:10px;padding:11px 12px;font:inherit;
+  font-size:15px;outline:none}
+select:focus,textarea:focus,input:focus{border-color:var(--accent)}
+textarea{min-height:104px;resize:vertical;line-height:1.6}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  background:var(--accent);color:#fff;border:0;border-radius:10px;padding:12px 16px;
+  font:inherit;font-weight:600;font-size:14.5px;cursor:pointer;width:100%}
+.btn:active{opacity:.85}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+.btn.ghost{background:var(--surface2);color:var(--txt);border:1px solid var(--line)}
+.btn.danger{background:#7f1d1d}
+.btn.sm{width:auto;padding:8px 12px;font-size:13px}
+.row{display:flex;gap:8px;margin-top:10px}
+.row>*{flex:1}
+pre{background:#080c13;border:1px solid var(--line);border-radius:10px;padding:12px;
+  overflow:auto;font-size:12.5px;max-height:340px;white-space:pre-wrap;
+  word-break:break-word;margin:10px 0 0;unicode-bidi:plaintext}
+
+/* ---------- bottom nav ---------- */
+nav{position:fixed;bottom:0;left:0;right:0;z-index:60;display:flex;
+  background:rgba(19,26,38,.97);backdrop-filter:blur(12px);
+  border-top:1px solid var(--line);padding-bottom:var(--safe)}
+nav button{flex:1;background:0;border:0;color:var(--faint);padding:9px 2px 8px;
+  font:inherit;font-size:10px;cursor:pointer;display:flex;flex-direction:column;
+  align-items:center;gap:3px;transition:color .15s}
+nav button.on{color:var(--accent)}
+nav button .g{font-size:19px;line-height:1}
+
+/* ---------- modal ---------- */
+.mask{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.7);
+  display:none;align-items:flex-end;justify-content:center}
+.mask.on{display:flex}
+.sheet{background:var(--surface);border:1px solid var(--line);
+  border-radius:18px 18px 0 0;width:100%;max-width:640px;max-height:88vh;
+  overflow:auto;padding:18px 16px calc(20px + var(--safe))}
+.sheet h3{margin:0 0 4px;font-size:16px}
+.sheet .sub{color:var(--dim);font-size:12.5px;margin-bottom:14px}
+.grab{width:38px;height:4px;background:var(--line);border-radius:99px;
+  margin:0 auto 14px}
+.msg{padding:10px 12px;border-radius:10px;margin-bottom:8px;font-size:13.5px;
+  line-height:1.65}
+.msg.user{background:#1e3a5f;margin-left:22px}
+.msg.assistant{background:var(--surface2);margin-right:22px}
+.msg .r{font-size:9.5px;color:var(--faint);text-transform:uppercase;
+  letter-spacing:.5px;margin-bottom:4px}
+.empty{text-align:center;color:var(--faint);padding:30px 14px;font-size:13.5px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + var(--safe));
+  background:var(--surface2);border:1px solid var(--line);color:var(--txt);
+  padding:11px 18px;border-radius:99px;font-size:13.5px;z-index:200;
+  opacity:0;transition:opacity .25s;pointer-events:none;max-width:88vw}
+.toast.on{opacity:1}
+.toast.ok{border-color:#14532d}.toast.bad{border-color:#7f1d1d}
+.spin{display:inline-block;width:13px;height:13px;border:2px solid #fff6;
+  border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+a.lnk{color:var(--accent);text-decoration:none;font-size:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <h1>🎛 AI Hub</h1>
+    <span class="pill" id="conn">connecting…</span>
+  </div>
+</header>
+
+<main>
+  <!-- ============ DASHBOARD ============ -->
+  <section class="view on" id="v-dash">
+    <div id="attention"></div>
+    <h2>Applications</h2>
+    <div id="apps"></div>
+    <h2>Today</h2>
+    <div class="grid" id="stats"></div>
+    <div class="card" style="margin-top:10px">
+      <label>Last 7 days — tokens</label>
+      <div class="spark" id="spark"></div>
+    </div>
+  </section>
+
+  <!-- ============ SESSIONS ============ -->
+  <section class="view" id="v-sess">
+    <h2>All sessions</h2>
+    <div class="card"><input type="text" id="sfilter" placeholder="Filter sessions…"></div>
+    <div class="card" id="sessions"><div class="empty">Loading…</div></div>
+  </section>
+
+  <!-- ============ CONTROL ============ -->
+  <section class="view" id="v-ctl">
+    <h2>Send a prompt</h2>
+    <div class="card">
+      <label>Target application</label>
+      <select id="sendApp"></select>
+      <div style="height:10px"></div>
+      <label>Prompt — Persian and English both work</label>
+      <textarea id="sendText" class="rtl-auto" placeholder="پرسش خود را بنویسید… / Type your prompt…"></textarea>
+      <div class="row">
+        <button class="btn" id="btnSend">▶ Send</button>
+      </div>
+      <div id="sendOut"></div>
+    </div>
+
+    <h2>Model selection</h2>
+    <div class="card">
+      <label>Apply combo to</label>
+      <select id="mdApp"></select>
+      <div style="height:10px"></div>
+      <label>9Router combo</label>
+      <select id="mdModel"></select>
+      <div class="row">
+        <button class="btn" id="btnModel">Apply</button>
+        <button class="btn ghost" id="btnModelAll">Apply to all</button>
+      </div>
+      <div id="mdOut"></div>
+    </div>
+
+    <h2>Services</h2>
+    <div class="card" id="services"></div>
+  </section>
+
+  <!-- ============ INSIGHT ============ -->
+  <section class="view" id="v-lab">
+    <h2>Search across every session</h2>
+    <div class="card">
+      <input type="text" id="q" class="rtl-auto" placeholder="Search Persian or English…">
+      <div class="row"><button class="btn" id="btnSearch">🔍 Search</button></div>
+      <div id="searchOut"></div>
+    </div>
+
+    <h2>Compare models side by side</h2>
+    <div class="card">
+      <label>Question</label>
+      <textarea id="cmpText" class="rtl-auto" placeholder="یک سؤال بنویسید تا چند مدل هم‌زمان جواب دهند…"></textarea>
+      <div style="height:10px"></div>
+      <label>Combos (pick up to 4)</label>
+      <div id="cmpModels"></div>
+      <div class="row"><button class="btn" id="btnCmp">⚖ Compare</button></div>
+      <div id="cmpOut"></div>
+    </div>
+
+    <h2>Usage detail</h2>
+    <div class="card" id="usage"><div class="empty">Loading…</div></div>
+  </section>
+</main>
+
+<nav>
+  <button class="on" data-v="dash"><span class="g">◉</span>Dashboard</button>
+  <button data-v="sess"><span class="g">☰</span>Sessions</button>
+  <button data-v="ctl"><span class="g">⌘</span>Control</button>
+  <button data-v="lab"><span class="g">🔬</span>Insight</button>
+</nav>
+
+<div class="mask" id="mask"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+let STATE = {apps:[], usage:{}, combos:[], sessions:[]};
+
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num = n => (n??0).toLocaleString('en-US');
+
+function toast(msg, kind=''){
+  const t=$('#toast'); t.textContent=msg; t.className='toast on '+kind;
+  clearTimeout(t._h); t._h=setTimeout(()=>t.className='toast',2600);
+}
+function ago(iso){
+  if(!iso) return '';
+  const d=(Date.now()-new Date(iso).getTime())/1000;
+  if(d<60) return 'just now';
+  if(d<3600) return Math.floor(d/60)+'m ago';
+  if(d<86400) return Math.floor(d/3600)+'h ago';
+  return Math.floor(d/86400)+'d ago';
+}
+async function api(path, opt){
+  const r = await fetch(path, opt);
+  if(!r.ok) throw new Error(await r.text().catch(()=>r.status));
+  return r.json();
+}
+
+/* ---------- navigation ---------- */
+$$('nav button').forEach(b=>b.onclick=()=>{
+  $$('nav button').forEach(x=>x.classList.toggle('on',x===b));
+  $$('.view').forEach(v=>v.classList.remove('on'));
+  $('#v-'+b.dataset.v).classList.add('on');
+  if(b.dataset.v==='sess') loadSessions();
+  if(b.dataset.v==='lab')  loadUsage();
+});
+
+/* ---------- modal ---------- */
+function sheet(html){ $('#sheet').innerHTML='<div class="grab"></div>'+html;
+  $('#mask').classList.add('on'); }
+function closeSheet(){ $('#mask').classList.remove('on'); }
+$('#mask').onclick = e => { if(e.target.id==='mask') closeSheet(); };
+
+function confirmDanger(title, body, onYes){
+  sheet(`<h3>⚠ ${esc(title)}</h3><div class="sub">${esc(body)}</div>
+    <div class="row">
+      <button class="btn ghost" onclick="closeSheet()">Cancel</button>
+      <button class="btn danger" id="yes">Confirm</button>
+    </div>`);
+  $('#yes').onclick=()=>{ closeSheet(); onYes(); };
+}
+window.closeSheet = closeSheet;
+
+/* ---------- dashboard ---------- */
+function renderApps(){
+  $('#apps').innerHTML = STATE.apps.map(a=>{
+    const cls = a.error ? 'warn' : (a.running?'up':'down');
+    const chips = [
+      a.model ? `<span class="chip model">${esc(a.model)}</span>` : '',
+      a.session_count ? `<span class="chip n">${a.session_count} sess</span>` : ''
+    ].join('');
+    return `<div class="card app" data-app="${a.key}">
+      <div class="ico">${a.icon||'●'}</div>
+      <div class="body">
+        <div class="top"><span class="dot ${cls}"></span>
+          <span class="nm">${esc(a.name)}</span>
+          ${a.version?`<span class="ver">${esc(a.version)}</span>`:''}
+        </div>
+        <div class="sub">${esc(a.error||a.detail||'')}</div>
+        <div style="margin-top:7px;display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
+      </div>
+    </div>`;
+  }).join('');
+  $$('#apps .app').forEach(c=>c.onclick=()=>appSheet(c.dataset.app));
+}
+
+function appSheet(key){
+  const a = STATE.apps.find(x=>x.key===key); if(!a) return;
+  const caps = (a.capabilities||[]);
+  sheet(`<h3>${a.icon} ${esc(a.name)}</h3>
+    <div class="sub">${esc(a.detail||'')} ${a.version?'· '+esc(a.version):''}</div>
+    ${a.url?`<p><a class="lnk" href="${a.url}" target="_blank">Open dedicated panel ↗</a></p>`:''}
+    <div class="grid" style="margin:12px 0">
+      <div class="stat"><div class="v">${a.running?'UP':'DOWN'}</div><div class="l">status</div></div>
+      <div class="stat"><div class="v">${a.session_count||0}</div><div class="l">sessions</div></div>
+      <div class="stat"><div class="v" style="font-size:13px">${esc(a.model||'—')}</div><div class="l">model</div></div>
+    </div>
+    ${caps.includes('restart')||['hermes','cloudcli','pi','openclaw'].includes(key)?
+      `<button class="btn danger" id="rst">↻ Restart service</button>`:''}`);
+  const unitMap={hermes:'hermes-dashboard',claude:'cloudcli',pi:'pi-web',
+                 openclaw:'openclaw-gateway',router:'9router'};
+  const rst=$('#rst');
+  if(rst) rst.onclick=()=>{
+    closeSheet();
+    confirmDanger('Restart '+a.name,
+      'This will restart '+unitMap[key]+'.service. Running work may be interrupted.',
+      async()=>{
+        toast('Restarting…');
+        try{ const r=await api('/api/service',{method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({unit:unitMap[key],action:'restart'})});
+          toast(r.ok?'Restarted ✓':'Failed', r.ok?'ok':'bad'); refresh();
+        }catch(e){ toast('Failed: '+e.message,'bad'); }
+      });
+  };
+}
+
+function renderStats(){
+  const u=STATE.usage||{};
+  $('#stats').innerHTML=`
+    <div class="stat"><div class="v">${num(u.requests)}</div><div class="l">requests</div></div>
+    <div class="stat"><div class="v">${num((u.prompt||0)+(u.completion||0))}</div><div class="l">tokens</div></div>
+    <div class="stat"><div class="v">$${(u.cost||0).toFixed(3)}</div><div class="l">cost</div></div>
+    <div class="stat"><div class="v">${(STATE.combos||[]).length}</div><div class="l">combos</div></div>`;
+  const s=STATE.series||[]; const max=Math.max(1,...s.map(x=>x.tokens||0));
+  $('#spark').innerHTML=s.map(d=>
+    `<i style="height:${Math.max(4,(d.tokens/max)*100)}%" title="${d.date}: ${num(d.tokens)}"></i>`
+  ).join('')||'<span class="empty">no data</span>';
+}
+
+function renderAttention(items){
+  if(!items||!items.length){ $('#attention').innerHTML=''; return; }
+  $('#attention').innerHTML=`<div class="card att">
+    <div class="t">⏳ ${items.length} session${items.length>1?'s':''} active right now</div>
+    ${items.slice(0,4).map(i=>
+      `<div class="i rtl-auto">${i.icon} <b>${esc(i.app)}</b> — ${esc(i.preview||i.title||'working')} <span style="opacity:.7">${ago(i.last_active)}</span></div>`
+    ).join('')}</div>`;
+}
+
+/* ---------- sessions ---------- */
+async function loadSessions(){
+  try{
+    STATE.sessions = await api('/api/sessions');
+    renderSessions();
+  }catch(e){ $('#sessions').innerHTML=`<div class="empty">Failed: ${esc(e.message)}</div>`; }
+}
+const ICON={hermes:'🤖',claude:'💻',pi:'🥧',openclaw:'🐾',router:'🔀'};
+function renderSessions(){
+  const f=($('#sfilter').value||'').toLowerCase();
+  const list=STATE.sessions.filter(s=>!f ||
+    (s.title+s.preview+s.source).toLowerCase().includes(f));
+  if(!list.length){ $('#sessions').innerHTML='<div class="empty">No sessions</div>'; return; }
+  $('#sessions').innerHTML=list.map(s=>`
+    <div class="s" data-a="${s.source}" data-i="${esc(s.id)}">
+      <div class="si">${ICON[s.source]||'●'}</div>
+      <div class="sb">
+        <div class="st rtl-auto">${esc(s.title||s.id)}
+          <span class="badge ${s.state==='working'?'working':'idle'}">${s.state}</span></div>
+        ${s.preview?`<div class="sp rtl-auto">${esc(s.preview)}</div>`:''}
+        <div class="sm">${s.model?esc(s.model)+' · ':''}${s.msg_count?s.msg_count+' msgs · ':''}${ago(s.last_active)}</div>
+      </div>
+    </div>`).join('');
+  $$('#sessions .s').forEach(el=>el.onclick=()=>openSession(el.dataset.a, el.dataset.i));
+}
+$('#sfilter').oninput = renderSessions;
+
+async function openSession(app, id){
+  sheet('<h3>Loading…</h3>');
+  try{
+    const d = await api(`/api/session/${app}/${encodeURIComponent(id)}`);
+    const msgs = d.messages||[];
+    sheet(`<h3>${ICON[app]||''} Session</h3>
+      <div class="sub">${esc(id)}</div>
+      ${msgs.length? msgs.map(m=>`<div class="msg ${m.role==='user'?'user':'assistant'}">
+        <div class="r">${esc(m.role)}</div>
+        <div class="rtl-auto">${esc(m.text)}</div></div>`).join('')
+        : '<div class="empty">No readable messages for this session.</div>'}`);
+  }catch(e){ sheet(`<h3>Error</h3><div class="sub">${esc(e.message)}</div>`); }
+}
+
+/* ---------- control ---------- */
+function fillSelects(){
+  const sendable = STATE.apps.filter(a=>(a.capabilities||[]).includes('send'));
+  $('#sendApp').innerHTML = sendable.map(a=>
+    `<option value="${a.key}">${a.icon} ${esc(a.name)}</option>`).join('')
+    || '<option value="">no app accepts prompts</option>';
+  const mdable = STATE.apps.filter(a=>(a.capabilities||[]).includes('set_model'));
+  $('#mdApp').innerHTML = mdable.map(a=>
+    `<option value="${a.key}">${a.icon} ${esc(a.name)}</option>`).join('');
+  const combos=(STATE.combos||[]).map(c=>c.name);
+  $('#mdModel').innerHTML = combos.map(c=>`<option>${esc(c)}</option>`).join('');
+  $('#cmpModels').innerHTML = combos.map((c,i)=>
+    `<label style="display:flex;align-items:center;gap:8px;text-transform:none;
+       font-size:14px;color:var(--txt);margin:6px 0">
+     <input type="checkbox" value="${esc(c)}" ${i<2?'checked':''}
+       style="width:18px;height:18px"> ${esc(c)}</label>`).join('');
+  const units=[['hermes-dashboard','Hermes'],['cloudcli','CloudCLI'],
+    ['pi-web','Pi Web'],['openclaw-gateway','OpenClaw'],['9router','9Router'],
+    ['headroom','Headroom'],['nginx','nginx']];
+  $('#services').innerHTML = units.map(([u,n])=>
+    `<div style="display:flex;align-items:center;gap:10px;padding:9px 0;
+      border-bottom:1px solid var(--line)">
+      <span style="flex:1;font-size:14px">${n}</span>
+      <button class="btn ghost sm" data-u="${u}">↻ Restart</button></div>`).join('');
+  $$('#services button').forEach(b=>b.onclick=()=>{
+    confirmDanger('Restart '+b.dataset.u,
+      'The service will stop and start again. Active work may be lost.',
+      async()=>{
+        toast('Restarting…');
+        try{ const r=await api('/api/service',{method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({unit:b.dataset.u,action:'restart'})});
+          toast(r.ok?'Restarted ✓':'Failed','ok'); refresh();
+        }catch(e){ toast('Failed','bad'); }
+      });
+  });
+}
+
+$('#btnSend').onclick = async()=>{
+  const app=$('#sendApp').value, text=$('#sendText').value.trim();
+  if(!app||!text){ toast('Write a prompt first','bad'); return; }
+  const b=$('#btnSend'); b.disabled=true; b.innerHTML='<span class="spin"></span> Working…';
+  $('#sendOut').innerHTML='';
+  try{
+    const r=await api('/api/send',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({app,text})});
+    $('#sendOut').innerHTML=`<pre class="rtl-auto">${esc(r.output||'(empty)')}</pre>`;
+    toast(r.ok?'Done ✓':'Returned an error', r.ok?'ok':'bad');
+  }catch(e){ $('#sendOut').innerHTML=`<pre>${esc(e.message)}</pre>`; toast('Failed','bad'); }
+  b.disabled=false; b.textContent='▶ Send';
+};
+
+async function applyModel(all){
+  const model=$('#mdModel').value;
+  const app = all ? 'all' : $('#mdApp').value;
+  try{
+    const r=await api('/api/model',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({app,model})});
+    const lines=Object.entries(r.results).map(([k,v])=>
+      `${v.ok?'✓':'✗'} ${k}: ${v.msg}`).join('\n');
+    $('#mdOut').innerHTML=`<pre>${esc(lines)}</pre>`;
+    toast('Model applied ✓','ok'); refresh();
+  }catch(e){ toast('Failed: '+e.message,'bad'); }
+}
+$('#btnModel').onclick=()=>applyModel(false);
+$('#btnModelAll').onclick=()=>confirmDanger('Apply to every app',
+  'This changes the default model for all applications at once.',()=>applyModel(true));
+
+/* ---------- insight ---------- */
+$('#btnSearch').onclick = async()=>{
+  const q=$('#q').value.trim(); if(q.length<2){ toast('Type at least 2 characters','bad'); return; }
+  $('#searchOut').innerHTML='<div class="empty">Searching…</div>';
+  try{
+    const r=await api('/api/search?q='+encodeURIComponent(q));
+    $('#searchOut').innerHTML = r.length ? r.map(h=>
+      `<div class="s"><div class="si">${ICON[h.app]||'●'}</div><div class="sb">
+        <div class="st">${esc(h.app)} · ${esc(h.role)}</div>
+        <div class="sp rtl-auto">${esc(h.snippet)}</div></div></div>`).join('')
+      : '<div class="empty">Nothing found</div>';
+  }catch(e){ $('#searchOut').innerHTML=`<div class="empty">${esc(e.message)}</div>`; }
+};
+
+$('#btnCmp').onclick = async()=>{
+  const text=$('#cmpText').value.trim();
+  const models=$$('#cmpModels input:checked').map(i=>i.value).slice(0,4);
+  if(!text||!models.length){ toast('Need a question and a combo','bad'); return; }
+  const b=$('#btnCmp'); b.disabled=true; b.innerHTML='<span class="spin"></span> Running…';
+  $('#cmpOut').innerHTML='<div class="empty">Asking '+models.length+' models in parallel…</div>';
+  try{
+    const r=await api('/api/compare',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text,models})});
+    $('#cmpOut').innerHTML=r.results.map(x=>
+      `<div style="margin-top:12px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <b>${esc(x.model)}</b>
+          <span class="chip">${x.seconds}s</span>
+          <span class="chip" style="color:${x.ok?'var(--ok)':'var(--bad)'}">${x.ok?'ok':'error'}</span>
+        </div>
+        <pre class="rtl-auto">${esc(x.output||'(empty)')}</pre></div>`).join('');
+  }catch(e){ $('#cmpOut').innerHTML=`<pre>${esc(e.message)}</pre>`; }
+  b.disabled=false; b.textContent='⚖ Compare';
+};
+
+async function loadUsage(){
+  try{
+    const u=await api('/api/usage');
+    $('#usage').innerHTML = (u.recent||[]).length ? (u.recent||[]).slice(0,20).map(r=>
+      `<div style="display:flex;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);
+        font-size:12.5px">
+        <span style="flex:1;color:var(--dim);overflow:hidden;text-overflow:ellipsis;
+          white-space:nowrap">${esc(r.model||'?')}</span>
+        <span class="chip">${num((r.promptTokens||0)+(r.completionTokens||0))}t</span>
+        <span class="chip" style="color:${r.status==='ok'?'var(--ok)':'var(--bad)'}">${esc(r.status||'')}</span>
+      </div>`).join('') : '<div class="empty">No requests recorded</div>';
+  }catch(e){ $('#usage').innerHTML='<div class="empty">Failed</div>'; }
+}
+
+/* ---------- refresh loop ---------- */
+async function refresh(){
+  try{
+    const d = await api('/api/overview');
+    STATE.apps=d.apps; STATE.usage=d.usage; STATE.combos=d.combos; STATE.series=d.series;
+    renderApps(); renderStats(); fillSelects();
+    $('#conn').textContent='live'; $('#conn').className='pill live';
+    api('/api/attention').then(renderAttention).catch(()=>{});
+  }catch(e){
+    $('#conn').textContent='offline'; $('#conn').className='pill err';
+  }
+}
+
+/* SSE keeps the dashboard live without hammering the server from mobile */
+function connect(){
+  try{
+    const es=new EventSource('/api/stream');
+    es.onmessage=ev=>{
+      try{
+        const d=JSON.parse(ev.data); if(d.error) return;
+        STATE.apps=d.apps; STATE.usage=d.usage; STATE.combos=d.combos; STATE.series=d.series;
+        renderApps(); renderStats();
+        if(!$('#sendApp').options.length) fillSelects();
+        $('#conn').textContent='live'; $('#conn').className='pill live';
+      }catch(_){}
+    };
+    es.onerror=()=>{ $('#conn').textContent='reconnecting'; $('#conn').className='pill'; };
+  }catch(_){ setInterval(refresh, 8000); }
+}
+
+refresh().then(()=>{ connect(); api('/api/attention').then(renderAttention).catch(()=>{}); });
+</script>
+</body>
+</html>
