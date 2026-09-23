@@ -247,6 +247,12 @@ UNIT
   mkdir -p /root/.cloudcli 2>/dev/null || true
 }
 ensure_cloudcli
+# v6.44: وصله‌های سمت مرورگر (فونت گوگل + service worker) هر بوت دوباره اعمال
+# می‌شوند، چون dist زیر node_modules است و با هر بازنصب npm تازه می‌شود.
+if [ -f "$SCRIPT_DIR/cloudcli_patch.sh" ] && command -v cloudcli >/dev/null 2>&1; then
+  sudo install -m 0755 "$SCRIPT_DIR/cloudcli_patch.sh" /usr/local/bin/cloudcli_patch.sh
+  sudo /usr/local/bin/cloudcli_patch.sh || true
+fi
 if [ -f /etc/systemd/system/cloudcli.service ] && [ -s /etc/cloudcli.env ]; then
   start_system cloudcli.service
   # CloudCLI کند بالا می‌آید (اسکن نشست‌ها + ساخت ایندکس). ۱۵ ثانیه کم بود.

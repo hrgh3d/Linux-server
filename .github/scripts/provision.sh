@@ -442,6 +442,13 @@ CCENV
       note "CloudCLI: /etc/cloudcli.env rebuilt"
     fi
   fi
+
+  # v6.44: بلافاصله بعد از بازنصب npm، وصله‌های سمت مرورگر را دوباره بزن.
+  # (dist تازه است و فونت گوگل و sw.js اصلی برگشته‌اند.)
+  if [ -x /usr/local/bin/cloudcli_patch.sh ] && command -v cloudcli >/dev/null 2>&1; then
+    $SUDO /usr/local/bin/cloudcli_patch.sh >/dev/null 2>&1 \
+      && note "CloudCLI: browser patches re-applied" || true
+  fi
 }
 
 provision_xui() {
