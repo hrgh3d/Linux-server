@@ -514,3 +514,278 @@ def test_unused_combo_reports_unknown_not_false(monkeypatch):
     monkeypatch.setattr(resolver, "recent", lambda n=140: [])
     c = resolver.live()["Image"]
     assert c["current"] is None and c["exact"] is None
+
+
+# ═══════════ v2.1: کپی، حافظهٔ خودکار، دو حالت، لمسی، ارسال hermes/openclaw
+
+
+def test_all_four_agents_accept_prompts():
+    """
+    hermes و openclaw هم باید send داشته باشند. قبلاً چت با هرمس
+    «does not accept prompts yet» می‌داد و دکمهٔ نشست تازه هم نداشت،
+    چون هر دو از روی همین capability ساخته می‌شوند.
+    """
+    from app.adapters import ADAPTERS
+    for k in ("hermes", "claude", "pi", "openclaw"):
+        assert "send" in ADAPTERS[k].capabilities, f"{k} cannot send"
+        assert hasattr(ADAPTERS[k], "send")
+
+
+def test_hermes_send_uses_oneshot_not_interactive():
+    """حالت تعاملی روی سرور بدون TTY هنگ می‌کند."""
+    import inspect
+    from app.adapters import HermesAdapter
+    src = inspect.getsource(HermesAdapter.send)
+    assert "--oneshot" in src
+    assert '"chat"' in src, "must use `hermes chat`, not `hermes send`"
+
+
+def test_hermes_reply_is_unwrapped_from_frame():
+    """جواب داخل قاب ╭─ Hermes ─╮ است؛ کاربر نباید قاب و بلوک resume را ببیند."""
+    from app.adapters import HermesAdapter
+    raw = ("Query: hi\nInitializing agent...\n────────\n\n"
+           "╭─ ☤ Hermes ──────────────╮\nPONG\n╰─────────────────────────╯\n\n"
+           "Resume this session with:\n  hermes --resume 20260923_181056_ff17a3\n"
+           "Session:  20260923_181056_ff17a3\n")
+    m = HermesAdapter._FRAME.search(raw)
+    assert m and m.group(1).strip() == "PONG"
+    assert "Resume this session" not in m.group(1)
+
+
+def test_openclaw_send_does_not_use_local(monkeypatch):
+    """
+    --local وقتی gateway بالاست رد می‌شود («A Gateway is running for this
+    state directory») — روی سرور تأیید شد. --deliver هم نباید باشد وگرنه
+    جواب به تلگرام/واتساپ پست می‌شود.
+    خودِ فرمان ساخته‌شده را بازرسی می‌کنیم، نه متن سورس را.
+    """
+    from app import adapters
+    seen = {}
+
+    def fake_sh(cmd, timeout=10):
+        seen["cmd"] = cmd
+        return 0, '{"ok":true,"reply":"PONG"}'
+
+    monkeypatch.setattr(adapters, "_sh", fake_sh)
+    ok, out = adapters.OpenClawAdapter().send("hi")
+    assert ok and out == "PONG"
+    cmd = seen["cmd"]
+    assert cmd[:2] == ["openclaw", "agent"]
+    assert "--json" in cmd
+    assert "--local" not in cmd, "gateway is always up; --local fails"
+    assert "--deliver" not in cmd, "must not post the reply to a chat channel"
+    assert "hi" in cmd
+
+
+def test_openclaw_send_surfaces_gateway_errors(monkeypatch):
+    """خطای واقعی باید به کاربر برسد، نه یک جیسون خام."""
+    from app import adapters
+    err = ('{"ok":false,"error":{"type":"cli_error","message":'
+           '"A Gateway is running for this state directory"}}')
+    monkeypatch.setattr(adapters, "_sh", lambda c, timeout=10: (1, err))
+    ok, out = adapters.OpenClawAdapter().send("hi")
+    assert ok is False
+    assert "Gateway is running" in out
+
+
+def test_auto_memory_harvests_without_manual_pinning(tmp_path, monkeypatch):
+    """خواستهٔ کاربر: حافظه خودکار باشد، نه اینکه هر چیزی را دستی پین کند."""
+    from app import store
+    p = store.proj_create("t", "goal", "🧠", "manual", 1.0)
+    pid = p["id"]
+    assert store.auto_harvest(pid, "pi", "MEMORY: nginx has 8 workers") == \
+        ["nginx has 8 workers"]
+    # الگوی تصمیم، بدون MEMORY:
+    got = store.auto_harvest(pid, "claude", "بررسی کردم.\nنتیجه: کش را خاموش کن")
+    assert got and "کش" in got[0]
+    got = store.auto_harvest(pid, "claude", "Root cause: the index was missing")
+    assert got and "index" in got[0]
+
+
+def test_auto_memory_stays_quiet_on_smalltalk():
+    """حافظهٔ شلوغ بدتر از خالی است — هر چیزی نباید ذخیره شود."""
+    from app import store
+    pid = store.proj_create("t2", "g", "🧠", "manual", 1.0)["id"]
+    assert store.auto_harvest(pid, "pi", "سلام حالت چطوره؟ خوبم مرسی.") == []
+    assert store.auto_harvest(pid, "pi", "ok") == []
+
+
+def test_auto_memory_never_stores_secrets():
+    """کلید و رمز نباید در متنی بنشیند که به همهٔ ایجنت‌ها تزریق می‌شود."""
+    from app import store
+    pid = store.proj_create("t3", "g", "🧠", "manual", 1.0)["id"]
+    for bad in ("MEMORY: key is sk-5c239655416ea7f6-u4d2tf-8bca7f49",
+                "MEMORY: token ogt_39cabeb073b7220fdd0b681ed79dc47ccec7c1fa6",
+                "MEMORY: password: hamidgh69",
+                "MEMORY: رمز: hamidgh69"):
+        assert store.auto_harvest(pid, "pi", bad) == [], bad
+    assert store.proj_get(pid)["memory"] == []
+
+
+def test_auto_memory_does_not_duplicate():
+    from app import store
+    pid = store.proj_create("t4", "g", "🧠", "manual", 1.0)["id"]
+    store.auto_harvest(pid, "pi", "MEMORY: disk is 74G free")
+    store.auto_harvest(pid, "claude", "MEMORY: disk is 74G free")
+    store.auto_harvest(pid, "claude", "MEMORY:  Disk Is 74G Free ")
+    assert len(store.proj_get(pid)["memory"]) == 1
+
+
+def test_session_binds_to_project_and_unbinds():
+    from app import store
+    pid = store.proj_create("t5", "g", "🧠", "manual", 1.0)["id"]
+    store.bind_session("pi", "sess-1", pid)
+    assert store.session_project("pi", "sess-1") == pid
+    assert len(store.project_sessions(pid)) == 1
+    store.bind_session("pi", "sess-1", None)
+    assert store.session_project("pi", "sess-1") is None
+
+
+def test_deleted_project_does_not_strand_its_sessions():
+    """اگر پیوند مرده بماند نشست نه در «کلی» دیده می‌شود نه زیر پروژه."""
+    from app import store
+    pid = store.proj_create("t6", "g", "🧠", "manual", 1.0)["id"]
+    store.bind_session("pi", "sess-2", pid)
+    store.proj_delete(pid)
+    assert store.session_project("pi", "sess-2") is None
+
+
+def test_schema_migration_adds_project_id_to_old_db(tmp_path, monkeypatch):
+    """
+    دیتابیس سرور از قبل ساخته شده؛ «create table if not exists» ستون تازه
+    را اضافه نمی‌کند و کوئری با no such column می‌شکند.
+    """
+    import sqlite3
+    db = tmp_path / "old.sqlite"
+    con = sqlite3.connect(db)
+    con.executescript("""create table session_meta(
+        app text not null, sid text not null, title text, icon text,
+        color text, pinned integer default 0, archived integer default 0,
+        tags text default '', note text, updated_at real,
+        primary key(app,sid));""")
+    con.commit()
+    from app import store
+    store._migrate(con)
+    cols = {r[1] for r in con.execute("pragma table_info(session_meta)")}
+    assert "project_id" in cols
+    store._migrate(con)          # دوباره اجرا شود نباید بترکد
+    con.close()
+
+
+def test_frontend_has_copy_everywhere():
+    h = _html()
+    assert "async function copyText" in h
+    assert "data-copy=" in h, "no per-message copy button"
+    assert "copySession" in h, "cannot copy a whole conversation"
+    assert "bindCodeCopy" in h and "cbc" in h, "code blocks have no copy button"
+    # روی http کلیپ‌بورد امن نیست، باید fallback داشته باشد
+    assert "execCommand('copy')" in h, "no clipboard fallback for insecure context"
+
+
+def test_frontend_is_usable_without_a_mouse():
+    """
+    خواستهٔ کاربر: روی موبایل موس نیست. هرچه با :hover ظاهر می‌شد
+    باید روی دستگاه لمسی دائمی باشد و هدف لمس به‌اندازهٔ انگشت.
+    """
+    h = _html()
+    assert "@media(hover:none)" in h, "no touch fallback at all"
+    # بلوکی که کنترل‌های hover-only را دائمی می‌کند
+    block = [b for b in h.split("@media(hover:none)")
+             if "opacity:1 !important" in b[:900]]
+    assert block, "no block forces hover-only controls visible"
+    b = block[0]
+    for sel in (".si .more", ".mn .pinb", ".memi .d"):
+        assert sel in b, f"{sel} stays invisible on touch"
+
+
+def test_frontend_has_two_modes_general_and_projects():
+    h = _html()
+    assert 'data-t="sessions"' in h and 'data-t="projects"' in h
+    assert ">General<" in h, "the non-project mode should be named clearly"
+    # نشست عضو پروژه نباید در حالت کلی تکرار شود
+    assert "!s.project_id" in h
+    # و باید زیر پروژهٔ خودش دیده شود
+    assert "s.project_id===p.id" in h
+
+
+def test_frontend_memory_is_automatic_not_manual():
+    h = _html()
+    assert "learned" in h, "user is never shown what was auto-remembered"
+    assert "added to shared memory" in h
+    assert "moveToProject" in h and "addChatDlg" in h
+    assert "bindSession" in h
+
+
+def test_send_endpoint_injects_context_and_harvests():
+    import inspect
+    from app import main
+    src = inspect.getsource(main.send)
+    assert "session_project" in src, "send never checks project membership"
+    assert "build_context" in src, "shared memory is not injected"
+    assert "auto_harvest" in src, "nothing is learned back"
+
+
+def test_openclaw_counts_real_messages(tmp_path, monkeypatch):
+    """
+    باگ: msg_count برای openclaw هرگز پر نمی‌شد و همیشه ۰ بود، پس نشستی
+    با ۴۳۱ رویداد «خالی» به نظر می‌رسید و نامزد حذف می‌شد.
+    """
+    import sqlite3
+    db = tmp_path / "oc.sqlite"
+    con = sqlite3.connect(db)
+    con.executescript("""
+      create table session_nodes(session_key text, current_session_id text,
+        entry_json text, status text, updated_at int, created_via text);
+      create table transcript_events(session_id text, seq int,
+        event_json text, created_at int);
+    """)
+    con.execute("insert into session_nodes values(?,?,?,?,?,?)",
+                ("agent:main:dashboard:abc", "abc", "{}", "idle", 1790000000000,
+                 "dashboard"))
+    for i in range(7):
+        con.execute("insert into transcript_events values(?,?,?,?)",
+                    ("abc", i, '{"type":"message"}', 1790000000000))
+    con.execute("insert into transcript_events values(?,?,?,?)",
+                ("abc", 9, '{"type":"custom"}', 1790000000000))
+    con.commit(); con.close()
+
+    from app.adapters import OpenClawAdapter
+    ad = OpenClawAdapter()
+    monkeypatch.setattr(ad, "DB", str(db))
+    ss = ad.sessions()
+    assert ss and ss[0].msg_count == 7, "only real messages should count"
+
+
+def test_hermes_reports_unknown_count_not_zero():
+    """«نمی‌دانم» با «خالی» یکی نیست — صفر گذاشتن نشست پر را قربانی می‌کند."""
+    import inspect
+    from app.adapters import HermesAdapter
+    assert "msg_count=None" in inspect.getsource(HermesAdapter.sessions)
+
+
+def test_junk_scan_never_proposes_pinned_or_project_sessions(monkeypatch):
+    """پاک‌سازی نباید به چیزی که کاربر سنجاق کرده یا در پروژه است دست بزند."""
+    import asyncio
+    from app import main
+    rows = [
+        {"id": "a", "source": "pi", "msg_count": 0, "title": "", "preview": "",
+         "pinned": True},
+        {"id": "b", "source": "pi", "msg_count": 0, "title": "", "preview": "",
+         "project_id": "p1"},
+        {"id": "c", "source": "pi", "msg_count": 0, "title": "", "preview": ""},
+        {"id": "d", "source": "hermes", "msg_count": None, "title": "سلام",
+         "preview": ""},
+    ]
+
+    async def fake(app_key=None, include_archived=False):
+        return rows
+    monkeypatch.setattr(main, "sessions", fake)
+    got = asyncio.run(main.sessions_junk())
+    ids = {c["id"] for c in got["candidates"]}
+    assert ids == {"c"}, f"unsafe proposal: {ids}"
+    assert "nothing was deleted" in got["note"]
+
+
+def test_frontend_shows_unknown_count_as_dash():
+    h = _html()
+    assert "s.msg_count==null?'—'" in h, "unknown count must not render as 0"

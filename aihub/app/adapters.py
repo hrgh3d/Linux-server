@@ -45,7 +45,7 @@ class Session:
     preview: str = ""
     last_active: str | None = None      # ISO-8601 UTC
     model: str | None = None
-    msg_count: int = 0
+    msg_count: int | None = 0
     cwd: str | None = None
     state: str = "idle"                 # idle | working | needs_input | done
     source: str = ""                    # which app it belongs to
@@ -215,7 +215,14 @@ class HermesAdapter(Adapter):
     BASE = "http://127.0.0.1:9120"
     url = "https://linux-server-vps.tail3641f4.ts.net:9443/"
     CFG = rp("/root/.hermes/config.yaml")
-    capabilities = ["status", "sessions", "set_model", "restart"]
+    capabilities = ["status", "sessions", "send", "set_model", "restart"]
+
+    # خروجی hermes chat در یک قاب کشیده شده است:
+    #   ╭─ ☤ Hermes ───╮
+    #   PONG
+    #   ╰──────────────╯
+    # و بعدش بلوک «Resume this session with:» می‌آید که جواب نیست.
+    _FRAME = re.compile(r"╭─.*?Hermes.*?╮\n(.*?)\n╰", re.S)
 
     def status(self) -> AppStatus:
         st = AppStatus(self.key, self.name, self.icon, url=self.url,
@@ -240,6 +247,33 @@ class HermesAdapter(Adapter):
         st.model = self._config_model()
         st.session_count = len(self.sessions())
         return st
+
+    def send(self, text: str, session_id: str | None = None) -> tuple[bool, str]:
+        """
+        hermes chat --oneshot -q "…"
+
+        `hermes send` پیام را به یک کانال بیرونی می‌فرستد، نه به خود ایجنت؛
+        چیزی که ما می‌خواهیم chat است. حالت تعاملی روی اجراکنندهٔ بدون TTY
+        هنگ می‌کند، پس --oneshot اجباری است. روی سرور ۲۱ ثانیه طول کشید،
+        پس مهلت را دست‌ودل‌بازانه می‌گیریم.
+        """
+        cmd = ["hermes", "chat", "--oneshot", "-q", text]
+        if session_id:
+            cmd += ["--resume", session_id]
+        rc, out = _sh(cmd, timeout=300)
+        if rc != 0:
+            return False, (out or "hermes failed")[-4000:]
+        m = self._FRAME.search(out)
+        if m:
+            body = m.group(1)
+            # خطوط قاب را پاک کن
+            body = "\n".join(l.strip("│ ").rstrip()
+                              for l in body.splitlines()).strip()
+            if body:
+                return True, body[-4000:]
+        # قاب پیدا نشد: هرچه قبل از بلوک resume هست را بده
+        cut = out.split("Resume this session with:")[0]
+        return True, (cut or out).strip()[-4000:]
 
     @staticmethod
     def _config_model() -> str | None:
@@ -338,9 +372,12 @@ class HermesAdapter(Adapter):
             if title in ("Title", "—") and not preview:
                 title = "(untitled)"
             # تاریخ نسبی را به ISO تبدیل نمی‌کنیم؛ همان متن را می‌دهیم
+            # `hermes sessions list` ستون تعداد پیام ندارد و خروجی json هم
+            # نمی‌دهد. صفر گذاشتن دروغ است (نشست پر را خالی نشان می‌دهد)،
+            # پس None می‌گذاریم و رابط «—» نشان می‌دهد.
             rows.append(Session(id=sid, title=_clean(title, 60),
                                 preview=_clean(preview), last_active=None,
-                                source=self.key))
+                                msg_count=None, source=self.key))
             # زمان متنی را در preview نگه می‌داریم اگر خالی بود
             if last and not rows[-1].preview:
                 rows[-1].preview = last
@@ -550,7 +587,38 @@ class OpenClawAdapter(Adapter):
     CFG = rp("/root/.openclaw/openclaw.json")
     url = "https://linux-server-vps.tail3641f4.ts.net/"
     # REST ندارد ⇒ خواندن از دیتابیس، نوشتن از CLI (تصمیم ۵-ج)
-    capabilities = ["status", "sessions", "set_model", "restart"]
+    capabilities = ["status", "sessions", "send", "set_model", "restart"]
+
+    def send(self, text: str, session_id: str | None = None) -> tuple[bool, str]:
+        """
+        openclaw agent --json --message "…"
+
+        بدون --local: وقتی gateway بالا باشد (همیشه هست) اجرای embedded
+        با خطای «A Gateway is running for this state directory» رد می‌شود.
+        --deliver هم نمی‌دهیم تا جواب به تلگرام/واتساپ پست نشود؛ فقط
+        می‌خواهیم متن را در پنل ببینیم.
+        """
+        cmd = ["openclaw", "agent", "--json", "--message", text]
+        if session_id:
+            cmd += ["--session-id", session_id]
+        rc, out = _sh(cmd, timeout=300)
+        body = (out or "").strip()
+        try:
+            d = json.loads(body[body.index("{"):body.rindex("}") + 1])
+        except Exception:                                      # noqa: BLE001
+            return rc == 0, body[-4000:]
+        if not d.get("ok", rc == 0):
+            err = (d.get("error") or {})
+            return False, str(err.get("message") or err or body)[:2000]
+        for k in ("reply", "text", "message", "content", "output", "result"):
+            v = d.get(k)
+            if isinstance(v, str) and v.strip():
+                return True, v.strip()[-4000:]
+            if isinstance(v, dict):
+                for k2 in ("text", "content", "body"):
+                    if isinstance(v.get(k2), str) and v[k2].strip():
+                        return True, v[k2].strip()[-4000:]
+        return True, json.dumps(d, ensure_ascii=False)[:4000]
 
     def status(self) -> AppStatus:
         st = AppStatus(self.key, self.name, self.icon, url=self.url,
@@ -586,6 +654,20 @@ class OpenClawAdapter(Adapter):
                 "select name from sqlite_master where type='table'")}
             if "session_nodes" not in tables:
                 return []
+            # msg_count تا امروز هرگز پر نمی‌شد و همیشه صفر می‌ماند؛ نتیجه
+            # این بود که نشستی با ۴۳۱ رویداد «خالی» به نظر می‌رسید و در
+            # پاک‌سازی نامزد حذف می‌شد. پیام‌ها در transcript_events هستند.
+            counts: dict[str, int] = {}
+            if "transcript_events" in tables:
+                try:
+                    counts = {r[0]: r[1] for r in con.execute(
+                        "select session_id, count(*) from transcript_events"
+                        " where json_extract(event_json,'$.type')='message'"
+                        " group by session_id")}
+                except sqlite3.Error:
+                    counts = {r[0]: r[1] for r in con.execute(
+                        "select session_id, count(*) from transcript_events"
+                        " group by session_id")}
             rows = con.execute(
                 "select session_key, current_session_id, entry_json, status,"
                 " updated_at, created_via from session_nodes"
@@ -617,6 +699,7 @@ class OpenClawAdapter(Adapter):
                                        or d.get("created_via") or ""), 90),
                     last_active=iso(ts) if isinstance(ts, (int, float)) else None,
                     state="working" if status in ("active", "running") else "idle",
+                    msg_count=counts.get(str(d.get("current_session_id")), 0),
                     source=self.key))
         except Exception:                                      # noqa: BLE001
             return out

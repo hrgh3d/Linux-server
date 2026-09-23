@@ -20,7 +20,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -37,6 +37,10 @@ app = FastAPI(title="AI Hub", version=VERSION, docs_url="/api/docs")
 
 # استخر نخ: آداپتورها I/O مسدودکننده دارند (subprocess, sqlite, http).
 # بدون این، یک `hermes sessions list` کند کل event loop را قفل می‌کند.
+JUNK_RE = re.compile(
+    r"^(test|تست|ping|pong|hi|hello|سلام|reply with exactly|بگو فقط|say |echo |"
+    r"OK_|COMBO_|PI_|CLAUDE_)", re.I)
+
 POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="adapter")
 
 # کش کوتاه‌مدت تا polling موبایل سرور را خفه نکند
@@ -145,6 +149,13 @@ async def sessions(app_key: str | None = Query(None, alias="app"),
             s["pinned"] = bool(m.get("pinned"))
             s["archived"] = bool(m.get("archived"))
             s["tags"] = [t for t in (m.get("tags") or "").split(",") if t]
+            s["project_id"] = m.get("project_id") or None
+        # پیوند به پروژه‌ای که دیگر وجود ندارد را بی‌صدا رها کن، وگرنه
+        # نشست نه در «کلی» دیده می‌شود نه زیر هیچ پروژه‌ای — گم می‌شود.
+        alive = {p["id"] for p in store.proj_list()}
+        for s in out:
+            if s.get("project_id") and s["project_id"] not in alive:
+                s["project_id"] = None
         if not include_archived:
             out = [s for s in out if not s.get("archived")]
         out.sort(key=lambda s: (not s.get("pinned"),
@@ -301,17 +312,41 @@ async def set_model(body: ModelBody):
 
 @app.post("/api/send")
 async def send(body: SendBody):
-    """ارسال پرامپت به یک برنامه. متن فارسی بدون تغییر عبور می‌کند."""
+    """
+    ارسال پرامپت به یک برنامه. متن فارسی بدون تغییر عبور می‌کند.
+
+    اگر این نشست عضو یک پروژهٔ مشترک باشد دو کار اضافه انجام می‌شود:
+      ۱) متنِ زمینهٔ پروژه (هدف، نقش، حافظهٔ تیم) جلوی پرامپت می‌چسبد
+      ۲) از جواب، نکته‌های ارزشمند خودکار برداشته و در حافظهٔ تیم ثبت می‌شود
+    هیچ‌کدام برای گفت‌وگوی کلی اتفاق نمی‌افتد.
+    """
     ad = ADAPTERS.get(body.app)
     if ad is None:
         raise HTTPException(404, "unknown app")
     if "send" not in ad.capabilities:
         raise HTTPException(400, f"{ad.name} does not accept prompts yet")
+
+    pid = store.session_project(body.app, body.session_id) \
+        if body.session_id else None
+    prompt = body.text
+    ctx = ""
+    if pid:
+        ctx = store.build_context(pid, body.app)
+        if ctx:
+            prompt = f"{ctx}\n{body.text}"
+
     loop = asyncio.get_running_loop()
     ok, out = await loop.run_in_executor(
-        POOL, lambda: ad.send(body.text, body.session_id))
+        POOL, lambda: ad.send(prompt, body.session_id))
     invalidate()
-    return {"ok": ok, "output": out}
+
+    learned: list[str] = []
+    if ok and pid:
+        learned = store.auto_harvest(pid, body.app, out)
+        store.tl(pid, body.app, "turn",
+                 f"{body.text.strip()[:60]} → {len(out or '')} chars")
+    return {"ok": ok, "output": out, "project": pid,
+            "learned": learned, "context_used": bool(ctx)}
 
 
 @app.post("/api/compare")
@@ -586,6 +621,57 @@ async def session_new(app_key: str):
     store.tl(None, app_key, "session", f"new {app_key} session requested")
     return {"ok": True, "app": app_key,
             "hint": "send the first message to materialise the session"}
+
+
+@app.get("/api/sessions/junk")
+async def sessions_junk():
+    """
+    نشست‌های بی‌ارزش را *پیشنهاد* می‌کند — خودش چیزی پاک نمی‌کند.
+
+    محافظه‌کارانه: فقط چیزی که هم بی‌محتواست و هم نشانهٔ تست دارد.
+    نشستی که msg_count نامعلوم است (hermes) هرگز نامزد حذف نمی‌شود،
+    چون «نمی‌دانم» با «خالی» یکی نیست.
+    """
+    rows = await sessions(None, True)
+    out = []
+    for s in rows:
+        n = s.get("msg_count")
+        title = (s.get("title") or "").strip()
+        prev = (s.get("preview") or "").strip()
+        if s.get("pinned") or s.get("project_id"):
+            continue                      # دست‌نخورده بماند
+        why = []
+        if n == 0:
+            why.append("no messages")
+        if n is not None and n <= 2 and JUNK_RE.match(prev or title):
+            why.append("test chatter")
+        if n == 0 and not prev and not title:
+            why.append("empty")
+        if why:
+            out.append({**s, "why": why})
+    return {"candidates": out, "count": len(out),
+            "note": "nothing was deleted; call DELETE per session to remove"}
+
+
+@app.post("/api/session/{app_key}/{sid}/bind")
+async def session_bind(app_key: str, sid: str, body: dict = Body(...)):
+    """
+    نشست را عضو یک پروژهٔ مشترک می‌کند (project_id=null یعنی آزاد کردن).
+    از این لحظه هر پیام آن نشست زمینهٔ پروژه را می‌گیرد و جوابش
+    خودکار وارد حافظهٔ تیم می‌شود — بدون پین دستی.
+    """
+    pid = body.get("project_id") or None
+    if pid and not store.proj_get(pid):
+        raise HTTPException(404, "project not found")
+    meta = store.bind_session(app_key, sid, pid)
+    return {"ok": True, "meta": meta, "project_id": pid}
+
+
+@app.get("/api/projects/{pid}/sessions")
+async def project_session_list(pid: str):
+    if not store.proj_get(pid):
+        raise HTTPException(404, "not found")
+    return {"sessions": store.project_sessions(pid)}
 
 
 # ───────────────────────────────────────── projects

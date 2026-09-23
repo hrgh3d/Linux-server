@@ -143,9 +143,13 @@ input,textarea,select{font:inherit;color:inherit;background:0;border:0;outline:0
 .mn{font-size:11.5px;font-weight:600;color:var(--dim);margin-bottom:4px;
   display:flex;align-items:center;gap:7px}
 .mn .tm{font-weight:400;color:var(--faint);font-size:10.5px}
-.mn .pinb{margin-left:auto;opacity:0;font-size:12px;color:var(--faint)}
+.mn .macts{margin-left:auto;display:flex;gap:2px}
+.mn .pinb{opacity:0;font-size:12px;color:var(--faint);min-width:28px;height:26px;
+  border-radius:5px;transition:opacity .12s}
 .m:hover .pinb{opacity:1}
-.mn .pinb:hover{color:var(--accent)}
+.mn .pinb:hover{color:var(--accent);background:var(--raised)}
+.mn .pinb:active{background:var(--line2)}
+.mn .pinb.done{opacity:1;color:var(--ok)}
 .mt{font-size:14px;line-height:1.72;white-space:pre-wrap;word-break:break-word}
 .mt code{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
   padding:1px 5px;font:12.5px ui-monospace,monospace;color:var(--accent2)}
@@ -274,6 +278,44 @@ input,textarea,select{font:inherit;color:inherit;background:0;border:0;outline:0
 .memi .d{opacity:0;color:var(--faint);font-size:12px}
 .memi:hover .d{opacity:1}
 
+.learned{margin-top:9px;padding:7px 10px;border-radius:7px;font-size:11.5px;
+  background:rgba(224,122,74,.09);border:1px solid rgba(224,122,74,.28);
+  color:var(--dim);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.learned span{background:var(--panel2);border:1px solid var(--line);
+  border-radius:11px;padding:2px 8px;unicode-bidi:plaintext}
+
+.cb{position:relative;margin:8px 0}
+.cb pre{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+  padding:11px 13px;overflow-x:auto;font:12px/1.6 ui-monospace,Menlo,monospace;
+  color:var(--dim);direction:ltr;text-align:left}
+.cbc{position:absolute;top:6px;right:6px;width:26px;height:26px;border-radius:5px;
+  background:var(--panel);border:1px solid var(--line);color:var(--faint);
+  font-size:12px;opacity:0;transition:opacity .12s}
+.cb:hover .cbc{opacity:1}
+.cbc:hover{color:var(--accent);border-color:var(--line2)}
+.cbc.done{opacity:1;color:var(--ok)}
+@media(hover:none){.cbc{opacity:1;width:32px;height:32px}}
+
+/* ─── دستگاه لمسی ───────────────────────────────────────────────
+   روی موبایل موس نیست، پس هر کنترلی که با :hover ظاهر می‌شد
+   هرگز قابل دسترس نبود. اینجا همه را دائمی می‌کنیم و هدف لمس را
+   به حداقل ۴۴ پیکسل (توصیهٔ اپل) می‌رسانیم. */
+@media(hover:none){
+  .si .more,.mn .pinb,.memi .d{opacity:1 !important}
+  .si .more{width:30px;height:30px;font-size:15px;background:var(--panel2)}
+  .mn .pinb{min-width:34px;height:32px;font-size:14px;background:var(--panel2)}
+  .memi .d{min-width:34px;height:32px}
+  .grph .plus{width:30px;height:30px;font-size:17px}
+  .iconb,.ctool{min-width:38px;min-height:38px}
+  .sm{min-height:40px;padding:0 14px}
+  .menu button{min-height:44px;font-size:14px}
+  .qb{min-height:38px}
+  .pill{min-height:30px}
+  /* hover روی لمسی «می‌چسبد» و رنگ را گیر می‌اندازد */
+  .si:hover,.pi:hover,.mrow:hover,.sr:hover{background:transparent}
+  .si:active,.pi:active,.mrow:active,.sr:active{background:var(--panel2)}
+}
+
 .mask{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.66);display:none;
   align-items:flex-start;justify-content:center;padding-top:9vh;backdrop-filter:blur(3px);
   overflow-y:auto}
@@ -391,8 +433,8 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
   <aside class="sb" id="sb">
     <div class="sbhead">
       <div class="tabs">
-        <button class="on" data-t="sessions">Sessions</button>
-        <button data-t="projects">Projects</button>
+        <button class="on" data-t="sessions" title="All chats not in a project">General</button>
+        <button data-t="projects" title="Shared projects with auto memory">Projects</button>
       </div>
       <button class="iconb" id="btnHome" title="Home">⌂</button>
     </div>
@@ -432,11 +474,52 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
 
 <script>
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+// دکمه‌های کپیِ بلوک کد را در هر جایی که پیام رندر شده وصل می‌کند.
+function bindCodeCopy(root){
+  const sc=(root||document).querySelectorAll('.cbc:not([data-b])');
+  sc.forEach(b=>{b.setAttribute('data-b','1');
+    b.onclick=()=>copyText(decodeURIComponent(b.dataset.c||''),b);});
+}
+
+// کپی متن. navigator.clipboard فقط در context امن (https یا localhost)
+// کار می‌کند و پنل روی http هم باز می‌شود، پس fallback لازم است.
+async function copyText(t,btn){
+  const s=String(t??'');
+  let ok=false;
+  try{ if(navigator.clipboard&&window.isSecureContext){
+    await navigator.clipboard.writeText(s); ok=true; } }catch(e){}
+  if(!ok){
+    const ta=document.createElement('textarea');
+    ta.value=s; ta.setAttribute('readonly','');
+    ta.style.cssText='position:fixed;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select(); ta.setSelectionRange(0,s.length);
+    try{ ok=document.execCommand('copy'); }catch(e){ ok=false; }
+    ta.remove();
+  }
+  if(btn){
+    const o=btn.textContent;
+    btn.textContent=ok?'✓':'✕'; btn.classList.toggle('done',ok);
+    setTimeout(()=>{btn.textContent=o;btn.classList.remove('done');},1100);
+  }
+  toast(ok?'Copied':'Could not copy');
+  return ok;
+}
+
 // نشانگر قطعیت انتساب مدل: '' یعنی قطعی، '~' یعنی این مدل در چند
 // کامبو هست و نمی‌توان مطمئن بود. هرگز حدس را قطعی نشان نده.
 const mark=e=>e===true?'':'~';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const md=s=>esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+// بلوک کد دکمهٔ کپی مستقل می‌گیرد؛ محتوا در data-c به صورت encode شده
+// می‌نشیند تا نقل‌قول و < > آن، خودِ صفت را نشکند.
+const md=s=>{
+  let t=esc(s);
+  t=t.replace(/```([\s\S]*?)```/g,(m,c)=>
+    `<div class="cb"><button class="cbc" data-c="${encodeURIComponent(c)}"`+
+    ` title="Copy code">⧉</button><pre>${c.replace(/^\n/,'')}</pre></div>`);
+  return t.replace(/`([^`]+)`/g,'<code>$1</code>')
+          .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+};
 const num=n=>(n??0).toLocaleString('en-US');
 const ICON={hermes:'🤖',claude:'💻',pi:'🥧',openclaw:'🐾',router:'🔀'};
 
@@ -488,12 +571,80 @@ function confirmDlg(t,b,okLabel,fn){
 }
 window.confirmDlg=confirmDlg;
 
+// کل گفت‌وگو را به صورت markdown کپی می‌کند — برای پیست در جای دیگر
+async function copySession(a,id){
+  try{
+    const d=await api(`/api/session/${a}/${encodeURIComponent(id)}`);
+    const t=(d.messages||[]).map(m=>
+      `**${m.role==='user'?'You':app(a).name}**${m.ts?' · '+m.ts:''}\n${m.text}`)
+      .join('\n\n---\n\n');
+    await copyText(t||'(empty)');
+  }catch(e){toast('Failed: '+e.message,'bad');}
+}
+
+// نشست را عضو پروژه می‌کند؛ از این به بعد حافظه خودکار کار می‌کند
+async function bindSession(a,id,pid){
+  try{
+    await post(`/api/session/${a}/${encodeURIComponent(id)}/bind`,{project_id:pid});
+    toast(pid?'Moved into project — memory is automatic now':'Removed from project','ok');
+    await refresh();
+    if(view.sid===id)openSession(a,id);
+  }catch(e){toast('Failed: '+e.message,'bad');}
+}
+
+function moveToProject(a,id,s){
+  if(!S.projects.length){toast('Create a project first');projDlg();return;}
+  mask(`<div class="dlg"><h3>📁 Move chat into a project</h3>
+    <p class="hint">Everything in a project shares one memory. Findings from this
+      chat are added automatically — you never pin anything by hand.</p>
+    <div class="flist">${S.projects.map(p=>`
+      <label class="fc"><input type="radio" name="pp" value="${p.id}"
+        ${s.project_id===p.id?'checked':''}>
+        <span>${p.icon||'📁'} ${esc(p.name)}</span>
+        <span class="hint" style="margin:0">${esc(p.goal||'')}</span></label>`).join('')}</div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
+      <button class="sm pri" id="mvGo">Move</button></div></div>`);
+  $('#mvGo').onclick=()=>{
+    const r=document.querySelector('input[name=pp]:checked');
+    if(!r){toast('Pick one');return;}
+    close_();bindSession(a,id,r.value);};
+}
+
+// از داخل خود پروژه: کدام گفت‌وگو را بیاورم اینجا؟
+function addChatDlg(pid){
+  const free=S.sessions.filter(s=>!s.project_id);
+  mask(`<div class="dlg wide"><h3>＋ Add a chat to this project</h3>
+    ${free.length?`<p class="hint">Pick an existing chat, or start a fresh one
+      with any agent. Once inside, its findings feed the shared memory by itself.</p>
+    <div class="flist" style="max-height:44vh;overflow:auto">${free.map(s=>`
+      <label class="fc"><input type="radio" name="ac" value="${esc(s.id)}|${s.source}">
+        <span>${ICON[s.source]||'•'} ${esc(s.title||s.id)}</span>
+        <span class="hint" style="margin:0">${esc((s.preview||'').slice(0,70))}</span>
+      </label>`).join('')}</div>`:
+      '<p class="hint">No free chats. Start a new one below.</p>'}
+    <div class="row" style="margin-top:10px;gap:6px;flex-wrap:wrap">
+      ${S.apps.filter(a=>a.key!=='router'&&a.capabilities.includes('send')).map(a=>
+        `<button class="qb" data-na="${a.key}">${a.icon} New ${esc(a.name)} chat</button>`).join('')}
+    </div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
+      ${free.length?'<button class="sm pri" id="acGo">Add</button>':''}</div></div>`);
+  const go=$('#acGo');
+  if(go)go.onclick=()=>{
+    const r=document.querySelector('input[name=ac]:checked');
+    if(!r){toast('Pick one');return;}
+    const [id,a]=r.value.split('|');close_();bindSession(a,id,pid);};
+  $$('[data-na]').forEach(b=>b.onclick=async()=>{
+    close_();await newSession(b.dataset.na,pid);});
+}
+
 /* ═══════════ sidebar ═══════════ */
 function tree(){
   if(tab==='projects')return treeProjects();
   const q=filt.toLowerCase();
   const html=S.apps.filter(a=>a.key!=='router').map(a=>{
-    const ss=S.sessions.filter(s=>s.source===a.key&&
+    // نشست‌های عضو پروژه در تب Projects زیر خود پروژه دیده می‌شوند،
+    // پس اینجا تکرارشان نمی‌کنیم — «کلی» یعنی هرچه در پروژه نیست.
+    const ss=S.sessions.filter(s=>s.source===a.key&&!s.project_id&&
       (!q||((s.title||'')+(s.preview||'')+(s.tags||[]).join()).toLowerCase().includes(q)));
     if(q&&!ss.length)return'';
     const live=ss.some(s=>s.state==='working'||s.state==='needs_input');
@@ -538,15 +689,45 @@ function treeProjects(){
     <div class="grp"><div class="grph" id="newProj">
       <span class="tw"></span><span class="ic">＋</span>
       <span class="nm" style="color:var(--accent)">New project</span></div></div>`+
-    (ps.map(p=>`<div class="grp"><div class="grph ${view.pid===p.id?'':''}"
-        data-p="${p.id}" style="${view.pid===p.id?'background:var(--raised)':''}">
-      <span class="tw"></span><span class="ic">${p.icon||'📁'}</span>
-      <span class="nm rtl">${esc(p.name)}</span>
-      <span class="dot ${p.status==='active'?'up':'down'}"></span>
-      <span class="ct">${(p.roles||[]).length}</span></div></div>`).join('')
+    (ps.map(p=>{
+      const ms=S.sessions.filter(s=>s.project_id===p.id);
+      const open=!closed['p:'+p.id];
+      return `<div class="grp">
+        <div class="grph ${open?'':'closed'}" data-pg="${p.id}"
+             style="${view.pid===p.id?'background:var(--raised)':''}">
+          <span class="tw">▼</span><span class="ic">${p.icon||'📁'}</span>
+          <span class="nm rtl">${esc(p.name)}</span>
+          <span class="dot ${p.status==='active'?'up':'down'}"></span>
+          <span class="ct">${ms.length}</span>
+          <span class="plus" data-open="${p.id}" title="Open workspace">⤢</span>
+        </div>
+        <div class="grpb">${ms.length?ms.map(s=>`
+          <div class="si ${view.sid===s.id?'sel':''}" data-s="${esc(s.id)}" data-a="${s.source}">
+            <div class="sb2">
+              <div class="t rtl">${ICON[s.source]||'•'} ${esc(s.title||s.id)}</div>
+              <div class="p rtl">${esc(s.preview||'')}</div>
+            </div>
+            <div class="tm">${ago(s.last_active)}</div>
+            <button class="more" data-menu="${esc(s.id)}|${s.source}">⋯</button>
+          </div>`).join(''):
+          '<div class="empty" style="padding:9px 14px;font-size:11.5px">'+
+          'No chats yet. Open the workspace, or use ⋯ → Move to project.</div>'}
+          <div class="si" data-addp="${p.id}" style="color:var(--accent)">
+            <div class="sb2"><div class="t">＋ Add a chat here</div></div></div>
+        </div></div>`;}).join('')
       ||'<div class="empty">No projects yet</div>');
   const np=$('#newProj'); if(np)np.onclick=projDlg;
-  $$('#tree [data-p]').forEach(e=>e.onclick=()=>{openProject(e.dataset.p);drawers(false);});
+  $$('#tree [data-pg]').forEach(g=>g.onclick=e=>{
+    if(e.target.dataset.open){e.stopPropagation();
+      openProject(e.target.dataset.open);drawers(false);return;}
+    closed['p:'+g.dataset.pg]=!closed['p:'+g.dataset.pg];tree();});
+  $$('#tree [data-addp]').forEach(e=>e.onclick=ev=>{
+    ev.stopPropagation();addChatDlg(e.dataset.addp);});
+  $$('#tree .si[data-s]').forEach(el=>el.onclick=e=>{
+    if(e.target.dataset.menu){e.stopPropagation();
+      const [id,a]=e.target.dataset.menu.split('|');
+      const r=e.target.getBoundingClientRect(); sessMenu(a,id,r.left-140,r.bottom+4);return;}
+    openSession(el.dataset.a,el.dataset.s);drawers(false);});
 }
 
 $$('.tabs button').forEach(b=>b.onclick=()=>{
@@ -642,13 +823,16 @@ async function openSession(a,id){
   view={kind:'session',app:a,sid:id}; tree(); drawers(false);
   const s=S.sessions.find(x=>x.id===id&&x.source===a)||{id,source:a,title:id};
   const A=app(a), lm=S.live.agents[a]||{};
+  const P=s.project_id?S.projects.find(x=>x.id===s.project_id):null;
   $('#mhead').innerHTML=`<span class="ic">${s.icon||A.icon}</span>
     <span class="ti rtl">${esc(s.title||id)}</span>
     <span class="pill model click" id="mp">◆ ${esc(s.model||A.model||'model')}
       ${lm.real?`<span class="real">${mark(lm.exact)}${esc(lm.real)}</span>`:''}</span>
     ${s.state==='working'?'<span class="pill live hide-sm">● generating</span>':''}
+    ${P?`<span class="pill click" data-projbadge="1" title="Shared project — memory is automatic"
+      onclick="openProject('${P.id}')">📁 ${esc(P.name)} · 🧠 auto</span>`:''}
     <div class="sp">
-      <span class="pill hide-sm">${s.msg_count||0} msgs</span>
+      <span class="pill hide-sm">${s.msg_count==null?'—':s.msg_count+' msgs'}</span>
       <button class="iconb" id="hoBtn" title="Hand off">⇄</button>
       <button class="iconb" id="moreBtn" title="More">⋯</button>
     </div>`;
@@ -667,10 +851,15 @@ async function openSession(a,id){
       <div class="m"><div class="av ${m.role==='user'?'u':'a'}">${m.role==='user'?'H':A.icon}</div>
         <div class="mb"><div class="mn">${m.role==='user'?'You':esc(A.name)}
           <span class="tm">${m.ts?ago(m.ts):''}</span>
-          <button class="pinb" data-pin="${i}" title="Pin to project memory">📌</button></div>
+          <span class="macts">
+            <button class="pinb" data-copy="${i}" title="Copy message">⧉</button>
+            <button class="pinb" data-pin="${i}" title="Pin to project memory">📌</button>
+          </span></div>
           <div class="mt rtl">${md(m.text)}</div></div></div>`).join(''):
       '<div class="empty">No readable messages yet.</div>'}</div>`;
     $$('#stage [data-pin]').forEach(b=>b.onclick=()=>pinToMemory(ms[+b.dataset.pin]));
+    $$('#stage [data-copy]').forEach(b=>b.onclick=()=>copyText(ms[+b.dataset.copy].text,b));
+    bindCodeCopy();
     $('#stage').scrollTop=9e5;
   }catch(e){$('#stage').innerHTML=`<div class="wrap"><div class="empty">${esc(e.message)}</div></div>`;}
   rail(s);
@@ -685,8 +874,14 @@ function sessMenu(a,id,x,y){
       fn:()=>metaSet(a,id,{pinned:s.pinned?0:1})},
     {id:'tag',icon:'🏷',label:'Tags',fn:()=>tagDlg(a,id,s)},
     '-',
+    {id:'copy',icon:'⧉',label:'Copy conversation',fn:()=>copySession(a,id)},
+    {id:'cpid',icon:'#',label:'Copy session id',fn:()=>copyText(id)},
+    '-',
     {id:'ho',icon:'⇄',label:'Hand off to…',fn:()=>handoffDlg(a,id)},
-    {id:'memo',icon:'🧠',label:'Add to project memory',fn:()=>pinSessionDlg(a,id)},
+    {id:'proj',icon:'📁',label:s.project_id?'Move to another project…':'Move to project…',
+      fn:()=>moveToProject(a,id,s)},
+    ...(s.project_id?[{id:'unproj',icon:'↩',label:'Remove from project',
+      fn:()=>bindSession(a,id,null)}]:[]),
     '-',
     {id:'arch',icon:'📦',label:s.archived?'Unarchive':'Archive',
       fn:()=>metaSet(a,id,{archived:s.archived?0:1})},
@@ -1061,7 +1256,7 @@ function rail(s,proj){
     <div class="kv"><span class="k">Combo</span><span class="v" style="color:var(--purple)">${esc(s.model||'—')}</span></div>
     ${lm.real?`<div class="kv"><span class="k">Real model</span>
       <span class="v" style="font-size:11px">${mark(lm.exact)}${esc(lm.real)}</span></div>`:''}
-    <div class="kv"><span class="k">Messages</span><span class="v">${s.msg_count||0}</span></div>
+    <div class="kv"><span class="k">Messages</span><span class="v">${s.msg_count==null?'—':s.msg_count}</span></div>
     <div class="kv"><span class="k">Last active</span><span class="v">${ago(s.last_active)} ago</span></div>
     ${(s.tags||[]).length?`<div class="kv"><span class="k">Tags</span>
       <span class="v">${s.tags.map(esc).join(', ')}</span></div>`:''}
@@ -1208,17 +1403,21 @@ async function skillsDlg(){
 }
 window.skillsDlg=skillsDlg;
 
-async function newSession(a){
-  view={kind:'session',app:a,sid:null}; drawers(false);
+async function newSession(a,pid){
+  view={kind:'session',app:a,sid:null,newIn:pid||null}; drawers(false);
   const A=app(a);
+  const P=pid?S.projects.find(x=>x.id===pid):null;
   $('#mhead').innerHTML=`<span class="ic">${A.icon}</span>
-    <span class="ti">New ${esc(A.name)} session</span>
+    <span class="ti">New ${esc(A.name)} chat</span>
+    ${P?`<span class="pill" title="Joins this project on first reply">📁 ${esc(P.name)}</span>`:''}
     <span class="pill model click" onclick="modelDlg('${a}')">◆ ${esc(A.model||'model')}</span>
     <div class="sp"><button class="iconb" onclick="home()">✕</button></div>`;
   $('#stage').className='msgs';
   $('#stage').innerHTML=`<div class="wrap"><div class="empty">
     ${A.icon} Start talking to ${esc(A.name)}.<br>
-    The session appears in the sidebar after the first reply.</div></div>`;
+    The chat appears in the sidebar after the first reply.
+    ${P?`<br><br><span style="color:var(--accent)">It joins “${esc(P.name)}”, so it
+      sees the shared memory and adds to it on its own.</span>`:''}</div></div>`;
   $('#comp').style.display='';
   $('#mLbl').textContent=A.model||'model';
   $('#ta').focus();
@@ -1289,10 +1488,27 @@ async function send(){
   try{
     const r=await post('/api/send',{app:a,text:t,session_id:view.sid});
     const p=$('#pend');
+    // آنچه خودکار وارد حافظهٔ تیم شد، شفاف نشان داده می‌شود تا کاربر
+    // بداند دقیقاً چه چیزی ذخیره شد — حافظهٔ نامرئی قابل اعتماد نیست.
+    const learned=(r.learned||[]).length?`<div class="learned">🧠 added to shared memory:
+      ${r.learned.map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:'';
     if(p)p.outerHTML=`<div class="m"><div class="av a">${app(a).icon}</div>
-      <div class="mb"><div class="mn">${esc(app(a).name)}</div>
-      <div class="mt rtl">${md(r.output||'(empty)')}</div></div></div>`;
+      <div class="mb"><div class="mn">${esc(app(a).name)}
+        <span class="macts"><button class="pinb" id="lastCopy" title="Copy">⧉</button></span></div>
+      <div class="mt rtl">${md(r.output||'(empty)')}</div>${learned}</div></div>`;
+    const lc=$('#lastCopy'); if(lc)lc.onclick=()=>copyText(r.output||'',lc);
+    bindCodeCopy();
     $('#stage').scrollTop=9e5;
+    // نشست تازه‌ای که قرار بود عضو پروژه شود، حالا که ساخته شده وصلش کن
+    if(view.newIn){
+      await refresh();
+      const mine=S.sessions.filter(x=>x.source===a&&!x.project_id)
+        .sort((x,y)=>new Date(y.last_active||0)-new Date(x.last_active||0))[0];
+      if(mine){await post(`/api/session/${a}/${encodeURIComponent(mine.id)}/bind`,
+        {project_id:view.newIn});
+        view={kind:'session',app:a,sid:mine.id};}
+      view.newIn=null;
+    }
     refresh();
   }catch(e){
     const p=$('#pend');

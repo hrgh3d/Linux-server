@@ -36,6 +36,7 @@ create table if not exists session_meta(
   archived    integer default 0,
   tags        text default '',
   note        text,
+  project_id  text,              -- نشست عضو کدام پروژهٔ مشترک است
   updated_at  real,
   primary key(app, sid)
 );
@@ -147,10 +148,32 @@ def _ensure() -> None:
         con.executescript(SCHEMA)
         # WAL: خواندن هم‌زمان با نوشتن قفل نمی‌کند — پنل زیر polling است
         con.execute("pragma journal_mode=WAL")
+        _migrate(con)
         con.commit()
     finally:
         con.close()
     _inited = True
+
+
+# ستون‌هایی که بعد از نسخهٔ اول اضافه شده‌اند. «create table if not exists»
+# روی دیتابیسِ از قبل ساخته‌شده هیچ کاری نمی‌کند، پس ستون تازه بی‌سروصدا
+# غایب می‌ماند و کوئری با «no such column» می‌شکند. صریح اضافه می‌کنیم.
+_ADDED = [
+    ("session_meta", "project_id", "text"),
+]
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    for table, col, typ in _ADDED:
+        try:
+            have = {r[1] for r in con.execute(f"pragma table_info({table})")}
+        except sqlite3.Error:
+            continue
+        if have and col not in have:
+            try:
+                con.execute(f"alter table {table} add column {col} {typ}")
+            except sqlite3.OperationalError:
+                pass
 
 
 @contextmanager
@@ -189,7 +212,8 @@ def meta_all() -> dict[str, dict]:
 
 
 def meta_set(app: str, sid: str, **kw) -> dict:
-    allowed = {"title", "icon", "color", "pinned", "archived", "tags", "note"}
+    allowed = {"title", "icon", "color", "pinned", "archived", "tags", "note",
+               "project_id"}
     fields = {k: v for k, v in kw.items() if k in allowed}
     if not fields:
         return {}
@@ -594,3 +618,99 @@ def health_history(combo: str, limit: int = 20) -> list[dict]:
         return [dict(r) for r in c.execute(
             "select * from combo_health where combo=?"
             " order by checked_at desc limit ?", (combo, limit))]
+
+
+# ─────────────────────────────── حافظهٔ خودکارِ پروژه (بدون پین دستی)
+
+
+def session_project(app: str, sid: str) -> str | None:
+    """نشست عضو کدام پروژه است؟ None یعنی گفت‌وگوی کلی."""
+    with db() as c:
+        r = c.execute("select project_id from session_meta where app=? and sid=?",
+                      (app, sid)).fetchone()
+    pid = (r["project_id"] if r else None) or None
+    if pid and not proj_get(pid):        # پروژه پاک شده، پیوند مرده را نادیده بگیر
+        return None
+    return pid
+
+
+def bind_session(app: str, sid: str, pid: str | None) -> dict:
+    """نشست را به پروژه‌ای می‌بندد (یا با None آزاد می‌کند)."""
+    meta = meta_set(app, sid, project_id=pid)
+    if pid:
+        tl(pid, app, "session", f"session joined: {sid[:24]}")
+    return meta
+
+
+def project_sessions(pid: str) -> list[dict]:
+    with db() as c:
+        return [dict(r) for r in c.execute(
+            "select * from session_meta where project_id=? order by updated_at desc",
+            (pid,))]
+
+
+# جمله‌هایی که ارزش ماندن در حافظهٔ تیم را دارند. عمداً محافظه‌کارانه است:
+# حافظهٔ شلوغ بدتر از حافظهٔ خالی است، چون هر خطش در هر درخواست دوباره
+# هزینه می‌شود.
+_AUTO_PAT = [
+    # تصمیم و نتیجه
+    r"(?:^|\n)\s*(?:تصمیم|نتیجه|خلاصه|یافته)\s*[:：]\s*(.{8,180})",
+    r"(?:^|\n)\s*(?:decision|result|conclusion|finding|summary)\s*:\s*(.{8,180})",
+    # چیزی که پیدا شد / عوض شد
+    r"(?:^|\n)\s*(?:پیدا کردم|مشکل|علت|راه‌حل)\s*[:：]\s*(.{8,180})",
+    r"(?:^|\n)\s*(?:root cause|fixed|the bug (?:is|was))\s*:?\s*(.{8,180})",
+]
+_AUTO_RE = [re.compile(p, re.I) for p in _AUTO_PAT]
+
+# چیزهایی که هرگز نباید وارد حافظهٔ مشترک شوند
+_SECRET_RE = re.compile(
+    r"(sk-[A-Za-z0-9_\-]{12,}|ghp_[A-Za-z0-9]{20,}|ogt_[a-f0-9]{20,}"
+    r"|[0-9]{8,10}:AA[A-Za-z0-9_\-]{30,}"          # توکن تلگرام
+    r"|password\s*[:=]\s*\S+|رمز\s*[:：]\s*\S+)", re.I)
+
+
+def _looks_secret(t: str) -> bool:
+    return bool(_SECRET_RE.search(t or ""))
+
+
+def auto_harvest(pid: str, app: str, text: str, limit: int = 3) -> list[str]:
+    """
+    حافظهٔ خودکار: بدون اینکه کاربر چیزی پین کند، از جواب ایجنت
+    نکته‌های ارزشمند را برمی‌دارد.
+
+    سه لایه:
+      ۱) خط صریح 'MEMORY:' — همیشه برداشته می‌شود
+      ۲) الگوهای تصمیم/نتیجه/علت
+      ۳) هیچ‌کدام نبود؟ هیچ. جملهٔ تصادفی برنمی‌داریم.
+
+    تکراری‌ها و هرچیزی که بوی رمز بدهد کنار گذاشته می‌شود.
+    """
+    text = text or ""
+    got: list[str] = []
+
+    explicit = [m.group(1).strip() for m in MEM_RE.finditer(text)]
+    cands = list(explicit)
+    if not cands:
+        for rx in _AUTO_RE:
+            for m in rx.finditer(text):
+                cands.append(m.group(1).strip())
+
+    with db() as c:
+        have = {(r["text"] or "").strip().lower() for r in c.execute(
+            "select text from memory where project_id=?", (pid,))}
+    for c in cands:
+        c = re.sub(r"\s+", " ", c).strip(" .،؛:-")
+        if len(c) < 8 or len(c) > 300:
+            continue
+        if _looks_secret(c):
+            tl(pid, app, "memory", "skipped a line that looked like a secret")
+            continue
+        k = c.lower()
+        if k in have:
+            continue
+        have.add(k)
+        mem_add(pid, c, app=app, kind="auto" if c not in explicit else "fact")
+        got.append(c)
+        if len(got) >= limit:
+            break
+    return got
