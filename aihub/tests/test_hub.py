@@ -101,8 +101,10 @@ def fake_fs():
     # Hermes config.yaml — بلوک model در ستون صفر
     (base / "root/.hermes").mkdir(parents=True, exist_ok=True)
     (base / "root/.hermes/config.yaml").write_text(
-        "model:\n  provider: custom\n  model: ox-alpha\n"
-        "other:\n  model: should-not-win\n", encoding="utf-8")
+        "model:\n  default: ox-alpha\n  provider: custom\n"
+        "  base_url: http://127.0.0.1:20128/v1\n"
+        "database:\n  journal_mode: wal\n"
+        "agent:\n  default: should-not-win\n", encoding="utf-8")
 
     # --- 9Router ---
     rdb = base / "root/.9router/db/data.sqlite"
@@ -433,6 +435,26 @@ def test_openclaw_models_from_providers():
 
 
 def test_hermes_model_from_config_yaml():
-    """باید بلوک اول model: را بخواند و به 'other:' نشتی نکند."""
+    """کلید واقعی model.default است و نباید به بلوک agent: نشتی کند."""
     from app.adapters import HermesAdapter
     assert HermesAdapter._config_model() == "ox-alpha"
+
+
+def test_hermes_set_model_edits_yaml_without_damage():
+    """
+    `hermes model` تعاملی است و روی رانر hang می‌کند، پس ویرایش مستقیم
+    فایل تنها راه است — و نباید بقیهٔ ۱۸۰۰ سطر config را خراب کند.
+    """
+    from app.adapters import HermesAdapter
+    a = HermesAdapter()
+    ok, msg = a.set_model("Agentic")
+    assert ok, msg
+    txt = open(a.CFG, encoding="utf-8").read()
+    assert "default: Agentic" in txt
+    # بقیهٔ فایل دست‌نخورده
+    assert "provider: custom" in txt
+    assert "journal_mode: wal" in txt
+    assert "default: should-not-win" in txt, "other blocks were modified"
+    assert a._config_model() == "Agentic"
+    a.set_model("ox-alpha")
+    assert a._config_model() == "ox-alpha"

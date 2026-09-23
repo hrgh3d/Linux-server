@@ -214,7 +214,8 @@ class HermesAdapter(Adapter):
     key, name, icon = "hermes", "Hermes", "🤖"
     BASE = "http://127.0.0.1:9120"
     url = "https://linux-server-vps.tail3641f4.ts.net:9443/"
-    capabilities = ["status", "sessions", "restart"]
+    CFG = rp("/root/.hermes/config.yaml")
+    capabilities = ["status", "sessions", "set_model", "restart"]
 
     def status(self) -> AppStatus:
         st = AppStatus(self.key, self.name, self.icon, url=self.url,
@@ -261,10 +262,55 @@ class HermesAdapter(Adapter):
             if inside:
                 if ln.strip() and not ln.startswith((" ", "\t")):
                     break
-                m = re.match(r"""\s+(?:model|name|id):\s*['"]?([^'"#\s]+)""", ln)
+                m = re.match(
+                    r"""\s+(?:default|model|name|id):\s*['"]?([^'"#\s]+)""", ln)
                 if m:
                     return m.group(1)
         return None
+
+    def models(self) -> list[str]:
+        return list_9router_combos()
+
+    def set_model(self, model: str) -> tuple[bool, str]:
+        """
+        `hermes model` فقط تعاملی است (روی رانر غیر-TTY خطا می‌دهد)، پس
+        مقدار `model.default` را مستقیم در config.yaml می‌نویسیم.
+
+        ویرایش سطری است نه بازنویسی YAML: فایل ۱۸۰۰+ سطر دارد و یک
+        round-trip با کتابخانه کامنت‌ها و ترتیب کلیدها را نابود می‌کند.
+        """
+        try:
+            with open(self.CFG, encoding="utf-8") as fh:
+                lines = fh.read().splitlines(keepends=True)
+        except Exception as exc:                               # noqa: BLE001
+            return False, str(exc)
+
+        inside, done = False, False
+        for i, ln in enumerate(lines):
+            if re.match(r"^model:\s*$", ln):
+                inside = True
+                continue
+            if inside:
+                if ln.strip() and not ln[0].isspace():
+                    break                                       # پایان بلوک
+                m = re.match(r"^(\s+default:\s*)(\S+)(.*)$", ln)
+                if m:
+                    lines[i] = f"{m.group(1)}{model}{m.group(3)}\n" \
+                        if not m.group(3).endswith("\n") else \
+                        f"{m.group(1)}{model}{m.group(3)}"
+                    done = True
+                    break
+        if not done:
+            return False, "model.default not found in config.yaml"
+
+        try:
+            tmp = self.CFG + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.writelines(lines)
+            os.replace(tmp, self.CFG)
+        except Exception as exc:                               # noqa: BLE001
+            return False, str(exc)
+        return True, f"hermes model.default = {model} (restart gateway to apply)"
 
     def sessions(self) -> list[Session]:
         """
