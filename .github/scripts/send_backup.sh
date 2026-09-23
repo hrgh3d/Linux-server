@@ -98,13 +98,21 @@ SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/known_hosts -o P
 SSHRUN() { sshpass -p "${ROOT_PASS}" ssh "${SSHOPTS[@]}" root@"${TARGET_IP}" "$@"; }
 ROOT_PASS="${HAMID_PASSWORD:?HAMID_PASSWORD تنظیم نشده است}"
 # v6.47: تنها دروازهٔ ارسال — هیچ curl مستقیمی به تلگرام نباید بماند.
+# v6.51 — قبلاً شرط [ -x ] بود و report.sh در گیت با مود 100644 ثبت شده
+# بود (نه 100755). نتیجه: روی رانر هرگز executable نبود، $RPT خالی می‌ماند،
+# و rpt_file بی‌صدا **موفق** برمی‌گشت بدون اینکه چیزی بفرستد — یعنی بکاپ
+# «successful» می‌شد و هیچ فایلی به تلگرام نمی‌رسید. حالا فقط وجود فایل را
+# می‌سنجیم و با `bash` صدایش می‌زنیم تا به بیت اجرا وابسته نباشد.
 RPT=""
 for _c in "${GITHUB_WORKSPACE:-}/.github/scripts/report.sh" /usr/local/bin/report.sh \
           "$(dirname "${BASH_SOURCE[0]}")/report.sh"; do
-  [ -x "$_c" ] && RPT="$_c" && break
+  [ -s "$_c" ] && RPT="$_c" && break
 done
-rpt_text() { [ -n "$RPT" ] && "$RPT" text "$1"; }
-rpt_file() { [ -n "$RPT" ] && "$RPT" file "$1" "$2"; }
+if [ -z "$RPT" ]; then
+  echo "[backup] FATAL: report.sh not found — nothing can be delivered" >&2
+fi
+rpt_text() { [ -n "$RPT" ] && bash "$RPT" text "$1"; }
+rpt_file() { [ -n "$RPT" ] && bash "$RPT" file "$1" "$2"; }
 
 SSH_OK=0
 for attempt in $(seq 1 12); do
@@ -417,12 +425,20 @@ CAP="🗄 بکاپ کامل سیستم ${VPS_NAME} — $(date -u '+%Y-%m-%d %H:%
 شامل: دادهٔ سرور + هویت Tailscale + OpenClaw (کانفیگ و دستگاه‌های جفت‌شده) + کل ریپو + کلیدها + RECOVERY.md
 بازرسی: ${VERDICT}
 بازگردانی: RECOVERY.md بخش ۵ را دنبال کن (روی سرور خالی هم کار می‌کند)"
+SENT_OK=0
 if [ "$LOCAL_SIZE" -le "$LIMIT" ]; then
-  send_doc /tmp/final-backup.tar.gz "${CAP}" && echo "[backup] sent to telegram" || echo "[backup] WARN: telegram send failed"
+  if send_doc /tmp/final-backup.tar.gz "${CAP}"; then
+    SENT_OK=$((SENT_OK+1)); echo "[backup] sent to telegram"
+  else
+    echo "[backup] WARN: telegram send failed"
+  fi
 else
   split -b "$PART" -d -a 2 /tmp/final-backup.tar.gz /tmp/bk-part-
   n=$(ls /tmp/bk-part-* | wc -l); i=0
-  for f in /tmp/bk-part-*; do i=$((i+1)); send_doc "$f" "${CAP} — بخش ${i}/${n}" && echo "[backup] part ${i}/${n} sent" || echo "[backup] WARN: part ${i} failed"; done
+  for f in /tmp/bk-part-*; do i=$((i+1))
+    if send_doc "$f" "${CAP} — بخش ${i}/${n}"; then
+      SENT_OK=$((SENT_OK+1)); echo "[backup] part ${i}/${n} sent"
+    else echo "[backup] WARN: part ${i} failed"; fi; done
 fi
 
 # ---------- ۳) حالت DR: اشاره به اسنپ‌شات state ----------
@@ -477,4 +493,10 @@ if [ "$DR_MODE" = "true" ]; then
   fi
 fi
 marker_write "$(( ${LOCAL_SIZE:-0} + ${STATE_SIZE:-0} ))"
-echo "[backup] done"
+# v6.51 — اگر هیچ چیز تحویل نشد، اجرا نباید «سبز» تمام شود. بکاپی که
+# ساخته می‌شود ولی نمی‌رسد، بدترین حالت است: اطمینان کاذب.
+if [ "${SENT_OK:-0}" -lt 1 ]; then
+  echo "[backup] ERROR: bundle was built but nothing reached telegram" >&2
+  exit 1
+fi
+echo "[backup] done (delivered ${SENT_OK} file(s))"
