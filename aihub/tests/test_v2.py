@@ -388,8 +388,12 @@ def test_frontend_shows_real_model_behind_combo():
     h = _html()
     assert "lm.real" in h, "real model never rendered"
     assert "S.live.agents" in h
-    # علامت ~ برای انتساب غیرقطعی
-    assert "lm.exact?''" in h.replace(" ", "") or "exact?'':'~'" in h.replace(" ", "")
+    # قطعیت انتساب از یک تابع واحد می‌آید، نه ternary پراکنده
+    assert "const mark=" in h.replace(" ", "").replace("const mark =", "const mark=") \
+        or "constmark=" in h.replace(" ", "")
+    assert "mark(lm.exact)" in h, "certainty marker not applied to live model"
+    # حدس هرگز نباید قطعی نشان داده شود
+    assert "e===true?''" in h.replace(" ", ""), "mark() must treat only true as exact"
 
 
 def test_frontend_has_session_management():
