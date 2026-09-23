@@ -232,13 +232,9 @@ def prune_dir(rel):
         return True
     if rel == "opt/openclaw-app" or rel.startswith("opt/openclaw-app/"):
         return True
-    # v6.40: باینری‌های Grok Build (~۱۷۰MB هرکدام) و دانلودهایش آرشیو نمی‌شوند؛
-    # provision.sh آن‌ها را از x.ai بازنصب می‌کند. اما config.toml و نشست‌ها و
-    # auth.json زیر /root/.grok حتماً باید بمانند، پس فقط bin/ و downloads/
-    # را کنار می‌گذاریم، نه کل پوشه را.
-    if rel == "root/.grok/bin" or rel.startswith("root/.grok/bin/"):
-        return True
-    if rel == "root/.grok/downloads" or rel.startswith("root/.grok/downloads/"):
+    # v6.41: Grok Build حذف شد (کاربر Grok Bot می‌خواست که به 9router وصل
+    # نمی‌شود). اگر بقایایی از نصب قبلی مانده باشد، آرشیو نشود.
+    if rel == "root/.grok" or rel.startswith("root/.grok/"):
         return True
     # v6.36: دورریختنی‌های زیر .openclaw صریحاً prune می‌شوند (.git/cache/…)،
     # وگرنه walk داخلشان می‌رود و آرشیو در اعتبارسنجی مردود می‌شود.

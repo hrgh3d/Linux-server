@@ -308,9 +308,10 @@ provision_hermes() {
 }
 
 # ---------------------------------------------------------------------------
-# v6.39: کلاینت‌های CLI هوش مصنوعی (Claude Code + Grok CLI)
+# v6.39: کلاینت CLI هوش مصنوعی (Claude Code)
+# v6.41: Grok حذف شد — کاربر Grok Bot می‌خواست که به 9router وصل نمی‌شود.
 # همان الگوی 9router/OpenClaw: «تنظیمات می‌ماند، کد بازنصب می‌شود».
-#   * تنظیمات کاربر : /root/.claude و /root/.grok و /etc/profile.d/ai-clients.sh
+#   * تنظیمات کاربر : /root/.claude و /etc/profile.d/ai-clients.sh
 #                     → زیر /root و /etc هستند، پس در آرشیو حفظ می‌شوند.
 #   * کد npm        : /usr/local/lib/node_modules/... → آرشیو نمی‌شود
 #                     (حجیم و پر از node_modules) و اینجا بازنصب می‌شود.
@@ -334,50 +335,6 @@ provision_ai_clients() {
     fi
   done
 
-  # --- Grok Build (xAI رسمی) ------------------------------------------------
-  # نصب از x.ai/cli/install.sh (نه npm). باینری در /root/.grok/bin و symlink
-  # در /usr/local/bin. کانفیگ /root/.grok/config.toml به 9router اشاره می‌کند
-  # و چون models_base_url ست است، احراز هویت با API key انجام می‌شود و نیازی
-  # به `grok login` یا اشتراک xAI نیست.
-  # نکته: باینری ~۱۷۰MB است، پس مثل بقیهٔ کدها بازنصب می‌شود نه آرشیو.
-  if command -v grok >/dev/null 2>&1 && [ -x /root/.grok/bin/grok ]; then
-    note "Grok Build: present — kept (Mode 2)"
-  else
-    # پس از چرخش رانر، bin/ و downloads/ بازنگردانده می‌شوند، پس
-    # /root/.grok/bin/grok و /usr/local/bin/grok سیم‌لینک‌های شکسته‌اند.
-    # پاکشان کن تا نصب‌کننده تمیز کار کند.
-    for _l in /usr/local/bin/grok /usr/local/bin/agent \
-              /root/.grok/bin/grok /root/.grok/bin/agent; do
-      [ -L "$_l" ] && [ ! -e "$_l" ] && $SUDO rm -f "$_l" && log "Grok Build: removed dangling $_l"
-    done
-    log "Grok Build: binary missing — reinstalling from x.ai..."
-    if curl -fsSL --max-time 60 https://x.ai/cli/install.sh -o /tmp/grok-install.sh \
-       && timeout 900 bash /tmp/grok-install.sh >"${LOG_DIR}/grok-build.log" 2>&1; then
-      note "Grok Build: REINSTALLED ($(/root/.grok/bin/grok --version 2>/dev/null | head -1))"
-    else
-      note "Grok Build: reinstall FAILED (non-fatal)"
-      tail -10 "${LOG_DIR}/grok-build.log" 2>/dev/null | tee -a "${LOG_DIR}/summary.txt"
-    fi
-  fi
-
-  # اگر کانفیگ Grok Build گم شده بود (یا نصب تازه است) بازش بساز
-  if [ -x /root/.grok/bin/grok ] && ! grep -q models_base_url /root/.grok/config.toml 2>/dev/null; then
-    local gkey
-    gkey=$(python3 -c "import json;print(json.load(open('/root/.openclaw/openclaw.json'))['models']['providers']['ninerouter']['apiKey'])" 2>/dev/null || true)
-    if [ -n "$gkey" ]; then
-      {
-        printf '[cli]\ninstaller = "internal"\n\n[endpoints]\nmodels_base_url = "http://127.0.0.1:20128/v1"\n\n'
-        printf '[models]\ndefault = "Agentic"\nallowed_models = ["Agentic", "Brain", "ox-alpha", "vps", "ultimate"]\n'
-        for m in Agentic Brain ox-alpha vps ultimate; do
-          printf '\n[model.%s]\nmodel = "%s"\nname = "%s (9router combo)"\napi_key = "%s"\napi_backend = "openai-completions"\n' \
-                 "$m" "$m" "$m" "$gkey"
-        done
-      } > /root/.grok/config.toml
-      chmod 600 /root/.grok/config.toml
-      note "Grok Build: config.toml rebuilt (9router backend)"
-    fi
-  fi
-
   # اگر فایل env مشترک گم شده بود، از روی کلید 9router در کانفیگ OpenClaw بسازش
   if [ ! -f /etc/profile.d/ai-clients.sh ] && [ -f /root/.openclaw/openclaw.json ]; then
     local key
@@ -389,9 +346,6 @@ export ANTHROPIC_AUTH_TOKEN=${key}
 export ANTHROPIC_MODEL=Agentic
 export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1
 export CLAUDE_CODE_MAX_CONTEXT_TOKENS=128000
-export GROK_BASE_URL=http://127.0.0.1:20128/v1
-export GROK_API_KEY=${key}
-export GROK_MODEL=Agentic
 export OPENAI_BASE_URL=http://127.0.0.1:20128/v1
 export OPENAI_API_KEY=${key}
 PROF
