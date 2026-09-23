@@ -44,6 +44,14 @@ ensure_tunnel_stack() {
       sudo cp "$repo_dir/$s" "/usr/local/bin/$s" && sudo chmod +x "/usr/local/bin/$s"
     fi
   done
+  # v6.47: دروازهٔ گزارش همیشه از نسخهٔ ریپو تازه‌سازی می‌شود (نه فقط وقتی گم
+  # شده) تا اگر منطق ارسال عوض شد، نسخهٔ کهنه روی سرور نماند. تمام گزارش‌ها
+  # فقط از همین مسیر و فقط به ربات گزارش می‌روند.
+  if [ -f "$repo_dir/report.sh" ]; then
+    sudo cp -f "$repo_dir/report.sh" /usr/local/bin/report.sh
+    sudo chmod +x /usr/local/bin/report.sh
+    echo "[services] report gateway installed (single telegram destination)"
+  fi
   # v6.15: drop-in «همیشه ری‌استارت» برای یونیت‌های حیاتی (nginx شاملش نیست
   # که Restart دارد؟ دارد: همه با drop-in یکدست always می‌شوند) — idempotent.
   local _u _d _f
@@ -253,21 +261,38 @@ UNIT
 # ولی اگر دیتابیس تازه ساخته شود (بازیابی ناقص یا نصب تمیز) کامبوها گم
 # می‌شوند و کاربر دوباره فقط Sonnet/Opus می‌بیند. این تابع idempotent است:
 # فقط کامبوی غایب را اضافه می‌کند.
+# v6.47: کامبوها دیگر لیست ثابت نیستند — مستقیم از دیتابیس 9router خوانده
+# می‌شوند. پس هر کامبویی که کاربر در پنل بسازد یا تغییر دهد، بعد از بوت بعدی
+# خودکار در همهٔ برنامه‌ها ظاهر می‌شود و نیازی به ویرایش این اسکریپت نیست.
+# طبق درخواست کاربر (v6.47) «تمام کامبوها در تمام برنامه‌ها» — شامل ultimate،
+# چون خودش بعداً مدل داخلش را عوض می‌کند. Image هم می‌آید چون کاربر «تمام» گفت.
+read_9router_combos() {
+  python3 - <<'PYLIST'
+import sqlite3
+try:
+    c = sqlite3.connect('/root/.9router/db/data.sqlite', timeout=10)
+    for (n,) in c.execute("select name from combos order by name"):
+        if n: print(n)
+except Exception:
+    pass
+PYLIST
+}
+
 ensure_cloudcli_combos() {
   local db=/root/.cloudcli/auth.db
   [ -s "$db" ] || return 0
-  python3 - "$db" <<'PYCOMBO'
+  local names; names="$(read_9router_combos | paste -sd, -)"
+  [ -n "$names" ] || { echo "[services] cloudcli combos: no combos found in 9router"; return 0; }
+  python3 - "$db" "$names" <<'PYCOMBO'
 import sqlite3, sys
-db = sys.argv[1]
-# 'ultimate' عمداً نیست: تنها عضوش به provider ناموجود Bzrlnk اشاره می‌کند
-combos = ["Agentic", "Brain", "ox-alpha", "vps"]
+db, names = sys.argv[1], [x for x in sys.argv[2].split(",") if x]
 try:
     c = sqlite3.connect(db, timeout=10)
     have = {r[0] for r in c.execute(
         "select model_id from provider_models where provider='claude'")}
     order = len(have)
     added = []
-    for name in combos:
+    for name in names:
         if name in have:
             continue
         c.execute(
@@ -282,6 +307,134 @@ except Exception as exc:
     print("[services] cloudcli combos: skipped (%s)" % exc)
 PYCOMBO
 }
+
+# --- همان کامبوها برای Pi ---------------------------------------------------
+ensure_pi_combos() {
+  local mj=/root/.pi/agent/models.json
+  [ -s "$mj" ] || return 0
+  local names; names="$(read_9router_combos | paste -sd, -)"
+  [ -n "$names" ] || return 0
+  python3 - "$mj" "$names" <<'PYPI'
+import json, sys
+mj, names = sys.argv[1], [x for x in sys.argv[2].split(",") if x]
+try:
+    d = json.load(open(mj))
+    prov = d.setdefault("providers", {}).setdefault("ninerouter", {})
+    cur = {m.get("id") for m in prov.get("models", [])}
+    add = [n for n in names if n not in cur]
+    if add:
+        prov.setdefault("models", []).extend(
+            {"id": n, "contextWindow": 128000} for n in add)
+        json.dump(d, open(mj, "w"), indent=2)
+        print("[services] pi combos: %s added" % ", ".join(add))
+    else:
+        print("[services] pi combos: already present")
+except Exception as exc:
+    print("[services] pi combos: skipped (%s)" % exc)
+PYPI
+}
+
+# --- همان کامبوها برای OpenClaw --------------------------------------------
+ensure_openclaw_combos() {
+  local cfg=/root/.openclaw/openclaw.json
+  [ -s "$cfg" ] || return 0
+  local names; names="$(read_9router_combos | paste -sd, -)"
+  [ -n "$names" ] || return 0
+  python3 - "$cfg" "$names" <<'PYOC'
+import json, sys
+cfg, names = sys.argv[1], [x for x in sys.argv[2].split(",") if x]
+try:
+    d = json.load(open(cfg))
+    prov = d.setdefault("models", {}).setdefault("providers", {}).setdefault("ninerouter", {})
+    models = prov.setdefault("models", [])
+    cur = {m.get("id") if isinstance(m, dict) else m for m in models}
+    add = [n for n in names if n not in cur]
+    if add:
+        models.extend({"id": n, "name": "9router " + n, "contextWindow": 128000}
+                      for n in add)
+        json.dump(d, open(cfg, "w"), indent=2)
+        print("[services] openclaw combos: %s added" % ", ".join(add))
+    else:
+        print("[services] openclaw combos: already present")
+except Exception as exc:
+    print("[services] openclaw combos: skipped (%s)" % exc)
+PYOC
+}
+
+ensure_pi_combos
+ensure_openclaw_combos
+
+# --- v6.47: Pi Web — رابط وب برای Pi -----------------------------------------
+# خود Pi هیچ web UI داخلی ندارد (در pi --help هیچ فعل serve/web نیست).
+# @agegr/pi-web بالغ‌ترین گزینهٔ موجود است: همان فایل‌های نشست Pi در
+# ~/.pi/agent/sessions را می‌خواند (پس ترمینال و مرورگر دو نمای یک حالت‌اند)،
+# و مهم‌تر: PI_WEB_PASSWORD، PI_WEB_HOSTNAME و PI_WEB_ALLOWED_HOSTS دارد که
+# برای اجرای پشت Tailscale لازم است.
+ensure_piweb() {
+  command -v pi >/dev/null 2>&1 || return 0
+
+  if [ ! -x /usr/local/bin/pi-web ]; then
+    echo "[services] installing @agegr/pi-web"
+    timeout 900 sudo npm install -g --no-fund --no-audit @agegr/pi-web@latest \
+      >/tmp/piweb-install.log 2>&1 \
+      || { echo "[services] pi-web install failed: $(tail -3 /tmp/piweb-install.log | tr '\n' ' ')"; return 0; }
+  fi
+  [ -x /usr/local/bin/pi-web ] || return 0
+
+  # درس v6.34/v6.43: نام میزبان Tailscale باید در allowed hosts باشد وگرنه
+  # Next.js درخواست پروکسی‌شده را رد می‌کند و کاربر صفحهٔ خطا می‌بیند.
+  local DN
+  DN=$(tailscale status --json 2>/dev/null | python3 -c "
+import sys,json
+try: print(json.load(sys.stdin).get('Self',{}).get('DNSName','').rstrip('.'))
+except Exception: pass" 2>/dev/null)
+  local PW="${DASHBOARD_PASSWORD:-hamidgh69}"
+
+  sudo tee /etc/pi-web.env >/dev/null <<ENVF
+PORT=30141
+PI_WEB_HOSTNAME=127.0.0.1
+PI_WEB_NO_OPEN=1
+PI_WEB_SKIP_VERSION_CHECK=1
+PI_WEB_PASSWORD=${PW}
+PI_WEB_ALLOWED_HOSTS=${DN},${DN}:9445,127.0.0.1,localhost
+PI_WEB_IDLE_TIMEOUT_MS=0
+PI_CODING_AGENT_DIR=/root/.pi/agent
+HOME=/root
+ENVF
+  sudo chmod 600 /etc/pi-web.env
+
+  if [ ! -f /etc/systemd/system/pi-web.service ]; then
+    sudo tee /etc/systemd/system/pi-web.service >/dev/null <<'UNIT'
+[Unit]
+Description=Pi Web — browser UI for the Pi coding agent
+After=network-online.target 9router.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/pi-web.env
+ExecStart=/usr/local/bin/pi-web
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    sudo systemctl daemon-reload
+  fi
+
+  start_system pi-web.service
+  local _i
+  for _i in $(seq 1 12); do
+    curl -fsS -m 3 -o /dev/null http://127.0.0.1:30141/ 2>/dev/null && break
+    sleep 5
+  done
+  echo "[services] pi-web local: $(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:30141/)"
+}
+ensure_piweb
+
+
 ensure_cloudcli
 # v6.44: وصله‌های سمت مرورگر (فونت گوگل + service worker) هر بوت دوباره اعمال
 # می‌شوند، چون dist زیر node_modules است و با هر بازنصب npm تازه می‌شود.

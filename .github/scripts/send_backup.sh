@@ -97,6 +97,15 @@ SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/known_hosts -o P
          -o PubkeyAuthentication=no -o ConnectTimeout=15 -o ServerAliveInterval=15)
 SSHRUN() { sshpass -p "${ROOT_PASS}" ssh "${SSHOPTS[@]}" root@"${TARGET_IP}" "$@"; }
 ROOT_PASS="${HAMID_PASSWORD:?HAMID_PASSWORD تنظیم نشده است}"
+# v6.47: تنها دروازهٔ ارسال — هیچ curl مستقیمی به تلگرام نباید بماند.
+RPT=""
+for _c in "${GITHUB_WORKSPACE:-}/.github/scripts/report.sh" /usr/local/bin/report.sh \
+          "$(dirname "${BASH_SOURCE[0]}")/report.sh"; do
+  [ -x "$_c" ] && RPT="$_c" && break
+done
+rpt_text() { [ -n "$RPT" ] && "$RPT" text "$1"; }
+rpt_file() { [ -n "$RPT" ] && "$RPT" file "$1" "$2"; }
+
 SSH_OK=0
 for attempt in $(seq 1 12); do
   if SSHRUN 'echo OK' 2>/dev/null | grep -q OK; then SSH_OK=1; break; fi
@@ -109,9 +118,8 @@ if [ "$SSH_OK" != "1" ]; then
     # bootstrap (ریپو+کلیدها+RECOVERY) + اسنپ‌شات state از ریپوی state.
     echo "[backup] DR mode → continuing WITHOUT server data"
   else
-    curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-      -d "chat_id=${NOTIFY_CHAT_ID}" --data-urlencode "text=سیستم ${VPS_NAME} قطع شد ❌
-(بکاپ نگرفت: ورود SSH برقرار نشد)" >/dev/null 2>&1 || true
+    rpt_text "سیستم ${VPS_NAME} قطع شد ❌
+(بکاپ نگرفت: ورود SSH برقرار نشد)" || true
     exit 1
   fi
 fi
@@ -355,8 +363,8 @@ verify_bundle() {
 verify_bundle /tmp/final-backup.tar.gz
 
 send_doc() {
-  curl -fsS -m 300 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
-    -F "chat_id=${NOTIFY_CHAT_ID}" -F "document=@$1" -F "caption=$2" >/dev/null 2>&1
+  # v6.47: از راه report.sh → فقط ربات گزارش
+  rpt_file "$1" "$2"
 }
 CAP="🗄 بکاپ کامل سیستم ${VPS_NAME} — $(date -u '+%Y-%m-%d %H:%M') UTC (رویداد: ${TRIGGER})
 شامل: دادهٔ سرور + هویت Tailscale + OpenClaw (کانفیگ و دستگاه‌های جفت‌شده) + کل ریپو + کلیدها + RECOVERY.md

@@ -35,16 +35,25 @@ api() { local tok="$1"; shift
        -H "X-GitHub-Api-Version: 2022-11-28" "$@"; }
 
 tg() {
-  if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${NOTIFY_CHAT_ID:-}" ]; then
-    echo "[watchdog] WARN: no telegram token/chat — message not sent"; return 0
-  fi
-  if curl -fsS -m 20 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-       -d "chat_id=${NOTIFY_CHAT_ID}" -d "disable_web_page_preview=true" \
-       --data-urlencode "text=$1" >/dev/null 2>&1; then
-    echo "[watchdog] telegram sent"
-  else
-    echo "[watchdog] WARN: telegram send failed"
-  fi
+  # v6.47: تمام گزارش‌ها فقط از دروازهٔ report.sh و فقط به ربات گزارش می‌روند.
+  # قبلاً اینجا مستقیم با TELEGRAM_BOT_TOKEN (ربات Hermes) ارسال می‌شد که
+  # باعث پخش‌شدن گزارش‌ها بین دو ربات بود.
+  local R
+  for R in "${GITHUB_WORKSPACE:-}/.github/scripts/report.sh" \
+           /usr/local/bin/report.sh \
+           "$(dirname "${BASH_SOURCE[0]}")/report.sh"; do
+    if [ -x "$R" ]; then
+      if REPORT_BOT_TOKEN="${REPORT_BOT_TOKEN:-}" NOTIFY_CHAT_ID="${NOTIFY_CHAT_ID:-}" \
+         "$R" text "$1"; then
+        echo "[watchdog] telegram sent (report bot)"
+      else
+        echo "[watchdog] WARN: telegram send failed"
+      fi
+      return 0
+    fi
+  done
+  echo "[watchdog] WARN: report.sh not found — message not sent"
+  return 0
 }
 
 notify_state() {

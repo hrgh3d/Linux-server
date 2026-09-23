@@ -41,37 +41,20 @@ read_creds() {  # چاپ "TOKEN<TAB>CHAT" یا خطای غیرصفر
 }
 
 tg_report() {  # $1 = text — فقط ربات گزارش، هیچ کانال دیگری
-  local TOK CHAT CREDS
-  # v6.21 (علت ریشه‌ای): save.sh هنگام ساخت آرشیو، REPORT_BOT_TOKEN را موقتاً
-  # در .env خالی می‌کند. اگر دقیقاً در همان لحظه آدرس تونل عوض شود، اینجا
-  # توکن «خالی» دیده می‌شد و اعلان برای همیشه از دست می‌رفت. حالا از کش
-  # استفاده می‌شود تا این پنجره‌ی رقابتی بی‌اثر شود.
-  CREDS=$(read_creds) || {
-    log "WARN: REPORT_BOT_TOKEN/NOTIFY_CHAT_ID unavailable (no cache) — announce deferred"
-    return 1
-  }
-  TOK="${CREDS%%$'\t'*}"; CHAT="${CREDS##*$'\t'}"
-  if [ -z "${TOK:-}" ] || [ -z "${CHAT:-}" ]; then
-    log "WARN: report creds empty — announce deferred"
-    return 1
-  fi
-  # v6.21: تلاش چندباره + برگرداندن کد خطای واقعی.
-  # باگ قبلی: در شاخه‌ی شکست، return غیرصفر نداشت و مقدار بازگشتی تابع صفر
-  # (موفق) می‌شد؛ در نتیجه caller آدرس را «اعلام‌شده» ثبت می‌کرد و آن آدرس
-  # دیگر هرگز دوباره ارسال نمی‌شد (اعلان برای همیشه گم می‌شد).
-  local i code
-  for i in 1 2 3; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST \
-      "https://api.telegram.org/bot${TOK}/sendMessage" \
-      -d "chat_id=${CHAT}" -d "disable_web_page_preview=true" \
-      --data-urlencode "text=$1" 2>/dev/null)
-    if [ "$code" = "200" ]; then
-      log "announced via REPORT bot"
-      return 0
+  # v6.47: منطق اختصاصی ارسال حذف شد و به دروازهٔ مرکزی report.sh سپرده شد.
+  # خود report.sh تلاش مجدد، کش اعتبارنامه و پنجرهٔ خالی‌سازی save.sh را
+  # مدیریت می‌کند، پس رفتار قبلی (v6.21) حفظ می‌شود.
+  local R
+  for R in /usr/local/bin/report.sh \
+           "${GITHUB_WORKSPACE:-}/.github/scripts/report.sh" \
+           "$(dirname "${BASH_SOURCE[0]}")/report.sh"; do
+    if [ -x "$R" ]; then
+      "$R" text "$1" && return 0
+      log "WARN: report gateway could not deliver — announce deferred"
+      return 1
     fi
-    log "WARN: telegram send failed (http=$code, try $i/3)"
-    sleep 3
   done
+  log "WARN: report.sh not found — announce deferred"
   return 1
 }
 

@@ -328,7 +328,8 @@ provision_ai_clients() {
   local flags
   for spec in "@anthropic-ai/claude-code:claude:Claude Code:" \
               "@earendil-works/pi-coding-agent:pi:Pi:--ignore-scripts" \
-              "@cloudcli-ai/cloudcli:cloudcli:CloudCLI UI:"; do
+              "@cloudcli-ai/cloudcli:cloudcli:CloudCLI UI:" \
+              "@agegr/pi-web:pi-web:Pi Web UI:"; do
     pkg="${spec%%:*}"; rest="${spec#*:}"; bin="${rest%%:*}"; rest="${rest#*:}"
     name="${rest%%:*}"; flags="${rest#*:}"
     if command -v "$bin" >/dev/null 2>&1; then
