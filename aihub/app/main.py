@@ -125,6 +125,7 @@ async def sessions(app_key: str | None = Query(None, alias="app"),
                    include_archived: bool = False):
     """نشست‌های همهٔ برنامه‌ها، مرتب‌شده بر اساس آخرین فعالیت."""
     def build():
+        """فقط خواندنِ گرانِ نشست‌ها از خود ایجنت‌ها کش می‌شود."""
         out = []
         targets = ([ADAPTERS[app_key]] if app_key and app_key in ADAPTERS
                    else list(ADAPTERS.values()))
@@ -133,6 +134,12 @@ async def sessions(app_key: str | None = Query(None, alias="app"),
                 out.extend(asdict(s) for s in ad.sessions())
             except Exception:                                  # noqa: BLE001
                 continue
+        return out
+
+    raw = await cached(f"sessions:{app_key or 'all'}:raw", build)
+    out = [dict(s) for s in raw]     # کپی، وگرنه merge کشِ خام را آلوده می‌کند
+
+    def finish(out):
         # متادیتای دلخواه کاربر روی نشست واقعی سوار می‌شود. نام اصلی در
         # real_title نگه داشته می‌شود تا هیچ اطلاعاتی گم نشود.
         meta = store.meta_all()
@@ -165,7 +172,10 @@ async def sessions(app_key: str | None = Query(None, alias="app"),
         rest = sorted([s for s in out if not s.get("pinned")],
                       key=lambda s: (s.get("last_active") or ""), reverse=True)
         return pinned + rest
-    return await cached(f"sessions:{app_key or 'all'}:{int(include_archived)}", build)
+
+    # متادیتا هرگز کش نمی‌شود: تغییر نام یا انتقال به پروژه باید فوری
+    # دیده شود، نه بعد از چهار ثانیه.
+    return finish(out)
 
 
 @app.get("/api/attention")

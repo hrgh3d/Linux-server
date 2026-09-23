@@ -789,3 +789,59 @@ def test_junk_scan_never_proposes_pinned_or_project_sessions(monkeypatch):
 def test_frontend_shows_unknown_count_as_dash():
     h = _html()
     assert "s.msg_count==null?'—'" in h, "unknown count must not render as 0"
+
+
+def test_metadata_changes_are_visible_immediately_not_after_cache_ttl(client):
+    """
+    باگ واقعی: merge متادیتا داخل تابعِ کش‌شونده بود، پس bind/rename تا
+    ۴ ثانیه دیده نمی‌شد — روی سرور «bound -> [None]» داد. متادیتا هرگز
+    نباید کش شود؛ فقط خواندن گرانِ خود ایجنت‌ها.
+    """
+    pid = client.post("/api/projects", json={
+        "name": "p", "goal": "g", "icon": "🧠",
+        "mode": "manual", "budget": 1}).json()["project"]["id"]
+    ss = client.get("/api/sessions").json()
+    assert ss, "fixture has no sessions"
+    s = ss[0]
+
+    r = client.post(f"/api/session/{s['source']}/{s['id']}/bind",
+                    json={"project_id": pid})
+    assert r.status_code == 200
+    # بدون هیچ صبری
+    back = [x for x in client.get("/api/sessions").json()
+            if x["id"] == s["id"]][0]
+    assert back["project_id"] == pid, "bind invisible — sessions cache is stale"
+
+    client.patch(f"/api/session/{s['source']}/{s['id']}/meta",
+                 json={"title": "نام تازه"})
+    back = [x for x in client.get("/api/sessions").json()
+            if x["id"] == s["id"]][0]
+    assert back["title"] == "نام تازه", "rename invisible"
+    assert back["real_title"] == s["title"], "original title lost"
+
+    client.post(f"/api/session/{s['source']}/{s['id']}/bind",
+                json={"project_id": None})
+    back = [x for x in client.get("/api/sessions").json()
+            if x["id"] == s["id"]][0]
+    assert back["project_id"] is None, "unbind invisible"
+
+
+def test_raw_session_cache_is_not_poisoned_by_merge(client):
+    """
+    merge نباید روی شیء کش‌شده بنویسد، وگرنه real_title پس از دومین
+    تغییرِ نام به «نام قبلیِ کاربر» تبدیل می‌شود و عنوان اصلیِ ایجنت
+    برای همیشه گم می‌شود.
+    """
+    ss = client.get("/api/sessions").json()
+    s = ss[-1]                      # نشستی که تست‌های قبلی دستش نزده‌اند
+    sid, src = s["id"], s["source"]
+    origin = s.get("real_title") or s["title"]
+
+    client.patch(f"/api/session/{src}/{sid}/meta", json={"title": "AAA"})
+    a = [x for x in client.get("/api/sessions").json() if x["id"] == sid][0]
+    client.patch(f"/api/session/{src}/{sid}/meta", json={"title": "BBB"})
+    b = [x for x in client.get("/api/sessions").json() if x["id"] == sid][0]
+
+    assert a["title"] == "AAA" and b["title"] == "BBB"
+    assert a["real_title"] == b["real_title"] == origin, \
+        "real_title drifted — the cached object was mutated"
