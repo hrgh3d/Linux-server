@@ -390,15 +390,17 @@ PYEOF
   # پیش‌فرض‌های Pi — فقط اگر نبودند؛ انتخاب‌های بعدی کاربر بازنویسی نمی‌شود.
   if [ ! -s /root/.pi/agent/settings.json ]; then
     mkdir -p /root/.pi/agent
+    # نکته: عمداً تورفتگی دارد تا هیچ خطی با «}» در ستون صفر شروع نشود؛
+    # وگرنه ابزارهایی که تابع را با sed/awk بیرون می‌کشند وسط heredoc قطع می‌شوند.
     cat >/root/.pi/agent/settings.json <<'PISET'
-{
-  "defaultProvider": "ninerouter",
-  "defaultModel": "Agentic",
-  "defaultThinkingLevel": "off",
-  "defaultProjectTrust": "always",
-  "enabledModels": ["ninerouter/*"],
-  "quietStartup": true
-}
+  {
+    "defaultProvider": "ninerouter",
+    "defaultModel": "Agentic",
+    "defaultThinkingLevel": "off",
+    "defaultProjectTrust": "always",
+    "enabledModels": ["ninerouter/*"],
+    "quietStartup": true
+  }
 PISET
     note "Pi: settings.json rebuilt"
   fi
