@@ -246,6 +246,42 @@ UNIT
   fi
   mkdir -p /root/.cloudcli 2>/dev/null || true
 }
+# v6.45: کامبوهای 9router را به فهرست مدل‌های CloudCLI برمی‌گرداند.
+# CloudCLI فهرست مدل‌های Claude را از یک کاتالوگ hardcode شده می‌خواند و فقط
+# ردیف‌های جدول provider_models را به آن merge می‌کند. آن جدول در
+# /root/.cloudcli/auth.db است که آرشیو می‌شود، پس معمولاً سالم برمی‌گردد —
+# ولی اگر دیتابیس تازه ساخته شود (بازیابی ناقص یا نصب تمیز) کامبوها گم
+# می‌شوند و کاربر دوباره فقط Sonnet/Opus می‌بیند. این تابع idempotent است:
+# فقط کامبوی غایب را اضافه می‌کند.
+ensure_cloudcli_combos() {
+  local db=/root/.cloudcli/auth.db
+  [ -s "$db" ] || return 0
+  python3 - "$db" <<'PYCOMBO'
+import sqlite3, sys
+db = sys.argv[1]
+# 'ultimate' عمداً نیست: تنها عضوش به provider ناموجود Bzrlnk اشاره می‌کند
+combos = ["Agentic", "Brain", "ox-alpha", "vps"]
+try:
+    c = sqlite3.connect(db, timeout=10)
+    have = {r[0] for r in c.execute(
+        "select model_id from provider_models where provider='claude'")}
+    order = len(have)
+    added = []
+    for name in combos:
+        if name in have:
+            continue
+        c.execute(
+            "insert into provider_models(provider,model_id,model_name,sort_order,"
+            "created_at,updated_at) values('claude',?,?,?,datetime('now'),datetime('now'))",
+            (name, "9router " + name, order))
+        order += 1
+        added.append(name)
+    c.commit()
+    print("[services] cloudcli combos: " + (", ".join(added) + " added" if added else "already present"))
+except Exception as exc:
+    print("[services] cloudcli combos: skipped (%s)" % exc)
+PYCOMBO
+}
 ensure_cloudcli
 # v6.44: وصله‌های سمت مرورگر (فونت گوگل + service worker) هر بوت دوباره اعمال
 # می‌شوند، چون dist زیر node_modules است و با هر بازنصب npm تازه می‌شود.
@@ -268,6 +304,7 @@ if [ -f /etc/systemd/system/cloudcli.service ] && [ -s /etc/cloudcli.env ]; then
   fi
   if curl -fsS -m 3 -o /dev/null http://127.0.0.1:3001/ 2>/dev/null; then
     echo "[services] cloudcli: UI healthy on 127.0.0.1:3001 (https :8443 via tailnet)"
+    ensure_cloudcli_combos
   else
     echo "[services] cloudcli: not answering yet — Restart=always will keep retrying"
   fi
