@@ -406,19 +406,10 @@ def test_frontend_has_session_management():
     assert "trash for 30 days" in h
 
 
-def test_frontend_has_projects_and_memory():
-    """خواستهٔ ۴ و ۵."""
-    h = _html()
-    for fn in ("openProject", "projDlg", "ctxPreview", "runRole", "runProject"):
-        assert fn in h, f"missing {fn}"
-    assert "Shared memory" in h
-    assert "MEMORY:" in h, "users are never told how agents write to memory"
-
-
 def test_frontend_has_new_capabilities():
     h = _html()
-    for fn in ("handoffDlg", "raceDlg", "permDlg", "skillsDlg", "reviewDlg",
-               "membersDlg"):
+    for fn in ("handoffDlg", "raceDlg", "permDlg", "skillsDlg",
+               "membersDlg", "workspaceDlg", "trashDlg"):
         assert fn in h, f"missing {fn}"
 
 
@@ -436,8 +427,8 @@ def test_frontend_still_rtl_safe():
 
 def test_frontend_chrome_still_english():
     h = _html()
-    for w in ["Sessions", "Projects", "Shared memory", "Hand off", "Permissions",
-              "Race combos", "Rename", "Archive", "Budget cap"]:
+    for w in ["Sessions", "Hand off", "Permissions",
+              "Race combos", "Rename", "Archive", "Workspace"]:
         assert w in h, f"missing English label: {w}"
 
 
@@ -455,8 +446,7 @@ def test_frontend_escapes_everything_user_supplied():
     """
     h = _html()
     assert "constesc=" in h.replace(" ", ""), "no escape helper"
-    for expr in ("esc(s.title", "esc(m.text", "esc(p.name", "esc(t.text)",
-                 "esc(s.preview", "esc(r.task)"):
+    for expr in ("esc(s.title", "esc(t.text)", "esc(s.preview"):
         assert expr in h, f"unescaped render: {expr}"
 
 
@@ -697,24 +687,6 @@ def test_frontend_is_usable_without_a_mouse():
     b = block[0]
     for sel in (".si .more", ".mn .pinb", ".memi .d"):
         assert sel in b, f"{sel} stays invisible on touch"
-
-
-def test_frontend_has_two_modes_general_and_projects():
-    h = _html()
-    assert 'data-t="sessions"' in h and 'data-t="projects"' in h
-    assert ">General<" in h, "the non-project mode should be named clearly"
-    # نشست عضو پروژه نباید در حالت کلی تکرار شود
-    assert "!s.project_id" in h
-    # و باید زیر پروژهٔ خودش دیده شود
-    assert "s.project_id===p.id" in h
-
-
-def test_frontend_memory_is_automatic_not_manual():
-    h = _html()
-    assert "learned" in h, "user is never shown what was auto-remembered"
-    assert "added to shared memory" in h
-    assert "moveToProject" in h and "addChatDlg" in h
-    assert "bindSession" in h
 
 
 def test_send_endpoint_injects_context_and_harvests():
@@ -1173,13 +1145,6 @@ def test_frontend_keeps_the_returned_session_id():
     assert "view.sid=j.session_id" in h.replace(" ", "")
 
 
-def test_frontend_has_a_delete_project_control():
-    """endpoint وجود داشت ولی هیچ دکمه‌ای صدایش نمی‌زد."""
-    h = _html()
-    assert "delP" in h
-    assert "/api/projects/'+encodeURIComponent(p.id)" in h.replace('"', "'")
-
-
 def test_claude_uses_session_id_for_new_and_resume_for_existing(monkeypatch):
     """
     `--resume` روی نشستی که هنوز وجود ندارد «No conversation found» می‌دهد.
@@ -1345,15 +1310,17 @@ def test_pi_never_double_decorates_its_session_id(monkeypatch):
 # ═══════════ v2.4: ممیزی رابط — دکمه‌ها و تازه‌سازی زنده
 
 
-def test_new_project_button_does_not_leak_the_click_event():
+def test_projects_surface_is_fully_removed():
     """
-    `np.onclick=projDlg` یعنی خودِ MouseEvent به‌عنوان «پروژه» پاس می‌شد،
-    پس `ed=!!p` درست می‌شد، دیالوگ در حالت «ویرایش» باز می‌شد و روی ذخیره
-    `PATCH /api/projects/undefined` می‌زد ⇒ «New project کار نمی‌کند».
+    کاربر خواست محیط پروژه/مشترک فعلاً کامل برداشته شود. هیچ باقیمانده‌ای
+    نباید بماند، وگرنه دکمه‌ای می‌ماند که به تابعِ حذف‌شده اشاره می‌کند و
+    رابط با ReferenceError می‌شکند.
     """
     h = _html()
-    assert "np.onclick=projDlg" not in h.replace(" ", "")
-    assert "np.onclick=()=>projDlg()" in h.replace(" ", "")
+    for gone in ("openProject", "projDlg", "treeProjects", "paintThread",
+                 "moveToProject", "bindSession", "addChatDlg",
+                 'data-t="projects"'):
+        assert gone not in h, f"leftover project reference: {gone}"
 
 
 def test_no_handler_passes_a_bare_function_reference():
@@ -1425,16 +1392,6 @@ def test_skipping_a_render_does_not_swallow_the_change():
     menu_at = seg.index("classList.contains('on')")
     save_at = seg.index("lastFp=fp")
     assert menu_at < save_at, "fingerprint saved before the early return"
-
-
-def test_send_does_not_guess_which_session_to_bind():
-    """
-    کد قبلی «تازه‌ترین نشستِ بی‌پروژه» را حدس می‌زد و وصلش می‌کرد — که
-    می‌توانست گفت‌وگوی اشتباهی را به پروژه ببندد. سرور خودش بایند می‌کند.
-    """
-    h = _html()
-    assert "x.source===a&&!x.project_id" not in h.replace(" ", ""), \
-        "still guessing the session to bind"
 
 
 def test_draft_session_opens_without_hitting_the_detail_api(client):
@@ -1583,17 +1540,57 @@ def test_per_session_reasoning_and_exec_toggles(client):
     assert g["reasoning"] is True and g["exec_tools"] is False
 
 
-def test_hermes_export_noise_is_not_shown_as_the_conversation():
+def test_hermes_is_read_from_its_database_not_the_export_cli():
     """
-    `hermes sessions export pending-…` می‌نویسد «Exported 0 sessions to …»
-    و همان به‌عنوان *محتوای گفت‌وگو* نمایش داده می‌شد — کاربر بعد از ساخت
-    نشست متن گفت‌وگویش را گم می‌کرد.
+    `hermes sessions export` متن را روی stdout نمی‌دهد؛ **یک فایل در پوشهٔ
+    کاری می‌سازد** (شش فایل ۲۴KB–۱۳۷KB در /opt/aihub جا مانده بود) و تنها
+    چیزی که چاپ می‌کند «Exported 1 sessions to …» است — که همان به‌عنوان
+    محتوای گفت‌وگو نمایش داده می‌شد.
     """
     import inspect
     from app import main as m
     src = inspect.getsource(m.session_detail)
-    assert "Exported 0 sessions" in src
-    assert 'startswith("pending-")' in src
+    assert "sessions\", \"export" not in src.replace(" ", ""), \
+        "still shelling out to the export CLI"
+    assert "/root/.hermes/state.db" in src
+    assert "from messages" in src
+
+
+def test_every_agent_has_a_transcript_reader():
+    """
+    OpenClaw اصلاً شاخه‌ای در session_detail نداشت ⇒ هر نشستش همیشه
+    خالی بود.
+    """
+    import inspect
+    from app import main as m
+    src = inspect.getsource(m.session_detail)
+    for a in ("claude", "pi", "hermes", "openclaw"):
+        assert f'"{a}"' in src, f"{a} has no transcript reader"
+
+
+def test_draft_flag_is_cleared_even_when_the_id_does_not_change():
+    """
+    ریشهٔ «پیام‌ها نمایش داده نمی‌شوند»: Claude و OpenClaw همان شناسه‌ای
+    را نگه می‌دارند که ما دادیم، پس شرط `sid != session_id` هرگز برقرار
+    نمی‌شد و نشست تا ابد «پیش‌نویس» می‌ماند — و endpoint جزئیات برای
+    پیش‌نویس همیشه لیست خالی برمی‌گرداند.
+    """
+    import inspect
+    from app import main as m
+    src = inspect.getsource(m._run_send)
+    assert "elif sid:" in src, "draft is only cleared when the id changes"
+
+
+def test_pi_session_title_is_not_the_working_directory():
+    """
+    عنوان از نام پوشهٔ کاری گرفته می‌شد، پس هر نشستی که هاب می‌ساخت
+    «aihub» نام می‌گرفت و همه شبیه هم می‌شدند.
+    """
+    import inspect
+    from app import adapters
+    src = inspect.getsource(adapters.PiAdapter.sessions)
+    assert "first_user" in src
+    assert "os.path.basename(os.path.dirname(f))" not in src
 
 
 def test_claude_fallback_is_not_a_provider_with_no_credits():
@@ -1687,21 +1684,6 @@ def test_deleting_a_workspace_file_keeps_a_trash_copy(client):
     assert len(client.get("/api/trash").json()["items"]) == before + 1
 
 
-def test_frontend_projects_use_the_teammate_rail():
-    h = _html()
-    assert "pgrid" in h and "prail" in h, "no teammate rail"
-    assert "data-ag=" in h, "agents are not individually selectable"
-    assert "paintAgent" in h, "no per-agent chat"
-    assert "paintThread" in h, "no shared thread"
-    assert "paintFiles" in h, "no shared workspace"
-
-
-def test_frontend_keeps_the_review_gate():
-    """دروازهٔ بازبینی نباید در بازطراحی گم شود."""
-    h = _html()
-    assert "paintReceipts" in h and "reviewDlg" in h
-
-
 # ═══════════ v2.7: هشت ایراد گزارش‌شدهٔ کاربر
 
 
@@ -1755,7 +1737,7 @@ def test_checkbox_wiring_lives_in_the_sessions_tree():
     """
     h = _html()
     t0 = h.index("function tree(){")
-    t1 = h.index("function treeProjects(){")
+    t1 = h.index("\n}", t0)
     assert "#tree .pick" in h[t0:t1], "checkbox handler is not inside tree()"
 
 
@@ -1777,15 +1759,3 @@ def test_enter_makes_a_newline_and_does_not_send():
     assert "!e.shiftKey){e.preventDefault();\n    send()" not in seg
 
 
-def test_project_thread_has_a_bottom_agent_picker():
-    """خواستهٔ ۸: از نوار پایین انتخاب کن با کدام ایجنت حرف می‌زنی."""
-    h = _html()
-    assert "agbar" in h and "agpick" in h
-    assert 'data-to="__all"' in h, "no way to ask the whole team at once"
-
-
-def test_project_view_has_the_three_pane_grok_layout():
-    h = _html()
-    css = h[h.index(".pgrid{"):h.index(".pgrid{") + 200]
-    assert css.count("1fr") >= 1 and "220px" in css, "no artifacts side panel"
-    assert "paintSide" in h

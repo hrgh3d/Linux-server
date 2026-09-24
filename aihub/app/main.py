@@ -21,6 +21,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import shutil
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -423,36 +424,67 @@ async def session_detail(app_key: str, sid: str, limit: int = 60):
                                              "ts": d.get("timestamp")})
                     break
         elif app_key == "hermes":
-            # شناسهٔ placeholder هنوز نشست واقعی نیست؛ `hermes sessions
-            # export pending-…` جملهٔ «Exported 0 sessions to …» را چاپ
-            # می‌کرد و همان به‌عنوان *محتوای گفت‌وگو* نمایش داده می‌شد —
-            # یعنی کاربر بعد از ساخت نشست، متن گفت‌وگویش را گم می‌کرد.
+            # مستقیم از انبار SQLite خود هرمس.
+            # قبلاً `hermes sessions export` صدا زده می‌شد که (الف) متن را
+            # روی stdout نمی‌دهد بلکه **یک فایل در پوشهٔ کاری می‌سازد** —
+            # شش فایل ۲۴KB تا ۱۳۷KB در /opt/aihub جا مانده بود — و (ب)
+            # تنها چیزی که چاپ می‌کرد «Exported 1 sessions to …» بود که
+            # همان به‌عنوان محتوای گفت‌وگو نمایش داده می‌شد.
             if not sid.startswith("pending-"):
-                rc, out = _sh(["hermes", "sessions", "export", sid, "--format",
-                               "jsonl"], timeout=30)
-                if rc != 0 or "Exported 0 sessions" in out:
-                    rc, out = _sh(["hermes", "sessions", "export", sid],
-                                  timeout=30)
-                if rc == 0 and "Exported 0 sessions" not in out:
-                    for line in out.splitlines():
-                        line = line.strip()
-                        if not line or line.startswith("Exported "):
+                try:
+                    con = sqlite3.connect(
+                        f"file:{rp('/root/.hermes/state.db')}?mode=ro",
+                        uri=True, timeout=5)
+                    con.row_factory = sqlite3.Row
+                    for r in con.execute(
+                            "select role, content, timestamp from messages"
+                            " where session_id=? order by id", (sid,)):
+                        role = (r["role"] or "").lower()
+                        if role not in ("user", "assistant"):
                             continue
-                        if line.startswith("{"):
-                            try:
-                                d = json.loads(line)
-                                r = d.get("role") or d.get("type")
-                                if r in ("user", "assistant"):
-                                    msgs.append({
-                                        "role": r,
-                                        "text": _text_of(d.get("content")
-                                                         or d.get("text"))[:4000],
-                                        "ts": d.get("timestamp")})
-                                    continue
-                            except Exception:                  # noqa: BLE001
-                                pass
-                        msgs.append({"role": "log", "text": line[:2000],
-                                     "ts": None})
+                        txt = (r["content"] or "").strip()
+                        if not txt:
+                            continue
+                        msgs.append({"role": role, "text": txt[:4000],
+                                     "ts": r["timestamp"]})
+                    con.close()
+                except Exception:                              # noqa: BLE001
+                    pass
+
+        elif app_key == "openclaw":
+            # اوپن‌کلاو اصلاً شاخه‌ای نداشت ⇒ هر نشستش همیشه خالی بود.
+            # رویدادها در transcript_events با event_json ذخیره می‌شوند.
+            try:
+                con = sqlite3.connect(
+                    f"file:{rp('/root/.openclaw/agents/main/agent/openclaw-agent.sqlite')}?mode=ro",
+                    uri=True, timeout=5)
+                con.row_factory = sqlite3.Row
+                for r in con.execute(
+                        "select event_json from transcript_events"
+                        " where session_id=? order by seq", (sid,)):
+                    try:
+                        d = json.loads(r["event_json"])
+                    except Exception:                          # noqa: BLE001
+                        continue
+                    if d.get("type") != "message":
+                        continue
+                    m = d.get("message") or {}
+                    role = (m.get("role") or "").lower()
+                    if role not in ("user", "assistant"):
+                        continue
+                    txt = _text_of(m.get("content"))
+                    # پیام‌های داخلی سیستم (heartbeat و مانند آن) گفت‌وگو
+                    # نیستند و نباید به کاربر نشان داده شوند.
+                    prov = (m.get("provenance") or {}).get("kind")
+                    if prov == "internal_system" or txt.strip() in (
+                            "[OpenClaw heartbeat poll]", "NO_REPLY", ""):
+                        continue
+                    msgs.append({"role": role, "text": txt[:4000],
+                                 "ts": d.get("timestamp")})
+                con.close()
+            except Exception:                                  # noqa: BLE001
+                pass
+
         return {"app": app_key, "id": sid, "messages": msgs[-limit:]}
     return await cached(f"detail:{app_key}:{sid}", build, ttl=3)
 
@@ -622,7 +654,21 @@ def _run_send(jid: str, app_key: str, text: str, session_id: str | None,
         if prev and prev.startswith("pending-"):
             prev = None
 
-        jobs.set_(jid, state="running", phase=f"{ad.name} در حال پاسخ")
+        # ⚠️ تا امروز این دو کلید فقط ذخیره می‌شدند و **هیچ اثری روی
+        # درخواست نداشتند** — یعنی دکمه‌ها ظاهری بودند.
+        st = store.meta_get(app_key, session_id or "") or {}
+        if st.get("reasoning"):
+            prompt = ("[MODE: reasoning] پیش از پاسخ، گام‌به‌گام فکر کن و "
+                      "استدلالت را زیر عنوان «استدلال:» بنویس، بعد پاسخ "
+                      "نهایی را زیر «پاسخ:».\n\n" + prompt)
+        if st.get("exec_tools"):
+            prompt = ("[MODE: commands allowed] در صورت نیاز اجازه داری "
+                      "دستور اجرا کنی و خروجی واقعی را گزارش کنی.\n\n"
+                      + prompt)
+
+        jobs.set_(jid, state="running", phase=f"{ad.name} در حال پاسخ",
+                  reasoning=bool(st.get("reasoning")),
+                  exec_tools=bool(st.get("exec_tools")))
         ok, out, sid = ad.send(prompt, prev, job=jid)
 
         if jobs.get(jid) and jobs.get(jid)["state"] == "cancelled":
@@ -638,14 +684,17 @@ def _run_send(jid: str, app_key: str, text: str, session_id: str | None,
             if session_id:
                 old = store.meta_get(app_key, session_id) or {}
                 carry = {k: v for k, v in old.items()
-                         if k in ("title", "project_id", "pinned", "icon",
-                                  "color") and v}
+                         if k in ("title", "pinned", "icon", "color") and v}
                 if session_id.startswith("pending-"):
                     store.meta_del(app_key, session_id)
-            if project_id:
-                carry["project_id"] = project_id
             carry["draft"] = 0
             store.meta_set(app_key, sid, carry)
+        elif sid:
+            # ⚠️ Claude و OpenClaw همان شناسه‌ای را نگه می‌دارند که ما
+            # دادیم، پس شرط بالا هرگز برقرار نمی‌شود. اگر اینجا draft را
+            # پاک نکنیم، نشست تا ابد «پیش‌نویس» می‌ماند و صفحهٔ گفت‌وگو
+            # همیشه خالی است — دقیقاً باگی که کاربر دید.
+            store.meta_set(app_key, sid, draft=0)
 
         learned: list[str] = []
         if ok and pid:

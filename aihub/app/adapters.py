@@ -702,6 +702,7 @@ class PiAdapter(Adapter):
             last_text, n, model = "", 0, None
             last_ts: float | None = None
             last_role: str | None = None
+            first_user = ""            # عنوان از اولین چیزی که کاربر گفت
             for d in recs:
                 if d.get("cwd"):
                     cwd = d["cwd"]
@@ -714,7 +715,13 @@ class PiAdapter(Adapter):
                         n += 1
                         last_role = msg["role"]
                         last_ts = _rec_ts(d) or last_ts
-                        last_text = _text_of(msg.get("content")) or last_text
+                        txt = _text_of(msg.get("content"))
+                        last_text = txt or last_text
+                        if msg["role"] == "user" and not first_user and txt:
+                            # زمینهٔ تزریق‌شدهٔ پروژه عنوان نیست
+                            body = txt.split("--- YOUR TASK ---")[-1]
+                            first_user = body.strip().splitlines()[0][:60] \
+                                if body.strip() else ""
                 elif t == "model_change":
                     model = d.get("model") or d.get("to") or model
                 elif t == "session":
@@ -732,7 +739,10 @@ class PiAdapter(Adapter):
                 state = "idle"
             out.append(Session(
                 id=os.path.basename(f)[:-6],
-                title=_clean((cwd or os.path.basename(os.path.dirname(f))).split("/")[-1] or "pi", 40),
+                # عنوان = اولین پیام کاربر. قبلاً نام پوشهٔ کاری بود، پس
+                # هر نشستی که هاب می‌ساخت «aihub» نام می‌گرفت (چون سرویس
+                # در /opt/aihub اجرا می‌شود) و همه شبیه هم می‌شدند.
+                title=_clean(first_user or (cwd or "pi").split("/")[-1], 40),
                 preview=_clean(last_text), last_active=iso(mtime),
                 model=model, msg_count=n, cwd=cwd,
                 state=state, source=self.key))

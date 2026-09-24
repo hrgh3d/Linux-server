@@ -375,7 +375,9 @@ def test_frontend_escapes_user_content():
     flat = html.replace(" ", "")
     assert "constesc=" in flat, "no HTML-escape helper"
     assert "&amp;" in html and "&lt;" in html, "escape map incomplete"
-    assert "esc(m.text)" in html and "esc(h.snippet)" in html
+    # متن پیام از راه md() می‌رود که خودش esc می‌کند؛ بقیهٔ جاها مستقیم.
+    assert "esc(h.snippet)" in html
+    assert "md(m.text)" in html or "esc(m.text)" in html
 
 
 def test_frontend_is_mobile_first():
