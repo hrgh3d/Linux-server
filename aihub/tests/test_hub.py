@@ -202,7 +202,9 @@ def test_openclaw_reads_session_nodes_not_conversations():
     from app.adapters import OpenClawAdapter
     ss = OpenClawAdapter().sessions()
     assert ss, "OpenClaw returned nothing — did it read the empty table again?"
-    assert ss[0].title == "dashboard"
+    # عنوان حالا از اولین پیام واقعی کاربر می‌آید، نه از بخشِ کلید
+    # (`agent:main:**dashboard**:…`) که برای همهٔ نشست‌ها تکراری بود.
+    assert ss[0].title == "گزارش روزانه"
     assert ss[0].state == "working"
 
 

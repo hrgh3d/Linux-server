@@ -569,6 +569,7 @@ class ClaudeAdapter(Adapter):
             if not recs:
                 continue
             model, last_role, last_text, n = None, None, "", 0
+            first_user = ""
             last_ts: float | None = None
             for d in recs:
                 t = d.get("type")
@@ -585,7 +586,10 @@ class ClaudeAdapter(Adapter):
                     if isinstance(msg, dict):
                         if msg.get("model"):
                             model = msg["model"]
-                        last_text = _text_of(msg.get("content")) or last_text
+                        txt = _text_of(msg.get("content"))
+                        last_text = txt or last_text
+                        if t == "user" and not first_user and txt:
+                            first_user = txt.strip().splitlines()[0][:60]
             mtime = last_ts or os.path.getmtime(f)
             age = time.time() - mtime
             # اگر آخرین پیام از کاربر باشد یعنی مدل دارد کار می‌کند
@@ -596,7 +600,11 @@ class ClaudeAdapter(Adapter):
                 state = "working"
             out.append(Session(
                 id=os.path.basename(f)[:-6],
-                title=_clean(os.path.basename(os.path.dirname(f)).strip("-") or "root", 40),
+                # عنوان = اولین چیزی که کاربر گفت. قبلاً نام پوشهٔ پروژهٔ
+                # کلاد بود، پس همهٔ نشست‌ها «opt-aihub» نام می‌گرفتند.
+                title=_clean(first_user or
+                             os.path.basename(os.path.dirname(f)).strip("-")
+                             or "claude", 40),
                 preview=_clean(last_text),
                 last_active=iso(mtime), model=model, msg_count=n,
                 cwd=os.path.dirname(f), state=state, source=self.key))
@@ -953,6 +961,29 @@ class OpenClawAdapter(Adapter):
             # msg_count تا امروز هرگز پر نمی‌شد و همیشه صفر می‌ماند؛ نتیجه
             # این بود که نشستی با ۴۳۱ رویداد «خالی» به نظر می‌رسید و در
             # پاک‌سازی نامزد حذف می‌شد. پیام‌ها در transcript_events هستند.
+            # اولین پیام واقعی کاربر در هر نشست — برای عنوان معنادار.
+            # heartbeatهای داخلی عنوان نیستند.
+            firsts: dict[str, str] = {}
+            if "transcript_events" in tables:
+                try:
+                    for r in con.execute(
+                            "select session_id, event_json from transcript_events"
+                            " where json_extract(event_json,'$.message.role')='user'"
+                            " order by seq"):
+                        if r[0] in firsts:
+                            continue
+                        try:
+                            m = (json.loads(r[1]) or {}).get("message") or {}
+                        except Exception:                      # noqa: BLE001
+                            continue
+                        if (m.get("provenance") or {}).get("kind") == "internal_system":
+                            continue
+                        t = _text_of(m.get("content")).strip()
+                        if t and not t.startswith("[OpenClaw"):
+                            firsts[r[0]] = t.splitlines()[0][:60]
+                except sqlite3.Error:
+                    pass
+
             counts: dict[str, int] = {}
             if "transcript_events" in tables:
                 try:
@@ -988,9 +1019,14 @@ class OpenClawAdapter(Adapter):
                     except Exception:                          # noqa: BLE001
                         ts = None
                 status = (d.get("status") or "").lower()
+                # عنوان = اولین پیام واقعی کاربر در همان نشست.
+                # `kind` فقط بخشی از کلید است (agent:main:**explicit**:…) و
+                # برای همهٔ نشست‌ها یکسان بود.
+                sid_ = str(d.get("current_session_id") or key)[:36]
                 out.append(Session(
-                    id=str(d.get("current_session_id") or key)[:36],
-                    title=_clean(kind, 40),
+                    id=sid_,
+                    title=_clean(firsts.get(sid_) or entry.get("title")
+                                 or kind, 40),
                     preview=_clean(str(entry.get("title")
                                        or d.get("created_via") or ""), 90),
                     last_active=iso(ts) if isinstance(ts, (int, float)) else None,

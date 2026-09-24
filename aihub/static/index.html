@@ -412,6 +412,19 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
   border:1px solid var(--line);font-size:11px;color:var(--dim);cursor:pointer;
   min-height:28px;background:var(--panel2)}
 .tgl.on{border-color:var(--accent);color:var(--accent);background:var(--raised)}
+.jump{position:fixed;inset-inline-end:26px;bottom:104px;width:38px;height:38px;
+  border-radius:50%;background:var(--raised);border:1px solid var(--line2);
+  color:var(--txt);display:none;place-items:center;z-index:60;font-size:15px;
+  box-shadow:0 6px 20px rgba(0,0,0,.45)}
+.jump.on{display:grid}
+.jump:hover{background:var(--panel2);border-color:var(--accent)}
+.findbar{display:none;align-items:center;gap:5px;padding:6px 10px;
+  border-bottom:1px solid var(--line);background:var(--panel2)}
+.findbar.on{display:flex}
+.findbar input{flex:1;font-size:13px;min-height:32px}
+.fcount{font-size:11px;color:var(--faint);min-width:42px;text-align:center}
+mark.fh{background:rgba(201,162,39,.35);color:inherit;border-radius:3px}
+mark.fh.cur{background:var(--accent);color:#10131a}
 .modes{font-size:11px;color:var(--accent);padding:2px 7px;border-radius:6px;
   background:var(--raised);white-space:nowrap}
 .tgl:hover{color:var(--txt)}
@@ -577,6 +590,7 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
 
 <div class="mask" id="mask"></div>
 <div class="menu" id="menu"></div>
+<button class="jump" id="jump" title="Jump to the latest message">↓</button>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -915,6 +929,7 @@ async function openSession(a,id){
     ${s.state==='working'?'<span class="pill live hide-sm">● generating</span>':''}
     <div class="sp">
       <span class="pill hide-sm">${s.msg_count==null?'—':s.msg_count+' msgs'}</span>
+      <button class="iconb" id="findBtn" title="Find in this chat (⌘F)">⌕</button>
       <button class="iconb" id="wsBtn" title="Files, workspace and artifacts">🗂</button>
       <button class="iconb" id="hoBtn" title="Hand off">⇄</button>
       <button class="iconb" id="moreBtn" title="More">⋯</button>
@@ -955,11 +970,16 @@ async function openSession(a,id){
   })();
   $('#hoBtn').onclick=()=>handoffDlg(a,id);
   $('#wsBtn').onclick=()=>workspaceDlg(a,id);
+  $('#findBtn').onclick=()=>findInChat();
   $('#moreBtn').onclick=e=>{const r=e.target.getBoundingClientRect();
     sessMenu(a,id,r.left-160,r.bottom+6);};
   $('#comp').style.display='';
   $('#mLbl').textContent=s.model||A.model||'model';
   $('#stage').className='msgs';
+  $('#stage').onscroll=()=>{
+    const st=$('#stage'), far=st.scrollHeight-st.scrollTop-st.clientHeight>320;
+    const b=$('#jump'); if(b)b.classList.toggle('on',far);
+  };
   // نشست پیش‌نویس هنوز روی دیسکِ ایجنت نیست؛ رفتن سراغ API یعنی خطا.
   if(s.draft){
     $('#stage').innerHTML=`<div class="wrap"><div class="empty">
@@ -1216,6 +1236,79 @@ let pv={tab:'thread',agent:null,path:'',to:'',side:true};
 /* ═══════════ handoff ═══════════ */
 // فایل‌ها، فضای کار و آرتیفکت‌های یک نشست — برای همهٔ ایجنت‌ها یکسان.
 // تا امروز برای دیدن خروجی‌های یک ایجنت باید SSH می‌زدی.
+// جست‌وجو داخل همین گفت‌وگو، با پیمایش بین نتایج.
+// در گفت‌وگوی بلند، پیدا کردن یک جمله بدون این تقریباً ناممکن است.
+let findState={q:'',hits:[],at:-1};
+function findInChat(){
+  let bar=$('#findbar');
+  if(!bar){
+    $('#stage').insertAdjacentHTML('beforebegin',
+      `<div class="findbar" id="findbar">
+         <input id="findq" placeholder="Find in this chat…" autocomplete="off">
+         <span class="fcount" id="fcount">0/0</span>
+         <button class="iconb" id="fprev" title="Previous">↑</button>
+         <button class="iconb" id="fnext" title="Next">↓</button>
+         <button class="iconb" id="fclose" title="Close">✕</button></div>`);
+    bar=$('#findbar');
+    $('#findq').oninput=()=>runFind($('#findq').value);
+    $('#findq').onkeydown=e=>{
+      if(e.key==='Enter'){e.preventDefault();stepFind(e.shiftKey?-1:1);}
+      if(e.key==='Escape')closeFind();};
+    $('#fnext').onclick=()=>stepFind(1);
+    $('#fprev').onclick=()=>stepFind(-1);
+    $('#fclose').onclick=()=>closeFind();
+  }
+  bar.classList.add('on'); $('#findq').focus(); $('#findq').select();
+}
+function closeFind(){
+  const b=$('#findbar'); if(b)b.remove();
+  $$('#stage mark.fh').forEach(m=>m.replaceWith(...m.childNodes));
+  findState={q:'',hits:[],at:-1};
+}
+function runFind(q){
+  $$('#stage mark.fh').forEach(m=>{const p=m.parentNode;m.replaceWith(...m.childNodes);p.normalize();});
+  findState={q,hits:[],at:-1};
+  if(!q||q.length<2){$('#fcount').textContent='0/0';return;}
+  const rx=new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi');
+  $$('#stage .mt').forEach(node=>{
+    const w=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);
+    const texts=[]; let n;
+    while(n=w.nextNode())texts.push(n);
+    texts.forEach(t=>{
+      if(!rx.test(t.nodeValue))return;
+      rx.lastIndex=0;
+      const frag=document.createDocumentFragment();
+      let last=0,m2;
+      while((m2=rx.exec(t.nodeValue))){
+        frag.appendChild(document.createTextNode(t.nodeValue.slice(last,m2.index)));
+        const mk=document.createElement('mark'); mk.className='fh'; mk.textContent=m2[0];
+        frag.appendChild(mk); last=m2.index+m2[0].length;
+      }
+      frag.appendChild(document.createTextNode(t.nodeValue.slice(last)));
+      t.replaceWith(frag);
+    });
+  });
+  findState.hits=$$('#stage mark.fh');
+  $('#fcount').textContent=findState.hits.length?('1/'+findState.hits.length):'0/0';
+  if(findState.hits.length){findState.at=0;focusHit();}
+}
+function stepFind(d){
+  if(!findState.hits.length)return;
+  findState.at=(findState.at+d+findState.hits.length)%findState.hits.length;
+  focusHit();
+}
+function focusHit(){
+  findState.hits.forEach(h=>h.classList.remove('cur'));
+  const h=findState.hits[findState.at];
+  if(!h)return;
+  h.classList.add('cur');
+  // برخی وب‌ویوهای قدیمیِ موبایل scrollIntoView ندارند
+  if(typeof h.scrollIntoView==='function')
+    h.scrollIntoView({block:'center',behavior:'smooth'});
+  $('#fcount').textContent=(findState.at+1)+'/'+findState.hits.length;
+}
+window.findInChat=findInChat;
+
 async function workspaceDlg(a,id){
   mask(`<div class="dlg wide"><h3>🗂 ${esc(app(a).name)} — files & artifacts</h3>
     <div class="mtabs">
@@ -1793,6 +1886,7 @@ $('#btnHome').onclick=()=>home();
 $('#filt').oninput=e=>{filt=e.target.value;tree();};
 $('#btnPick').onclick=()=>{pick=pick?null:new Set();tree();};
 $('#btnTrash').onclick=()=>trashDlg();
+$('#jump').onclick=()=>{$('#stage').scrollTop=9e5;$('#jump').classList.remove('on');};
 
 // ═══════════ سطل زباله ═══════════
 // تا امروز هرچه پاک می‌شد به اینجا می‌رفت ولی هیچ راهی برای دیدنش نبود.
@@ -1851,6 +1945,26 @@ addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&k==='m'){e.preventDefault();modelDlg(view.app||'claude');}
   if((e.metaKey||e.ctrlKey)&&k==='f'){e.preventDefault();pal();}
   if(e.key==='Escape'){close_();$('#menu').classList.remove('on');}
+});
+
+// ── میان‌برهای صفحه‌کلید ──
+// ⌘K پالت · ⌘F جست‌وجو در گفت‌وگو · ⌘N نشست تازه · ⌥↑/↓ جابه‌جایی بین نشست‌ها
+document.addEventListener('keydown',e=>{
+  const mod=e.metaKey||e.ctrlKey;
+  const typing=/^(INPUT|TEXTAREA)$/.test((e.target||{}).tagName||'');
+  if(mod&&e.key==='f'&&view.kind==='session'){e.preventDefault();findInChat();return;}
+  if(mod&&e.key==='n'){e.preventDefault();
+    newSessionDlg(view.app||(S.apps.find(a=>a.capabilities.includes('send'))||{}).key);
+    return;}
+  if(e.altKey&&(e.key==='ArrowDown'||e.key==='ArrowUp')&&!typing){
+    e.preventDefault();
+    const list=S.sessions.filter(x=>!x.draft);
+    if(!list.length)return;
+    let i=list.findIndex(x=>x.id===view.sid&&x.source===view.app);
+    i=(i+(e.key==='ArrowDown'?1:-1)+list.length)%list.length;
+    if(i<0)i=0;
+    openSession(list[i].source,list[i].id);
+  }
 });
 
 refresh().then(()=>{home();stream();});

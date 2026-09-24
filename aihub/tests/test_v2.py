@@ -1759,3 +1759,41 @@ def test_enter_makes_a_newline_and_does_not_send():
     assert "!e.shiftKey){e.preventDefault();\n    send()" not in seg
 
 
+
+
+def test_no_agent_titles_a_session_after_a_folder_or_key():
+    """
+    عنوان‌ها از نام پوشه/کلید می‌آمدند: claude → «opt-aihub»، openclaw →
+    «explicit»، pi → «aihub». همه شبیه هم می‌شدند و بی‌معنا.
+    """
+    import inspect
+    from app import adapters
+    for cls in (adapters.ClaudeAdapter, adapters.PiAdapter,
+                adapters.OpenClawAdapter):
+        src = inspect.getsource(cls.sessions)
+        assert "first" in src, f"{cls.__name__} does not title from the first message"
+
+
+def test_reasoning_and_commands_actually_shape_the_request():
+    """
+    تا امروز این دو کلید فقط در دیتابیس ذخیره می‌شدند و **هیچ اثری روی
+    درخواست نداشتند** — یعنی دکمه‌ها تزئینی بودند.
+    """
+    import inspect
+    from app import main as m
+    src = inspect.getsource(m._run_send)
+    assert 'st.get("reasoning")' in src and 'st.get("exec_tools")' in src
+    assert "MODE: reasoning" in src
+
+
+def test_chat_shows_which_modes_are_active():
+    h = _html()
+    assert 'id="modes"' in h and "showModes" in h
+
+
+def test_chat_has_find_and_keyboard_navigation():
+    h = _html()
+    assert "findInChat" in h and "findbar" in h
+    assert "mark.fh" in h, "no highlighting of matches"
+    assert "ArrowDown" in h, "no keyboard navigation between sessions"
+    assert 'id="jump"' in h, "no jump-to-latest control"
