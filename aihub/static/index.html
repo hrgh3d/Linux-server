@@ -146,15 +146,17 @@ input,textarea,select{font:inherit;color:inherit;background:0;border:0;outline:0
 /* اکشن‌های پیام: ظریف و در گوشهٔ پایینِ متن، مثل چت‌بات‌های متعارف.
    قبلاً کنار نامِ بالای پیام بودند و درشت‌تر از خودِ محتوا جلب توجه می‌کردند. */
 .mb{position:relative}
-.macts{position:absolute;bottom:-9px;inset-inline-end:6px;display:flex;gap:1px;
-  background:var(--panel2);border:1px solid var(--line);border-radius:7px;
-  padding:1px;opacity:0;transition:opacity .12s;z-index:2}
+/* اکشن‌ها **بیرون** از حباب، گوشهٔ چپِ زیر آن و ریز — مثل چت‌بات‌های
+   متعارف. داخلِ حباب بودن باعث می‌شد روی متن بیفتند. */
+.macts{display:flex;gap:2px;margin-top:3px;margin-inline-start:2px;
+  opacity:0;transition:opacity .12s}
 .m:hover .macts,.macts:focus-within{opacity:1}
-.macts button{width:24px;height:22px;display:grid;place-items:center;
-  font-size:11px;line-height:1;color:var(--faint);border-radius:5px;background:none}
+.macts button{width:22px;height:20px;display:grid;place-items:center;
+  font-size:10.5px;line-height:1;color:var(--faint);border-radius:5px;background:none}
 .macts button:hover{color:var(--txt);background:var(--raised)}
 .macts button.done{color:var(--ok)}
-@media(hover:none){.macts{opacity:.85}.macts button{width:32px;height:30px;font-size:13px}}
+/* روی لمسی hover نداریم: همیشه کم‌رنگ دیده شوند و هدف لمس بزرگ‌تر باشد */
+@media(hover:none){.macts{opacity:.7}.macts button{width:34px;height:30px;font-size:13px}}
 .mn .pinb:active{background:var(--line2)}
 .mn .pinb.done{opacity:1;color:var(--ok)}
 .mt{font-size:14px;line-height:1.72;white-space:pre-wrap;word-break:break-word}
@@ -413,7 +415,19 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
 .tgl:hover{color:var(--txt)}
 
 /* ── چیدمان پروژه به سبک Grok Bot: نوار هم‌تیمی‌ها + صفحهٔ اصلی ── */
-.pgrid{display:grid;grid-template-columns:212px 1fr;height:100%;min-height:0}
+.pgrid{display:grid;grid-template-columns:212px 1fr 220px;height:100%;min-height:0}
+.pside{border-inline-start:1px solid var(--line);background:var(--panel2);
+  overflow-y:auto;padding:8px 8px 14px}
+.pside.hide{display:none}
+.psh{display:flex;align-items:center;font-size:10.5px;text-transform:uppercase;
+  letter-spacing:.7px;color:var(--faint);padding:5px 4px}
+.psh .add{margin-inline-start:auto;font-size:14px;color:var(--accent);
+  width:24px;height:24px;border-radius:6px}
+.sfile{font-size:11.5px;padding:6px 7px;border-radius:7px;cursor:pointer;
+  color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sfile:hover{background:var(--raised);color:var(--txt)}
+.sempty{font-size:11px;color:var(--faint);padding:6px 7px}
+@media(max-width:1180px){.pgrid{grid-template-columns:200px 1fr}.pside{display:none}}
 .prail{border-inline-end:1px solid var(--line);background:var(--panel2);
   overflow-y:auto;padding:8px 6px}
 .prh{display:flex;align-items:center;font-size:10.5px;text-transform:uppercase;
@@ -438,6 +452,16 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
 .pfoot{display:flex;gap:6px;align-items:flex-end;padding:9px 12px;
   border-top:1px solid var(--line);background:var(--panel2)}
 .pfoot select{max-width:170px;font-size:12px}
+/* نوار پایین: اول انتخاب می‌کنی با کدام هم‌تیمی حرف می‌زنی، بعد می‌نویسی */
+.pfoot2{flex-direction:column;align-items:stretch;gap:7px}
+.agbar{display:flex;gap:5px;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
+.agpick{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;
+  border:1px solid var(--line);background:var(--panel);font-size:11.5px;color:var(--dim);
+  white-space:nowrap;min-height:32px;flex:0 0 auto}
+.agpick.on{border-color:var(--accent);color:var(--accent);background:var(--raised)}
+.agpick:hover{color:var(--txt)}
+.crow2{display:flex;gap:6px;align-items:flex-end}
+.crow2 textarea{flex:1;resize:none;max-height:140px;font-size:13.5px}
 .pfoot textarea{flex:1;resize:none;max-height:130px;font-size:13.5px}
 @media(max-width:860px){
   .pgrid{grid-template-columns:1fr;grid-template-rows:auto 1fr}
@@ -535,7 +559,7 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
       <div class="slash" id="slash"></div>
       <div class="cbox">
         <textarea id="ta" class="rtl" rows="1"
-          placeholder="Message the agent…  press / for commands"></textarea>
+          placeholder="Message the agent…  Enter = new line · ⌘/Ctrl+Enter = send"></textarea>
         <div class="crow">
           <button class="ctool" id="cmdBtn">/ commands</button>
           <button class="ctool hide-sm" id="skillBtn">⚡ skills</button>
@@ -843,7 +867,22 @@ function tree(){
   $$('#tree .grph').forEach(g=>g.onclick=e=>{
     if(e.target.dataset.new){e.stopPropagation();newSessionDlg(e.target.dataset.new);return;}
     closed[g.dataset.g]=!closed[g.dataset.g];tree();});
+  // چک‌باکس‌ها: بدون رندر دوباره فقط شمارنده را به‌روز کن، وگرنه
+  // کلیک بعدی روی عنصری می‌نشیند که دیگر وجود ندارد.
+  $$('#tree .pick').forEach(c=>c.onclick=e=>{
+    e.stopPropagation();
+    const k=c.dataset.pk;
+    c.checked?pick.add(k):pick.delete(k);
+    const bar=$('#tree .selbar b'); if(bar)bar.textContent=pick.size;});
   $$('#tree .si').forEach(el=>el.onclick=e=>{
+    if(e.target.classList.contains('pick'))return;   // خود چک‌باکس
+    if(pick&&el.dataset.s){
+      const k=el.dataset.a+':'+el.dataset.s;
+      const box=el.querySelector('.pick');
+      if(pick.has(k)){pick.delete(k); if(box)box.checked=false;}
+      else{pick.add(k); if(box)box.checked=true;}
+      const bar=$('#tree .selbar b'); if(bar)bar.textContent=pick.size;
+      return;}
     if(e.target.dataset.menu){e.stopPropagation();
       const [id,a]=e.target.dataset.menu.split('|');
       const r=e.target.getBoundingClientRect(); sessMenu(a,id,r.left-140,r.bottom+4);return;}
@@ -851,6 +890,8 @@ function tree(){
 }
 
 function treeProjects(){
+  // محیط پروژه‌ها کاملاً جداست: اینجا فقط پروژه‌ها و نشست‌های خودشان
+  // دیده می‌شوند. نشست آزاد (General) هرگز اینجا نمی‌آید و برعکس.
   const q=filt.toLowerCase();
   const ps=S.projects.filter(p=>!q||p.name.toLowerCase().includes(q));
   $('#tree').innerHTML=`
@@ -894,15 +935,7 @@ function treeProjects(){
     closed['p:'+g.dataset.pg]=!closed['p:'+g.dataset.pg];tree();});
   $$('#tree [data-addp]').forEach(e=>e.onclick=ev=>{
     ev.stopPropagation();addChatDlg(e.dataset.addp);});
-  $$('#tree .pick').forEach(c=>c.onclick=e=>{
-    e.stopPropagation();
-    const k=c.dataset.pk;
-    c.checked?pick.add(k):pick.delete(k);
-    const bar=$('#tree .selbar b'); if(bar)bar.textContent=pick.size;});
   $$('#tree .si[data-s]').forEach(el=>el.onclick=e=>{
-    if(e.target.classList.contains('pick'))return;
-    if(pick){const k=el.dataset.a+':'+el.dataset.s;
-      pick.has(k)?pick.delete(k):pick.add(k);tree();return;}
     if(e.target.dataset.menu){e.stopPropagation();
       const [id,a]=e.target.dataset.menu.split('|');
       const r=e.target.getBoundingClientRect(); sessMenu(a,id,r.left-140,r.bottom+4);return;}
@@ -1014,6 +1047,7 @@ async function openSession(a,id){
       onclick="openProject('${P.id}')">📁 ${esc(P.name)} · 🧠 auto</span>`:''}
     <div class="sp">
       <span class="pill hide-sm">${s.msg_count==null?'—':s.msg_count+' msgs'}</span>
+      <button class="iconb" id="wsBtn" title="Files, workspace and artifacts">🗂</button>
       <button class="iconb" id="hoBtn" title="Hand off">⇄</button>
       <button class="iconb" id="moreBtn" title="More">⋯</button>
     </div>`;
@@ -1036,6 +1070,7 @@ async function openSession(a,id){
     wire($('#tgReason'),'reasoning'); wire($('#tgExec'),'exec_tools');
   })();
   $('#hoBtn').onclick=()=>handoffDlg(a,id);
+  $('#wsBtn').onclick=()=>workspaceDlg(a,id);
   $('#moreBtn').onclick=e=>{const r=e.target.getBoundingClientRect();
     sessMenu(a,id,r.left-160,r.bottom+6);};
   $('#comp').style.display='';
@@ -1057,13 +1092,12 @@ async function openSession(a,id){
           <span class="tm">${m.ts?ago(m.ts):''}</span>
           </div>
           <div class="mt rtl">${md(m.text)}</div>
-          <span class="macts">
-            <button data-copy="${i}" title="Copy">⧉</button>
-            ${m.role==='user'?`<button data-again="${i}" title="Send again">↻</button>`:''}
-            <button data-pin="${i}" title="Pin to project memory">📌</button>
-          </span></div></div>`).join(''):
+          </div>
+        <span class="macts">
+          <button data-copy="${i}" title="Copy">⧉</button>
+          ${m.role==='user'?`<button data-again="${i}" title="Send again">↻</button>`:''}
+        </span></div>`).join(''):
       '<div class="empty">No readable messages yet.</div>'}</div>`;
-    $$('#stage [data-pin]').forEach(b=>b.onclick=()=>pinToMemory(ms[+b.dataset.pin]));
     $$('#stage [data-copy]').forEach(b=>b.onclick=()=>copyText(ms[+b.dataset.copy].text,b));
     // ارسال دوباره: متن پیام کاربر را در کادر بگذار تا بتواند ویرایش هم بکند
     $$('#stage [data-again]').forEach(b=>b.onclick=()=>{
@@ -1313,7 +1347,7 @@ function projDlg(p){
 // خودشان پاس می‌دهند.
 //
 // pv = وضعیت نمای پروژه: کدام زیربخش باز است و کدام هم‌تیمی انتخاب شده.
-let pv={tab:'thread',agent:null,path:''};
+let pv={tab:'thread',agent:null,path:'',to:'',side:true};
 
 async function openProject(pid,keep){
   view={kind:'project',pid}; tab='projects';
@@ -1368,6 +1402,7 @@ async function openProject(pid,keep){
          data-pt="${k}"><div class="ptx"><div class="pn">${l}</div></div></div>`).join('')}
     </aside>
     <section class="pmain" id="pmain"></section>
+    <aside class="pside ${pv.side?'':'hide'}" id="pside"></aside>
   </div>`;
 
   $('#addRole').onclick=e=>{e.stopPropagation();assignDlg(pid);};
@@ -1376,6 +1411,29 @@ async function openProject(pid,keep){
   $$('#stage [data-pt]').forEach(el=>el.onclick=()=>{
     pv.agent=null; pv.tab=el.dataset.pt; paint(pid);});
   paint(pid);
+  paintSide(pid);
+}
+
+// ستون سوم: آنچه تیم ساخته — فایل‌ها و آخرین رویدادها، همیشه جلوی چشم.
+async function paintSide(pid){
+  const el=$('#pside'); if(!el)return;
+  let files=[];
+  try{files=(await api(`/api/projects/${pid}/files`)).items||[];}catch(e){}
+  const mem=(view.p.memory||[]).slice(-4).reverse();
+  el.innerHTML=`
+    <div class="psh">📦 Workspace
+      <button class="add" id="sideNew" title="New file">＋</button></div>
+    ${files.length?files.slice(0,10).map(f=>`<div class="sfile" data-sf="${esc(f.rel)}"
+        data-sd="${f.dir?1:0}">${f.dir?'📂':'📄'} ${esc(f.name)}</div>`).join(''):
+      '<div class="sempty">No files yet</div>'}
+    <div class="psh" style="margin-top:12px">🧠 Latest memory</div>
+    ${mem.length?mem.map(m=>`<div class="sfile rtl" style="cursor:default">${
+        esc((m.text||'').slice(0,70))}</div>`).join(''):
+      '<div class="sempty">Nothing learned yet</div>'}`;
+  $('#sideNew').onclick=()=>fileView(pid,null,()=>paintSide(pid));
+  $$('#pside [data-sf]').forEach(f=>f.onclick=()=>{
+    if(f.dataset.sd==='1'){pv.tab='files';pv.agent=null;pv.path=f.dataset.sf;paint(pid);}
+    else fileView(pid,f.dataset.sf,()=>paintSide(pid));});
 }
 
 function paint(pid){
@@ -1396,12 +1454,18 @@ async function paintThread(pid){
   m.innerHTML=`<div class="phd">🧵 Team thread
     <span class="hint" style="margin:0">Everyone sees this. Findings go to the shared memory on their own.</span></div>
     <div class="pbody" id="th"><div class="empty">Loading…</div></div>
-    <div class="pfoot">
-      <select id="who"><option value="">Everyone (note only)</option>
-        ${(view.p.roles||[]).map(r=>`<option value="${esc(r.app)}">Ask ${esc(app(r.app).name)}</option>`).join('')}
-      </select>
-      <textarea id="tmsg" class="rtl" rows="1" placeholder="بنویس…"></textarea>
-      <button class="sm pri" id="tsend">➤</button></div>`;
+    <div class="pfoot pfoot2">
+      <div class="agbar" id="agbar">
+        <button class="agpick ${!pv.to?'on':''}" data-to="">📝 note</button>
+        ${(view.p.roles||[]).map(r=>`<button class="agpick ${pv.to===r.app?'on':''}"
+           data-to="${esc(r.app)}" title="${esc(app(r.app).name)}">
+           ${brand(r.app,15)} <span>${esc(app(r.app).name)}</span></button>`).join('')}
+        <button class="agpick" data-to="__all" title="Ask every teammate">👥 all</button>
+      </div>
+      <div class="crow2">
+        <textarea id="tmsg" class="rtl" rows="1"
+          placeholder="بنویس…  Enter خط جدید · ⌘/Ctrl+Enter ارسال"></textarea>
+        <button class="sm pri" id="tsend">➤</button></div></div>`;
   const draw=async()=>{
     let ms=[];
     try{ms=(await api(`/api/projects/${pid}/thread`)).messages||[];}catch(e){}
@@ -1414,15 +1478,27 @@ async function paintThread(pid){
     $('#th').scrollTop=9e5;
   };
   await draw();
+  $$('#agbar .agpick').forEach(b=>b.onclick=()=>{
+    pv.to=b.dataset.to||'';
+    $$('#agbar .agpick').forEach(x=>x.classList.toggle('on',x===b));});
+
   const go=async()=>{
     const t=$('#tmsg').value.trim(); if(!t)return;
-    const who=$('#who').value;
-    $('#tmsg').value='';
+    const who=pv.to||'';
+    $('#tmsg').value='';$('#tmsg').style.height='auto';
     try{
-      if(who){
+      if(who==='__all'){
+        // همه را با هم صدا بزن — هرکدام رشته را می‌بیند و روی کار بقیه بنا می‌کند
+        await post(`/api/projects/${pid}/thread`,{text:t});
+        await draw();
+        for(const r of (view.p.roles||[])){
+          const j=await post(`/api/projects/${pid}/ask`,{app:r.app,text:t});
+          await pollThread(pid,j.job_id,draw);
+        }
+      }else if(who){
         const r=await post(`/api/projects/${pid}/ask`,{app:who,text:t});
         await draw();
-        pollThread(pid,r.job_id,draw);
+        await pollThread(pid,r.job_id,draw);
       }else{
         await post(`/api/projects/${pid}/thread`,{text:t});
         await draw();
@@ -1430,7 +1506,9 @@ async function paintThread(pid){
     }catch(e){toast('Failed: '+e.message,'bad');}
   };
   $('#tsend').onclick=()=>go();
-  $('#tmsg').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();go();}};
+    // Enter خط جدید می‌سازد؛ ارسال با ⌘/Ctrl+Enter — خواستهٔ صریح کاربر.
+  $('#tmsg').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){
+    e.preventDefault();go();}};
 }
 
 async function pollThread(pid,jid,draw){
@@ -1506,7 +1584,8 @@ async function paintAgent(pid,ak){
     }catch(e){toast('Failed: '+e.message,'bad');}
   };
   $('#asend').onclick=()=>go();
-  $('#amsg').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();go();}};
+    $('#amsg').onkeydown=e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){
+    e.preventDefault();go();}};
 }
 
 /* ── فضای کار مشترک: همان «یک کامپیوتر مشترک» ── */
@@ -1723,6 +1802,58 @@ async function pinToMemory(m){
 }
 
 /* ═══════════ handoff ═══════════ */
+// فایل‌ها، فضای کار و آرتیفکت‌های یک نشست — برای همهٔ ایجنت‌ها یکسان.
+// تا امروز برای دیدن خروجی‌های یک ایجنت باید SSH می‌زدی.
+async function workspaceDlg(a,id){
+  mask(`<div class="dlg wide"><h3>🗂 ${esc(app(a).name)} — files & artifacts</h3>
+    <div class="mtabs">
+      <button class="on" data-wt="files">📁 Workspace</button>
+      <button data-wt="arts">📦 Artifacts</button>
+    </div>
+    <div id="wsb" style="max-height:52vh;overflow:auto"><div class="empty">Loading…</div></div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Close</button></div></div>`);
+  let wpath='';
+  const files=async()=>{
+    let d={roots:[]};
+    try{d=await api(`/api/session/${a}/${encodeURIComponent(id)}/workspace?path=`
+      +encodeURIComponent(wpath));}
+    catch(e){$('#wsb').innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+    if(!d.roots.length){$('#wsb').innerHTML=
+      '<div class="empty">No workspace for this agent yet.</div>';return;}
+    $('#wsb').innerHTML=d.roots.map(r=>`
+      <div class="pg">${esc(r.label)}${r.writable?'':' · read-only'}</div>
+      ${wpath&&r.kind==='project'?'<div class="mrow" data-wup="1"><span class="nm">↰ ..</span></div>':''}
+      ${r.items.length?r.items.map(f=>`<div class="mrow"
+          ${r.kind==='project'?`data-wf="${esc(f.rel)}" data-wd="${f.dir?1:0}" data-wp="${esc(r.project_id||'')}"`:''}>
+        <span class="nm">${f.dir?'📂':'📄'} ${esc(f.name)}
+          <div class="sub">${f.dir?'folder':(f.size>1024?Math.round(f.size/1024)+' KB':f.size+' B')}</div></span>
+      </div>`).join(''):'<div class="empty" style="padding:8px">empty</div>'}`).join('');
+    const up=$('#wsb [data-wup]'); if(up)up.onclick=()=>{
+      wpath=wpath.split('/').slice(0,-1).join('/');files();};
+    $$('#wsb [data-wf]').forEach(el=>el.onclick=()=>{
+      if(el.dataset.wd==='1'){wpath=el.dataset.wf;files();}
+      else fileView(el.dataset.wp,el.dataset.wf,files);});
+  };
+  const arts=async()=>{
+    let d={artifacts:[]};
+    try{d=await api(`/api/session/${a}/${encodeURIComponent(id)}/artifacts`);}
+    catch(e){$('#wsb').innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+    $('#wsb').innerHTML=d.artifacts.length?d.artifacts.map(x=>`
+      <div class="mrow"><span class="nm">📦 ${esc(x.lang)} · ${x.lines} lines
+        <div class="sub rtl">${esc(x.preview.slice(0,90))}</div></span>
+      <button class="sm gh" data-ac="${esc(x.id)}">⧉ copy</button></div>`).join(''):
+      '<div class="empty">No code blocks produced in this chat yet.</div>';
+    $$('#wsb [data-ac]').forEach(b=>b.onclick=()=>{
+      const x=d.artifacts.find(y=>y.id===b.dataset.ac);
+      if(x)copyText(x.code,b);});
+  };
+  $$('.mtabs button').forEach(b=>b.onclick=()=>{
+    $$('.mtabs button').forEach(x=>x.classList.toggle('on',x===b));
+    b.dataset.wt==='files'?files():arts();});
+  files();
+}
+window.workspaceDlg=workspaceDlg;
+
 function handoffDlg(a,id){
   const tos=S.apps.filter(x=>x.capabilities.includes('send')&&x.key!==a);
   mask(`<div class="dlg"><h3>⇄ Hand off this conversation</h3>
@@ -1962,23 +2093,12 @@ async function newSession(a,pid,opts){
   }
   view={kind:'session',app:a,sid,newIn:pid||null,pending}; drawers(false);
   await refresh();
-  const A=app(a);
-  const P=pid?S.projects.find(x=>x.id===pid):null;
-  $('#mhead').innerHTML=`<span class="ic">${brand(a)}</span>
-    <span class="ti">New ${esc(A.name)} chat</span>
-    ${P?`<span class="pill" title="Joins this project on first reply">📁 ${esc(P.name)}</span>`:''}
-    <span class="pill model click" onclick="modelDlg('${a}')">◆ ${esc(A.model||'model')}</span>
-    <div class="sp"><button class="iconb" onclick="home()">✕</button></div>`;
-  $('#stage').className='msgs';
-  $('#stage').innerHTML=`<div class="wrap"><div class="empty">
-    ${brand(a)} Start talking to ${esc(A.name)}.<br>
-    The chat appears in the sidebar after the first reply.
-    ${P?`<br><br><span style="color:var(--accent)">It joins “${esc(P.name)}”, so it
-      sees the shared memory and adds to it on its own.</span>`:''}</div></div>`;
-  $('#comp').style.display='';
-  $('#mLbl').textContent=A.model||'model';
+  // هدرِ کامل (با کلیدهای reasoning/commands و منوها) را openSession
+  // می‌سازد. قبلاً newSession هدرِ خودش را می‌ساخت که این کلیدها را
+  // نداشت، پس در ابتدای گفت‌وگو اصلاً قابل فعال کردن نبودند.
+  await openSession(a,sid);
+  view.newIn=pid||null;
   $('#ta').focus();
-  rail(null);
 }
 window.newSession=newSession;
 window.home=home;
@@ -2019,11 +2139,15 @@ ta.addEventListener('input',()=>{ta.style.height='auto';
   if(v.startsWith('/')&&!v.includes(' '))slashDraw(v);else $('#slash').classList.remove('on');});
 ta.addEventListener('keydown',e=>{
   if(e.key==='Escape')$('#slash').classList.remove('on');
-  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();
+  // منوی «/» باز است ⇒ Enter همان را انتخاب می‌کند
+  if(e.key==='Enter'&&!e.shiftKey){
     const hl=$('#slash.on .sr.hl');
-    if(hl){$('#slash').classList.remove('on');ta.value='';
+    if(hl){e.preventDefault();$('#slash').classList.remove('on');ta.value='';
       (CMDS.find(c=>c.c===hl.dataset.c)||{}).fn?.();return;}
-    send();}});
+  }
+  // خواستهٔ صریح کاربر: Enter خط جدید می‌سازد، ارسال با ⌘/Ctrl+Enter.
+  if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();send();}
+});
 $('#send').onclick=()=>{ $('#send').classList.contains('cancel')?cancelCurrent():send(); };
 $('#cmdBtn').onclick=()=>{ta.value='/';ta.focus();slashDraw('/');};
 $('#skillBtn').onclick=()=>skillsDlg();
@@ -2111,8 +2235,9 @@ function finishSend(j,a,key){
   if(p)p.outerHTML=`<div class="m"><div class="av a">${brand(a)}</div>
     <div class="mb"><div class="mn">${esc(app(a).name)}</div>
     <div class="mt rtl">${md(j.output||'(empty)')}</div>${learned}
+    </div>
     <span class="macts"><button id="lastCopy" title="Copy">⧉</button></span>
-    </div></div>`;
+    </div>`;
   const lc=$('#lastCopy'); if(lc)lc.onclick=()=>copyText(j.output||'',lc);
   bindCodeCopy();
   $('#stage').scrollTop=9e5;

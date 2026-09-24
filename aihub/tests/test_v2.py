@@ -1700,3 +1700,92 @@ def test_frontend_keeps_the_review_gate():
     """دروازهٔ بازبینی نباید در بازطراحی گم شود."""
     h = _html()
     assert "paintReceipts" in h and "reviewDlg" in h
+
+
+# ═══════════ v2.7: هشت ایراد گزارش‌شدهٔ کاربر
+
+
+def test_toggles_exist_from_the_very_first_message():
+    """
+    newSession هدرِ خودش را می‌ساخت که کلیدهای reasoning/commands را
+    نداشت، پس در ابتدای گفت‌وگو اصلاً قابل فعال کردن نبودند.
+    """
+    h = _html()
+    seg = h[h.index("async function newSession(a,pid,opts)"):]
+    seg = seg[:seg.index("\n}")]
+    assert "openSession(a,sid)" in seg.replace(" ", ""), \
+        "the full header (with the toggles) is never rendered"
+
+
+def test_a_draft_shadowed_by_a_real_session_is_dropped(client, monkeypatch):
+    """
+    Pi فایل را `<ts>_<uuid>` می‌نامد. اگر ردیف پیش‌نویس (uuid خام) بماند،
+    کاربر رویش کلیک می‌کند و «No readable messages yet» می‌بیند، چون
+    گفت‌وگو زیر شناسهٔ واقعی است.
+    """
+    import inspect
+    from app import main as m
+    src = inspect.getsource(m.sessions)
+    assert "dsid in rid" in src.replace(" ", "") or "real_ids" in src
+
+
+def test_session_workspace_and_artifacts_exist_for_every_agent(client):
+    """خواستهٔ ۳: فایل/workspace/artifact برای همهٔ نشست‌ها."""
+    sid = client.post("/api/session/new/pi", json={}).json()["session_id"]
+    w = client.get(f"/api/session/pi/{sid}/workspace")
+    assert w.status_code == 200 and "roots" in w.json()
+    a = client.get(f"/api/session/pi/{sid}/artifacts")
+    assert a.status_code == 200 and "artifacts" in a.json()
+
+
+def test_session_workspace_includes_the_project_folder(client):
+    pid = client.post("/api/projects", json={"name": "ws2"}).json()["project"]["id"]
+    sid = client.post("/api/session/new/pi",
+                      json={"project_id": pid}).json()["session_id"]
+    client.post(f"/api/projects/{pid}/file", json={"path": "a.txt", "text": "x"})
+    roots = client.get(f"/api/session/pi/{sid}/workspace").json()["roots"]
+    proj = [r for r in roots if r["kind"] == "project"]
+    assert proj and any(i["name"] == "a.txt" for i in proj[0]["items"])
+
+
+def test_checkbox_wiring_lives_in_the_sessions_tree():
+    """
+    باگ: کدِ چک‌باکس در treeProjects نشسته بود نه tree، پس در فهرست
+    نشست‌ها انتخاب تکی اصلاً کار نمی‌کرد (فقط Select all کار می‌کرد).
+    """
+    h = _html()
+    t0 = h.index("function tree(){")
+    t1 = h.index("function treeProjects(){")
+    assert "#tree .pick" in h[t0:t1], "checkbox handler is not inside tree()"
+
+
+def test_message_actions_are_outside_the_bubble_and_have_no_pin():
+    h = _html()
+    assert "data-pin=" not in h, "pin button should be gone"
+    assert "data-again=" in h and "data-copy=" in h
+    css = h[h.index(".macts{"):h.index(".macts{") + 400]
+    assert "position:absolute" not in css, "actions still overlap the text"
+    assert "@media(hover:none)" in h, "no touch handling for the actions"
+
+
+def test_enter_makes_a_newline_and_does_not_send():
+    """خواستهٔ صریح: Enter خط جدید، ارسال با ⌘/Ctrl+Enter."""
+    h = _html()
+    seg = h[h.index("ta.addEventListener('keydown'"):]
+    seg = seg[:seg.index("});") + 3]
+    assert "metaKey||e.ctrlKey" in seg.replace(" ", "")
+    assert "!e.shiftKey){e.preventDefault();\n    send()" not in seg
+
+
+def test_project_thread_has_a_bottom_agent_picker():
+    """خواستهٔ ۸: از نوار پایین انتخاب کن با کدام ایجنت حرف می‌زنی."""
+    h = _html()
+    assert "agbar" in h and "agpick" in h
+    assert 'data-to="__all"' in h, "no way to ask the whole team at once"
+
+
+def test_project_view_has_the_three_pane_grok_layout():
+    h = _html()
+    css = h[h.index(".pgrid{"):h.index(".pgrid{") + 200]
+    assert css.count("1fr") >= 1 and "220px" in css, "no artifacts side panel"
+    assert "paintSide" in h

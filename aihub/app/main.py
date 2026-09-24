@@ -196,6 +196,19 @@ async def sessions(app_key: str | None = Query(None, alias="app"),
             akey, _, dead = key.partition(":")
             if akey in ADAPTERS:
                 store.meta_del(akey, dead)
+        # پیش‌نویسی که نشست واقعی‌اش ساخته شده (Pi نام فایل را
+        # `<timestamp>_<uuid>` می‌کند) نباید به‌عنوان یک نشستِ خالیِ جدا
+        # بماند — کاربر رویش کلیک می‌کرد و «No readable messages yet»
+        # می‌دید، چون گفت‌وگو زیر شناسهٔ واقعی بود.
+        real_ids = [s["id"] for s in out]
+        for key, m in list(meta.items()):
+            if not m.get("draft"):
+                continue
+            akey, _, dsid = key.partition(":")
+            if any(dsid in rid and dsid != rid for rid in real_ids):
+                store.meta_del(akey, dsid)
+                meta.pop(key, None)
+
         for key, m in meta.items():
             if not m.get("draft") or key in have:
                 continue
@@ -260,6 +273,87 @@ class SessSettings(BaseModel):
     reasoning: bool | None = None
     exec_tools: bool | None = None
     model: str | None = None
+
+
+# ═══════════════════════════════════════════ فضای کار هر نشست
+#
+# خواستهٔ کاربر: «گزینه‌های استاندارد ایجنت‌ها — فایل، workspace، artifact —
+# برای تمام سشن‌ها». هر ایجنت جای کار خودش را دارد؛ اینها را یکجا نشان
+# می‌دهیم به‌جای اینکه کاربر مجبور باشد با SSH دنبالشان بگردد.
+
+AGENT_WS = {
+    "openclaw": "/root/.openclaw/workspace",
+    "hermes": "/root/.hermes",
+    "claude": "/root/.claude",
+    "pi": "/root/.pi/agent",
+}
+
+
+@app.get("/api/session/{app_key}/{sid:path}/workspace")
+async def session_workspace(app_key: str, sid: str, path: str = ""):
+    """
+    فایل‌های مربوط به این نشست: فضای کار خودِ ایجنت، به‌علاوهٔ فضای کار
+    پروژه‌اش (اگر عضو پروژه‌ای باشد) که با بقیهٔ هم‌تیمی‌ها مشترک است.
+    """
+    if app_key not in ADAPTERS:
+        raise HTTPException(404, "unknown app")
+    out: dict = {"agent": app_key, "roots": []}
+
+    pid = store.session_project(app_key, sid)
+    if pid:
+        root = _ws_root(pid)
+        base = _safe(root, path)
+        items = []
+        if base.exists():
+            for f in sorted(base.iterdir(), key=lambda x: (x.is_file(), x.name)):
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                items.append({"name": f.name, "dir": f.is_dir(),
+                              "size": st.st_size, "rel": str(f.relative_to(root))})
+        out["roots"].append({"kind": "project", "label": f"Project · {pid}",
+                             "project_id": pid, "path": path, "items": items,
+                             "writable": True})
+
+    native = AGENT_WS.get(app_key)
+    if native and Path(rp(native)).exists():
+        nb = Path(rp(native))
+        items = []
+        try:
+            for f in sorted(nb.iterdir(), key=lambda x: (x.is_file(), x.name))[:200]:
+                if f.name.startswith("."):
+                    continue
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                items.append({"name": f.name, "dir": f.is_dir(),
+                              "size": st.st_size, "rel": f.name})
+        except OSError:
+            pass
+        out["roots"].append({"kind": "agent", "label": f"{ADAPTERS[app_key].name} workspace",
+                             "path": str(nb), "items": items, "writable": False})
+    return out
+
+
+@app.get("/api/session/{app_key}/{sid:path}/artifacts")
+async def session_artifacts(app_key: str, sid: str):
+    """
+    چیزهایی که این نشست تولید کرده: بلوک‌های کد داخل گفت‌وگو.
+    این نزدیک‌ترین چیز به «artifact» است که همهٔ این چهار ایجنت دارند.
+    """
+    d = await session_detail(app_key, sid, limit=200)
+    arts = []
+    for i, m in enumerate(d.get("messages") or []):
+        for j, blk in enumerate(re.findall(r"```(\w+)?\n(.*?)```",
+                                           m.get("text") or "", re.S)):
+            lang, code = blk
+            arts.append({"id": f"{i}-{j}", "lang": lang or "text",
+                         "lines": code.count("\n") + 1,
+                         "preview": code[:200], "code": code[:20000],
+                         "role": m.get("role")})
+    return {"artifacts": arts, "count": len(arts)}
 
 
 @app.get("/api/session/{app_key}/{sid:path}/settings")
@@ -1484,6 +1578,15 @@ def _run_thread(jid: str, pid: str, app_key: str, text: str,
         if (jobs.get(jid) or {}).get("state") == "cancelled":
             return
         if real:
+            # پیش‌نویس را به شناسهٔ واقعی منتقل کن، وگرنه یک ردیف خالی
+            # برای همیشه در سایدبار می‌ماند و گفت‌وگو «گم» به نظر می‌رسد.
+            if sid and sid != real:
+                old = store.meta_get(app_key, sid) or {}
+                keep = {k: v for k, v in old.items()
+                        if k in ("title", "icon", "color", "pinned") and v}
+                store.meta_del(app_key, sid)
+                if keep:
+                    store.meta_set(app_key, real, **keep)
             store.role_set(pid, app_key, session_id=real)
             store.meta_set(app_key, real, project_id=pid, draft=0)
         store.thread_add(pid, app_key, out or "(بدون پاسخ)")
