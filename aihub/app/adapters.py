@@ -150,14 +150,67 @@ class AppStatus:
 RUN = "/usr/bin/systemctl"
 
 
-def _sh(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
-    """اجرای امن یک دستور. هرگز استثنا پرتاب نمی‌کند."""
+# فرایندهای در حال اجرا، برای «لغو». کلید = شناسهٔ کار.
+# بدون این، دکمهٔ لغو فقط ظاهری بود: UI منتظر نمی‌ماند ولی مدل همچنان
+# توکن می‌سوزاند و جوابش بعداً می‌آمد.
+RUNNING: dict[str, subprocess.Popen] = {}
+
+
+def _sh(cmd: list[str], timeout: int = 10,
+        job: str | None = None) -> tuple[int, str]:
+    """
+    اجرای امن یک دستور. هرگز استثنا پرتاب نمی‌کند.
+
+    اگر `job` داده شود، فرایند در RUNNING ثبت می‌شود تا بشود واقعاً
+    کشتش (کل گروه فرایند، نه فقط پوسته).
+    """
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
-        return p.returncode, (p.stdout or "") + (p.stderr or "")
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, stdin=subprocess.DEVNULL,
+                             start_new_session=True)
     except Exception as exc:                                   # noqa: BLE001
         return 1, str(exc)
+    if job:
+        RUNNING[job] = p
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, (out or "") + (err or "")
+    except subprocess.TimeoutExpired:
+        _kill(p)
+        return 1, f"timed out after {timeout}s"
+    except Exception as exc:                                   # noqa: BLE001
+        return 1, str(exc)
+    finally:
+        if job:
+            RUNNING.pop(job, None)
+
+
+def _kill(p: subprocess.Popen) -> None:
+    """کل گروه فرایند را بکش — فقط terminate کردن پوسته کافی نیست."""
+    import signal
+    try:
+        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+    except Exception:                                          # noqa: BLE001
+        try:
+            p.terminate()
+        except Exception:                                      # noqa: BLE001
+            return
+    try:
+        p.wait(timeout=5)
+    except Exception:                                          # noqa: BLE001
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except Exception:                                      # noqa: BLE001
+            pass
+
+
+def cancel_job(job: str) -> bool:
+    p = RUNNING.get(job)
+    if not p:
+        return False
+    _kill(p)
+    RUNNING.pop(job, None)
+    return True
 
 
 def unit_active(unit: str, user: bool = False) -> bool:
@@ -337,7 +390,8 @@ class HermesAdapter(Adapter):
         st.session_count = len(self.sessions())
         return st
 
-    def send(self, text: str, session_id: str | None = None) -> SendOut:
+    def send(self, text: str, session_id: str | None = None,
+             job: str | None = None) -> SendOut:
         """
         hermes chat --oneshot -q "…"
 
@@ -351,7 +405,7 @@ class HermesAdapter(Adapter):
         cmd = ["hermes", "chat", "--oneshot", "-q", text]
         if session_id:
             cmd += ["--resume", session_id]
-        rc, out = _sh(cmd, timeout=300)
+        rc, out = _sh(cmd, timeout=300, job=job)
         sid = session_id or _hermes_sid(out)
         return SendOut(rc == 0, _hermes_body(out), sid)
 
@@ -561,7 +615,13 @@ class ClaudeAdapter(Adapter):
     #   --model cl/anthropic/claude-opus-5.5 → OK
     # پس وقتی مدلِ تنظیم‌شده یک کامبوست، به یک مدل واقعیِ آنتروپیک روی
     # همان روتر نگاشت می‌شود. این تنها ایجنتی است که چنین نگاشتی لازم دارد.
-    COMBO_FALLBACK = "cl/anthropic/claude-opus-5.5"
+    # نام کامبو کار نمی‌کند، ولی نام‌های مستعار بومی کلاد (`sonnet` و…) کار
+    # می‌کنند چون خود کلاد آنها را به یک شناسهٔ واقعی نگاشت می‌کند و روتر
+    # همان را سرو می‌کند.
+    # عمداً `cl/anthropic/...` نیست: آن مسیر به Cline می‌رود که موجودی‌اش
+    # تمام شده و ۴۰۲ «insufficient_credits» می‌دهد — خطایی که کاربر
+    # به‌شکل «reset after 2m» می‌دید و گمان می‌کرد ایرادِ پنل است.
+    COMBO_FALLBACK = "sonnet"
 
     def _real_model(self) -> str:
         m = self._env_model() or ""
@@ -579,7 +639,8 @@ class ClaudeAdapter(Adapter):
         except Exception:                                      # noqa: BLE001
             return False
 
-    def send(self, text: str, session_id: str | None = None) -> SendOut:
+    def send(self, text: str, session_id: str | None = None,
+             job: str | None = None) -> SendOut:
         """
         claude -p "…" --session-id <uuid>   نشست تازه با شناسهٔ دلخواه
         claude -p "…" --resume     <uuid>   ادامهٔ نشست موجود
@@ -592,11 +653,11 @@ class ClaudeAdapter(Adapter):
         sid = session_id or str(uuid.uuid4())
         cmd = ["claude", "-p", text, "--model", self._real_model()]
         cmd += (["--resume", sid] if self._exists(sid) else ["--session-id", sid])
-        rc, out = _sh(cmd, timeout=300)
+        rc, out = _sh(cmd, timeout=300, job=job)
         # اگر باز هم نشست پیدا نشد، یک بار با ساخت نشست تازه تلاش کن.
         if "No conversation found" in (out or ""):
             rc, out = _sh(["claude", "-p", text, "--model", self._real_model(),
-                           "--session-id", sid], timeout=300)
+                           "--session-id", sid], timeout=300, job=job)
         body = _strip_claude_noise(out)
         if rc != 0 and not body:
             return SendOut(False, out[-4000:], sid)
@@ -704,7 +765,8 @@ class PiAdapter(Adapter):
     def delete_session(self, sid: str) -> tuple[bool, str]:
         return _delete_jsonl(rp("/root/.pi/agent/sessions/*/*.jsonl"), sid)
 
-    def send(self, text: str, session_id: str | None = None) -> SendOut:
+    def send(self, text: str, session_id: str | None = None,
+             job: str | None = None) -> SendOut:
         """
         pi -p "…" --session-id <id>
 
@@ -726,7 +788,7 @@ class PiAdapter(Adapter):
                "--model", st.get("defaultModel", "Agentic"),
                "--session-id", bare,
                "--thinking", "off"]
-        rc, out = _sh(cmd, timeout=300)
+        rc, out = _sh(cmd, timeout=300, job=job)
         body = "\n".join(ln for ln in (out or "").splitlines()
                           if not ln.startswith("Warning: No project session"))
         # Pi فایل را `<timestamp>_<uuid>` می‌نامد، پس شناسه‌ای که در پنل
@@ -800,7 +862,8 @@ class OpenClawAdapter(Adapter):
             return True, body[-400:] or "deleted"
         return False, body[-400:] or "openclaw refused the delete"
 
-    def send(self, text: str, session_id: str | None = None) -> SendOut:
+    def send(self, text: str, session_id: str | None = None,
+             job: str | None = None) -> SendOut:
         """
         openclaw agent --json --message "…" --session-id <uuid>
 
@@ -812,7 +875,7 @@ class OpenClawAdapter(Adapter):
         sid = session_id or str(uuid.uuid4())
         cmd = ["openclaw", "agent", "--json", "--message", text,
                "--session-id", sid]
-        rc, out = _sh(cmd, timeout=300)
+        rc, out = _sh(cmd, timeout=300, job=job)
         body = (out or "").strip()
         try:
             d = json.loads(body[body.index("{"):body.rindex("}") + 1])

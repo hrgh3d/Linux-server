@@ -30,7 +30,7 @@ from pydantic import BaseModel
 
 from .adapters import (ADAPTERS, rp, RouterAdapter, _sh, list_9router_combos,
                        set_env_model, unit_active)
-from . import catalog, store, resolver, orchestra
+from . import catalog, jobs, store, resolver, orchestra
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC = APP_DIR.parent / "static"
@@ -76,6 +76,7 @@ class SendBody(BaseModel):
     text: str
     session_id: str | None = None
     project_id: str | None = None   # نشست تازه را همان‌جا به پروژه ببند
+    wait: bool = False              # true = رفتار همزمانِ قدیمی
 
 
 class ModelBody(BaseModel):
@@ -254,6 +255,43 @@ async def attention():
 # --------------------------------------------------------------- session detail
 
 
+class SessSettings(BaseModel):
+    reasoning: bool | None = None
+    exec_tools: bool | None = None
+    model: str | None = None
+
+
+@app.get("/api/session/{app_key}/{sid:path}/settings")
+async def session_settings_get(app_key: str, sid: str):
+    m = store.meta_get(app_key, sid)
+    return {"reasoning": bool(m.get("reasoning")),
+            "exec_tools": bool(m.get("exec_tools")),
+            "model": m.get("model")}
+
+
+@app.post("/api/session/{app_key}/{sid:path}/settings")
+async def session_settings_set(app_key: str, sid: str, b: SessSettings):
+    """
+    استدلال و اجرای فرمان، جدا برای هر نشست.
+
+    عمداً روی نشست ذخیره می‌شود نه سراسری: در یک پروژه ممکن است بخواهی
+    یک ایجنت اجازهٔ اجرا داشته باشد و بقیه نه.
+    """
+    if app_key not in ADAPTERS:
+        raise HTTPException(404, "unknown app")
+    kw = {k: (1 if v else 0) for k, v in
+          (("reasoning", b.reasoning), ("exec_tools", b.exec_tools))
+          if v is not None}
+    if b.model is not None:
+        kw["model"] = b.model
+    store.meta_set(app_key, sid, **kw)
+    invalidate()
+    return {"ok": True, "settings": await session_settings_get(app_key, sid)}
+
+
+# ⚠️ ترتیب مهم است: `{sid:path}` حریص است و `/api/session/pi/X/settings`
+# را هم می‌بلعد (sid می‌شود "X/settings"). پس مسیرهای با پسوندِ مشخص باید
+# **قبل** از مسیر جزئیات ثبت شوند — اولین تطبیق برنده است.
 @app.get("/api/session/{app_key}/{sid:path}")
 async def session_detail(app_key: str, sid: str, limit: int = 60):
     """متن کامل یک نشست برای نمایش در پنل جزئیات."""
@@ -290,12 +328,36 @@ async def session_detail(app_key: str, sid: str, limit: int = 60):
                                              "ts": d.get("timestamp")})
                     break
         elif app_key == "hermes":
-            rc, out = _sh(["hermes", "sessions", "export", sid], timeout=25)
-            if rc == 0:
-                for line in out.splitlines():
-                    line = line.strip()
-                    if line:
-                        msgs.append({"role": "log", "text": line[:2000], "ts": None})
+            # شناسهٔ placeholder هنوز نشست واقعی نیست؛ `hermes sessions
+            # export pending-…` جملهٔ «Exported 0 sessions to …» را چاپ
+            # می‌کرد و همان به‌عنوان *محتوای گفت‌وگو* نمایش داده می‌شد —
+            # یعنی کاربر بعد از ساخت نشست، متن گفت‌وگویش را گم می‌کرد.
+            if not sid.startswith("pending-"):
+                rc, out = _sh(["hermes", "sessions", "export", sid, "--format",
+                               "jsonl"], timeout=30)
+                if rc != 0 or "Exported 0 sessions" in out:
+                    rc, out = _sh(["hermes", "sessions", "export", sid],
+                                  timeout=30)
+                if rc == 0 and "Exported 0 sessions" not in out:
+                    for line in out.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("Exported "):
+                            continue
+                        if line.startswith("{"):
+                            try:
+                                d = json.loads(line)
+                                r = d.get("role") or d.get("type")
+                                if r in ("user", "assistant"):
+                                    msgs.append({
+                                        "role": r,
+                                        "text": _text_of(d.get("content")
+                                                         or d.get("text"))[:4000],
+                                        "ts": d.get("timestamp")})
+                                    continue
+                            except Exception:                  # noqa: BLE001
+                                pass
+                        msgs.append({"role": "log", "text": line[:2000],
+                                     "ts": None})
         return {"app": app_key, "id": sid, "messages": msgs[-limit:]}
     return await cached(f"detail:{app_key}:{sid}", build, ttl=3)
 
@@ -442,15 +504,82 @@ async def set_default_everywhere(b: DefaultBody):
             "count": len(applied)}
 
 
+def _run_send(jid: str, app_key: str, text: str, session_id: str | None,
+              project_id: str | None) -> None:
+    """
+    بدنهٔ واقعی ارسال — در یک نخ جدا اجرا می‌شود تا رابط بلوکه نشود.
+    وضعیت را مرحله‌به‌مرحله در jobs می‌نویسد تا کاربر ببیند چه می‌گذرد.
+    """
+    ad = ADAPTERS[app_key]
+    try:
+        pid = store.session_project(app_key, session_id) if session_id else None
+        pid = pid or project_id
+        prompt = text
+        ctx = ""
+        if pid:
+            jobs.set_(jid, phase="آماده‌سازی زمینهٔ پروژه")
+            ctx = store.build_context(pid, app_key)
+            if ctx:
+                prompt = f"{ctx}\n{text}"
+
+        # شناسهٔ placeholder هرمس نباید به CLI برود.
+        prev = session_id
+        if prev and prev.startswith("pending-"):
+            prev = None
+
+        jobs.set_(jid, state="running", phase=f"{ad.name} در حال پاسخ")
+        ok, out, sid = ad.send(prompt, prev, job=jid)
+
+        if jobs.get(jid) and jobs.get(jid)["state"] == "cancelled":
+            return
+
+        invalidate()
+        if sid and session_id and sid != session_id:
+            bare = session_id.replace("pending-", "")
+            if bare and bare in sid:
+                store.meta_del(app_key, session_id)
+        if sid and sid != session_id:
+            carry: dict = {}
+            if session_id:
+                old = store.meta_get(app_key, session_id) or {}
+                carry = {k: v for k, v in old.items()
+                         if k in ("title", "project_id", "pinned", "icon",
+                                  "color") and v}
+                if session_id.startswith("pending-"):
+                    store.meta_del(app_key, session_id)
+            if project_id:
+                carry["project_id"] = project_id
+            carry["draft"] = 0
+            store.meta_set(app_key, sid, carry)
+
+        learned: list[str] = []
+        if ok and pid:
+            jobs.set_(jid, phase="برداشت حافظهٔ مشترک")
+            learned = store.auto_harvest(pid, app_key, out)
+            store.tl(pid, app_key, "turn",
+                     f"{text.strip()[:60]} → {len(out or '')} chars")
+        jobs.set_(jid, state="done" if ok else "error",
+                  ended=time.time(), output=out, session_id=sid,
+                  learned=learned, context_used=bool(ctx), project=pid,
+                  phase="انجام شد" if ok else "خطا",
+                  error=None if ok else (out or "")[:400])
+        invalidate()
+    except Exception as exc:                                   # noqa: BLE001
+        jobs.set_(jid, state="error", ended=time.time(),
+                  error=str(exc)[:400], phase="خطا")
+
+
 @app.post("/api/send")
 async def send(body: SendBody):
     """
-    ارسال پرامپت به یک برنامه. متن فارسی بدون تغییر عبور می‌کند.
+    ارسال پرامپت. **بلافاصله** یک `job_id` برمی‌گرداند و کار در پس‌زمینه
+    ادامه پیدا می‌کند.
 
-    اگر این نشست عضو یک پروژهٔ مشترک باشد دو کار اضافه انجام می‌شود:
-      ۱) متنِ زمینهٔ پروژه (هدف، نقش، حافظهٔ تیم) جلوی پرامپت می‌چسبد
-      ۲) از جواب، نکته‌های ارزشمند خودکار برداشته و در حافظهٔ تیم ثبت می‌شود
-    هیچ‌کدام برای گفت‌وگوی کلی اتفاق نمی‌افتد.
+    قبلاً این درخواست تا ۳۰۰ ثانیه بلوکه می‌ماند: کاربر نه می‌دید چه
+    می‌گذرد، نه می‌توانست لغو کند، نه می‌توانست سراغ نشست دیگری برود.
+
+    با `wait=true` رفتار قدیمی (همزمان) حفظ می‌شود تا تست‌ها و اسکریپت‌ها
+    نشکنند.
     """
     ad = ADAPTERS.get(body.app)
     if ad is None:
@@ -458,59 +587,48 @@ async def send(body: SendBody):
     if "send" not in ad.capabilities:
         raise HTTPException(400, f"{ad.name} does not accept prompts yet")
 
-    pid = store.session_project(body.app, body.session_id) \
-        if body.session_id else None
-    prompt = body.text
-    ctx = ""
-    if pid:
-        ctx = store.build_context(pid, body.app)
-        if ctx:
-            prompt = f"{ctx}\n{body.text}"
+    busy = jobs.busy_sessions().get(f"{body.app}:{body.session_id}")
+    if busy:
+        raise HTTPException(409, "این نشست همین حالا مشغول است")
 
+    jid = jobs.new(body.app, body.session_id, body.text, body.project_id)
     loop = asyncio.get_running_loop()
-    # شناسهٔ placeholder هرمس نباید به CLI برود — هرمس آن را نمی‌شناسد و
-    # `--resume pending-…` شکست می‌خورد. فقط نشانهٔ «نشست تازه» است.
-    prev = body.session_id
-    if prev and prev.startswith("pending-"):
-        prev = None
+    fut = loop.run_in_executor(POOL, _run_send, jid, body.app, body.text,
+                               body.session_id, body.project_id)
+    if not body.wait:
+        return {"ok": True, "job_id": jid, "state": "queued"}
 
-    ok, out, sid = await loop.run_in_executor(
-        POOL, lambda: ad.send(prompt, prev))
+    await fut
+    j = jobs.get(jid) or {}
+    return {"ok": j.get("state") == "done", "job_id": jid,
+            "output": j.get("output"), "project": j.get("project"),
+            "session_id": j.get("session_id") or body.session_id,
+            "learned": j.get("learned") or [],
+            "context_used": bool(j.get("context_used")),
+            "error": j.get("error")}
+
+
+@app.get("/api/jobs")
+async def jobs_list():
+    return {"jobs": jobs.snapshot(), "busy": jobs.busy_sessions()}
+
+
+@app.get("/api/job/{jid}")
+async def job_get(jid: str):
+    j = jobs.get(jid)
+    if not j:
+        raise HTTPException(404, "unknown job")
+    return j
+
+
+@app.post("/api/job/{jid}/cancel")
+async def job_cancel(jid: str):
+    """لغو واقعی: فرایند CLI کشته می‌شود، نه اینکه فقط رابط رهایش کند."""
+    if not jobs.get(jid):
+        raise HTTPException(404, "unknown job")
+    ok = jobs.cancel(jid)
     invalidate()
-
-    # شناسهٔ واقعی برمی‌گردد تا رابط آن را نگه دارد. بدون این، هر پیام یک
-    # نشست تازه می‌ساخت و ایجنت چیزی از پیام قبلی یادش نمی‌ماند.
-    # آداپتور ممکن است شناسه را «تزیین» کند: Pi فایل را
-    # `<timestamp>_<uuid>` می‌نامد، پس شناسهٔ واقعی با آنچه دادیم یکی
-    # نیست ولی همان نشست است. اگر این را تطبیق ندهیم، ردیفِ پیش‌نویس
-    # برای همیشه به‌عنوان یک نشست خالیِ جدا باقی می‌ماند.
-    if sid and body.session_id and sid != body.session_id:
-        bare = body.session_id.replace("pending-", "")
-        if bare and bare in sid:
-            store.meta_del(body.app, body.session_id)
-
-    if sid and sid != body.session_id:
-        carry: dict = {}
-        if body.session_id:
-            # ابرداده‌ای که روی placeholder نشسته بود (نام، پروژه) را
-            # به شناسهٔ واقعی منتقل کن، بعد placeholder را دور بینداز.
-            old = store.meta_get(body.app, body.session_id) or {}
-            carry = {k: v for k, v in old.items()
-                     if k in ("title", "project_id", "pinned") and v}
-            if body.session_id.startswith("pending-"):
-                store.meta_del(body.app, body.session_id)
-        if body.project_id:
-            carry["project_id"] = body.project_id
-        carry["draft"] = 0
-        store.meta_set(body.app, sid, carry)
-
-    learned: list[str] = []
-    if ok and pid:
-        learned = store.auto_harvest(pid, body.app, out)
-        store.tl(pid, body.app, "turn",
-                 f"{body.text.strip()[:60]} → {len(out or '')} chars")
-    return {"ok": ok, "output": out, "project": pid, "session_id": sid,
-            "learned": learned, "context_used": bool(ctx)}
+    return {"ok": ok, "job": jobs.get(jid)}
 
 
 @app.post("/api/compare")
@@ -597,11 +715,17 @@ async def stream():
                 except Exception:                              # noqa: BLE001
                     ss = []
                 data["sessions"] = ss
+                # کارهای در جریان: رابط از همین‌جا می‌فهمد کنار کدام نشست
+                # چرخ‌دنده نشان دهد و کدام دکمهٔ «لغو» را فعال کند.
+                data["jobs"] = jobs.snapshot(20)
+                data["busy"] = jobs.busy_sessions()
                 data["fp"] = hashlib.md5(json.dumps(
                     [[x.get("source"), x.get("id"), x.get("title"),
                       x.get("last_active"), x.get("msg_count"),
                       x.get("project_id"), x.get("state")] for x in ss] +
-                    [[p.get("id"), p.get("name")] for p in data.get("projects", [])],
+                    [[p.get("id"), p.get("name")] for p in data.get("projects", [])] +
+                    [[j.get("id"), j.get("state"), j.get("phase")]
+                     for j in data["jobs"]],
                     ensure_ascii=False, sort_keys=True).encode()).hexdigest()
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             except Exception as exc:                           # noqa: BLE001
@@ -798,6 +922,98 @@ async def session_delete(app_key: str, sid: str, hard: int = 0):
     if not ok:
         raise HTTPException(502, f"delete failed: {detail}")
     return {"ok": True, "detail": detail, "backup": detail}
+
+
+# ───────────────────────────────────────── سطل زباله
+
+
+@app.get("/api/trash")
+async def trash_list():
+    """محتویات سطل زباله — تا امروز هیچ راهی برای دیدنش در پنل نبود."""
+    return {"items": store.trash_list()}
+
+
+@app.post("/api/trash/{tid}/restore")
+async def trash_restore(tid: str):
+    ok, detail = store.trash_restore(tid)
+    if not ok:
+        raise HTTPException(400, detail)
+    invalidate()
+    store.tl(None, None, "trash", f"restored {detail}")
+    return {"ok": True, "restored_to": detail}
+
+
+@app.delete("/api/trash/{tid}")
+async def trash_purge_one(tid: str):
+    n = store.trash_purge(tid)
+    return {"ok": bool(n), "purged": n}
+
+
+@app.delete("/api/trash")
+async def trash_purge_all():
+    n = store.trash_purge()
+    store.tl(None, None, "trash", f"emptied ({n} items)")
+    return {"ok": True, "purged": n}
+
+
+# ───────────────────────────────────────── عملیات دسته‌جمعی
+
+
+class BulkBody(BaseModel):
+    items: list[str]                 # "app:sid"
+    action: str                      # archive|unarchive|delete|project|pin|unpin
+    project_id: str | None = None
+
+
+@app.post("/api/sessions/bulk")
+async def sessions_bulk(b: BulkBody):
+    """
+    چند نشست را یکجا آرشیو/حذف/جابه‌جا کن.
+
+    نتیجه **به تفکیک** برمی‌گردد؛ یک شکستِ وسط کار نباید بقیه را متوقف
+    کند و نباید هم پشت یک «ok» کلی پنهان شود.
+    """
+    res: dict[str, dict] = {}
+    for key in b.items:
+        app_key, _, sid = key.partition(":")
+        if app_key not in ADAPTERS or not sid:
+            res[key] = {"ok": False, "msg": "bad item"}
+            continue
+        try:
+            if b.action == "archive":
+                store.meta_set(app_key, sid, archived=1)
+            elif b.action == "unarchive":
+                store.meta_set(app_key, sid, archived=0)
+            elif b.action == "pin":
+                store.meta_set(app_key, sid, pinned=1)
+            elif b.action == "unpin":
+                store.meta_set(app_key, sid, pinned=0)
+            elif b.action == "project":
+                store.meta_set(app_key, sid, project_id=b.project_id or None)
+            elif b.action == "delete":
+                if store.meta_get(app_key, sid).get("draft"):
+                    store.meta_del(app_key, sid)
+                else:
+                    ok, detail = ADAPTERS[app_key].delete_session(sid)
+                    store.meta_del(app_key, sid)
+                    if not ok:
+                        res[key] = {"ok": False, "msg": detail}
+                        continue
+            else:
+                raise HTTPException(400, f"unknown action {b.action}")
+            res[key] = {"ok": True}
+        except HTTPException:
+            raise
+        except Exception as exc:                               # noqa: BLE001
+            res[key] = {"ok": False, "msg": str(exc)[:200]}
+    invalidate()
+    done = sum(1 for v in res.values() if v["ok"])
+    store.tl(None, None, "bulk", f"{b.action}: {done}/{len(b.items)}")
+    return {"ok": done == len(b.items), "done": done,
+            "total": len(b.items), "results": res}
+
+
+# ───────────────────────────────────────── تنظیمات هر نشست
 
 
 @app.post("/api/session/new/{app_key}")

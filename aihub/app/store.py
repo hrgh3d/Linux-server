@@ -164,6 +164,9 @@ _ADDED = [
     # (وگرنه دکمهٔ ＋ انگار هیچ کاری نمی‌کند) ولی جزو نشست‌های واقعی
     # ایجنت نیست، چون هنوز روی دیسکِ خود ایجنت وجود ندارد.
     ("session_meta", "draft", "integer default 0"),
+    ("session_meta", "reasoning", "integer default 0"),
+    ("session_meta", "exec_tools", "integer default 0"),
+    ("session_meta", "model", "text"),
 ]
 
 
@@ -231,7 +234,7 @@ def meta_set(app: str, sid: str, _fields: dict | None = None, **kw) -> dict:
     """
     kw = {**(_fields or {}), **kw}
     allowed = {"title", "icon", "color", "pinned", "archived", "tags", "note",
-               "project_id", "draft"}
+               "project_id", "draft", "reasoning", "exec_tools", "model"}
     fields = {k: v for k, v in kw.items() if k in allowed}
     with db() as c:
         c.execute("insert or ignore into session_meta(app,sid,updated_at)"
@@ -254,6 +257,110 @@ def meta_del(app: str, sid: str) -> None:
         c.execute("delete from session_meta where app=? and sid=?", (app, sid))
 
 
+def _manifest() -> dict:
+    f = TRASH / ".manifest.json"
+    try:
+        return json.loads(f.read_text())
+    except Exception:                                          # noqa: BLE001
+        return {}
+
+
+def _manifest_set(tid: str, origin: str, label: str = "") -> None:
+    _ensure()
+    m = _manifest()
+    m[tid] = {"origin": origin, "label": label, "at": now()}
+    try:
+        (TRASH / ".manifest.json").write_text(
+            json.dumps(m, ensure_ascii=False, indent=1))
+    except OSError:
+        pass
+
+
+def trash_list() -> list[dict]:
+    """
+    محتویات سطل زباله — تا امروز هیچ راهی برای دیدنش در پنل نبود؛
+    فایل‌ها آنجا جمع می‌شدند و کاربر خبر نداشت.
+    """
+    _ensure()
+    man = _manifest()
+    out = []
+    for p in sorted(TRASH.glob("*"), reverse=True):
+        if p.name == ".manifest.json":
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        name = p.name
+        ts, _, rest = name.partition("_")
+        try:
+            when = float(ts)
+        except ValueError:
+            when, rest = st.st_mtime, name
+        kind = "project" if rest.startswith("proj_") else "session"
+        info = man.get(name) or {}
+        out.append({"id": name,
+                    "name": info.get("label") or rest.replace("proj_", "", 1),
+                    "origin": info.get("origin"),
+                    "restorable": bool(info.get("origin")) or kind == "project",
+                    "kind": kind, "deleted_at": when,
+                    "size": st.st_size if p.is_file() else
+                            sum(f.stat().st_size for f in p.rglob("*")
+                                if f.is_file()),
+                    "is_dir": p.is_dir()})
+    return out
+
+
+def trash_restore(tid: str) -> tuple[bool, str]:
+    """
+    برگرداندن از سطل زباله به جای اصلی‌اش.
+
+    اگر مقصد از قبل وجود داشته باشد بازنویسی **نمی‌کنیم** — برگرداندن یک
+    نسخهٔ قدیمی روی کار فعلی بدتر از خود حذف است.
+    """
+    _ensure()
+    src = TRASH / tid
+    if not src.exists():
+        return False, "not in trash"
+    rest = tid.partition("_")[2] or tid
+    origin = (_manifest().get(tid) or {}).get("origin")
+    if origin:
+        dst = Path(origin)
+    elif rest.startswith("proj_"):
+        dst = PROJECTS / rest[len("proj_"):]
+    else:
+        return False, "original path unknown"
+    if dst.exists():
+        return False, f"{dst} already exists"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    m = _manifest()
+    m.pop(tid, None)
+    try:
+        (TRASH / ".manifest.json").write_text(
+            json.dumps(m, ensure_ascii=False, indent=1))
+    except OSError:
+        pass
+    return True, str(dst)
+
+
+def trash_purge(tid: str | None = None) -> int:
+    """حذف قطعی — یکی، یا همه اگر tid ندهی."""
+    _ensure()
+    n = 0
+    targets = [TRASH / tid] if tid else [
+        x for x in TRASH.glob("*") if x.name != ".manifest.json"]
+    for p in targets:
+        if not p.exists():
+            continue
+        try:
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+            n += 1
+        except OSError:
+            continue
+    return n
+
+
 def trash_put(path: str) -> str | None:
     """
     پیش از حذف واقعی، کپی می‌گیریم. حذف نشست یعنی پاک کردن فایل jsonl
@@ -264,6 +371,8 @@ def trash_put(path: str) -> str | None:
         return None
     _ensure()
     dst = TRASH / f"{int(now())}_{src.name}"
+    # مسیر اصلی را ثبت کن، وگرنه «بازگردانی» نمی‌داند کجا برگرداند.
+    _manifest_set(dst.name, str(src), src.name)
     try:
         shutil.copy2(src, dst)
         return str(dst)

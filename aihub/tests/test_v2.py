@@ -562,7 +562,7 @@ def test_openclaw_send_does_not_use_local(monkeypatch):
     from app import adapters
     seen = {}
 
-    def fake_sh(cmd, timeout=10):
+    def fake_sh(cmd, timeout=10, job=None):
         seen["cmd"] = cmd
         return 0, '{"ok":true,"reply":"PONG"}'
 
@@ -582,7 +582,7 @@ def test_openclaw_send_surfaces_gateway_errors(monkeypatch):
     from app import adapters
     err = ('{"ok":false,"error":{"type":"cli_error","message":'
            '"A Gateway is running for this state directory"}}')
-    monkeypatch.setattr(adapters, "_sh", lambda c, timeout=10: (1, err))
+    monkeypatch.setattr(adapters, "_sh", lambda c, timeout=10, job=None: (1, err))
     ok, out, _sid = adapters.OpenClawAdapter().send("hi")
     assert ok is False
     assert "Gateway is running" in out
@@ -717,9 +717,11 @@ def test_frontend_memory_is_automatic_not_manual():
 
 
 def test_send_endpoint_injects_context_and_harvests():
+    # منطق واقعی به _run_send منتقل شد (اجرای پس‌زمینه‌ای) تا /api/send
+    # بلوکه نماند؛ قرارداد همان است.
     import inspect
     from app import main
-    src = inspect.getsource(main.send)
+    src = inspect.getsource(main._run_send)
     assert "session_project" in src, "send never checks project membership"
     assert "build_context" in src, "shared memory is not injected"
     assert "auto_harvest" in src, "nothing is learned back"
@@ -1185,7 +1187,7 @@ def test_claude_uses_session_id_for_new_and_resume_for_existing(monkeypatch):
     ad = adapters.ClaudeAdapter()
     calls = []
 
-    def fake_sh(cmd, timeout=0):
+    def fake_sh(cmd, timeout=0, job=None):
         calls.append(cmd)
         return 0, "ok"
     monkeypatch.setattr(adapters, "_sh", fake_sh)
@@ -1266,8 +1268,9 @@ def test_draft_is_reconciled_when_the_agent_decorates_the_id(client, monkeypatch
     sid = client.post("/api/session/new/pi", json={}).json()["session_id"]
     real = f"2026-09-24T08-06-32-714Z_{sid}"
     monkeypatch.setattr(ADAPTERS["pi"], "send",
-                        lambda t, s=None: SendOut(True, "ok", real))
-    client.post("/api/send", json={"app": "pi", "text": "hi", "session_id": sid})
+                        lambda t, s=None, job=None: SendOut(True, "ok", real))
+    client.post("/api/send", json={"app": "pi", "text": "hi",
+                                   "session_id": sid, "wait": True})
     from app import store
     assert not store.meta_get("pi", sid), "draft row survived as a ghost"
     assert store.meta_get("pi", real), "real session was not registered"
@@ -1294,7 +1297,7 @@ def test_openclaw_delete_uses_the_session_key_not_the_bare_id(monkeypatch):
     listing = json.dumps([{"key": "agent:main:explicit:abc", "sessionId": "abc"}])
     seen = []
 
-    def fake_sh(cmd, timeout=0):
+    def fake_sh(cmd, timeout=0, job=None):
         seen.append(cmd)
         if "list" in cmd:
             return 0, listing
@@ -1309,7 +1312,7 @@ def test_openclaw_delete_uses_the_session_key_not_the_bare_id(monkeypatch):
 def test_pi_returns_the_real_decorated_session_id(monkeypatch):
     from app import adapters
     ad = adapters.PiAdapter()
-    monkeypatch.setattr(adapters, "_sh", lambda c, timeout=0: (0, "ok"))
+    monkeypatch.setattr(adapters, "_sh", lambda c, timeout=0, job=None: (0, "ok"))
     monkeypatch.setattr(ad, "_settings", lambda: {})
 
     class S:
@@ -1329,7 +1332,7 @@ def test_pi_never_double_decorates_its_session_id(monkeypatch):
     ad = adapters.PiAdapter()
     seen = []
     monkeypatch.setattr(adapters, "_sh",
-                        lambda c, timeout=0: (seen.append(c), (0, "ok"))[1])
+                        lambda c, timeout=0, job=None: (seen.append(c), (0, "ok"))[1])
     monkeypatch.setattr(ad, "_settings", lambda: {})
     monkeypatch.setattr(ad, "sessions", lambda: [])
     ad.send("hi", "2026-09-24T08-22-18-253Z_2991b730-4eb0-4393")
@@ -1470,3 +1473,170 @@ def test_stream_sends_the_v2_overview_not_the_v1_one(client):
     full = client.get("/api/overview2").json()
     for k in ("projects", "live", "health", "perms"):
         assert k in full, k
+
+
+# ═══════════ v2.5: کار پس‌زمینه، لغو، سطل زباله، عملیات دسته‌جمعی
+
+
+def test_send_returns_immediately_with_a_job_id(client, monkeypatch):
+    """
+    قبلاً /api/send تا ۳۰۰ ثانیه بلوکه می‌ماند: نه پیشرفتی دیده می‌شد،
+    نه می‌شد لغو کرد، نه می‌شد سراغ نشست دیگر رفت.
+    """
+    r = client.post("/api/send", json={"app": "pi", "text": "hi"})
+    assert r.status_code == 200
+    assert r.json().get("job_id"), "no job id — the UI cannot track progress"
+
+
+def test_job_can_be_cancelled(client):
+    jid = client.post("/api/send",
+                      json={"app": "pi", "text": "hi"}).json()["job_id"]
+    r = client.post(f"/api/job/{jid}/cancel")
+    assert r.status_code == 200
+    assert client.get(f"/api/job/{jid}").json()["state"] in ("cancelled", "done",
+                                                             "error")
+
+
+def test_cancel_actually_kills_the_process_not_just_the_ui():
+    """
+    علامت‌گذاری کافی نیست: مدل همچنان توکن می‌سوزاند و جوابش بعداً
+    می‌رسد. باید فرایند واقعاً کشته شود.
+    """
+    import inspect
+    from app import jobs as J, adapters
+    assert "cancel_job" in inspect.getsource(J)
+    src = inspect.getsource(adapters._kill)
+    assert "killpg" in src, "kills only the shell, not the process group"
+
+
+def test_one_busy_session_does_not_block_the_others(client, monkeypatch):
+    """هر نشست کار خودش را دارد؛ مشغول بودن یکی نباید بقیه را قفل کند."""
+    import time as _t
+    from app.adapters import ADAPTERS, SendOut
+    monkeypatch.setattr(ADAPTERS["pi"], "send",
+                        lambda t, s=None, job=None: (_t.sleep(1.5),
+                                                     SendOut(True, "ok", s))[1])
+    a = client.post("/api/send", json={"app": "pi", "text": "x",
+                                       "session_id": "s-a"}).json()
+    b = client.post("/api/send", json={"app": "pi", "text": "y",
+                                       "session_id": "s-b"}).json()
+    assert a["job_id"] != b["job_id"], "second session was blocked"
+    _t.sleep(0.3)
+    again = client.post("/api/send", json={"app": "pi", "text": "z",
+                                           "session_id": "s-a"})
+    assert again.status_code == 409, "same session accepted twice at once"
+
+
+def test_stream_carries_jobs_so_spinners_are_live(client):
+    import inspect
+    from app import main as m
+    src = inspect.getsource(m.stream)
+    assert '"jobs"' in src and '"busy"' in src
+
+
+def test_trash_can_be_listed_restored_and_purged(client, tmp_path):
+    from app import store
+    f = tmp_path / "victim.jsonl"
+    f.write_text("hello")
+    store.trash_put(str(f))
+    items = client.get("/api/trash").json()["items"]
+    assert items, "trash is invisible in the panel"
+    it = items[0]
+    assert it["restorable"], "no origin recorded — restore is impossible"
+    f.unlink(missing_ok=True)
+    r = client.post(f"/api/trash/{it['id']}/restore")
+    assert r.status_code == 200
+    assert f.exists(), "restore did not put the file back"
+
+
+def test_restore_never_overwrites_an_existing_file(client, tmp_path):
+    from app import store
+    f = tmp_path / "keep.jsonl"
+    f.write_text("old")
+    store.trash_put(str(f))
+    f.write_text("NEW WORK")
+    items = [i for i in client.get("/api/trash").json()["items"]
+             if i["name"] == "keep.jsonl"]
+    r = client.post(f"/api/trash/{items[0]['id']}/restore")
+    assert r.status_code == 400
+    assert f.read_text() == "NEW WORK", "restore clobbered current work"
+
+
+def test_bulk_reports_each_item_separately(client):
+    sids = [client.post("/api/session/new/pi", json={}).json()["session_id"]
+            for _ in range(3)]
+    items = [f"pi:{x}" for x in sids] + ["bogus:zz"]
+    r = client.post("/api/sessions/bulk",
+                    json={"items": items, "action": "archive"}).json()
+    assert r["done"] == 3 and r["total"] == 4
+    assert r["results"]["bogus:zz"]["ok"] is False
+    assert r["ok"] is False, "a partial failure must not look like success"
+
+
+def test_per_session_reasoning_and_exec_toggles(client):
+    sid = client.post("/api/session/new/pi", json={}).json()["session_id"]
+    client.post(f"/api/session/pi/{sid}/settings",
+                json={"reasoning": True, "exec_tools": False})
+    g = client.get(f"/api/session/pi/{sid}/settings").json()
+    assert g["reasoning"] is True and g["exec_tools"] is False
+
+
+def test_hermes_export_noise_is_not_shown_as_the_conversation():
+    """
+    `hermes sessions export pending-…` می‌نویسد «Exported 0 sessions to …»
+    و همان به‌عنوان *محتوای گفت‌وگو* نمایش داده می‌شد — کاربر بعد از ساخت
+    نشست متن گفت‌وگویش را گم می‌کرد.
+    """
+    import inspect
+    from app import main as m
+    src = inspect.getsource(m.session_detail)
+    assert "Exported 0 sessions" in src
+    assert 'startswith("pending-")' in src
+
+
+def test_claude_fallback_is_not_a_provider_with_no_credits():
+    """
+    `cl/anthropic/claude-opus-5.5` به Cline می‌رود که موجودی‌اش تمام شده و
+    ۴۰۲ می‌دهد؛ کاربر آن را به‌شکل «reset after 2m» می‌دید.
+    """
+    from app.adapters import ClaudeAdapter
+    assert not ClaudeAdapter.COMBO_FALLBACK.startswith("cl/")
+
+
+def test_no_body_model_silently_degrades_to_a_query_param():
+    """
+    با `from __future__ import annotations`، اگر مدل Pydantic **بعد** از
+    مسیری که استفاده‌اش می‌کند تعریف شود، FastAPI بی‌صدا آن را پارامتر
+    query می‌گیرد و endpoint با 422 «Field required (query)» می‌شکند —
+    بدون هیچ خطای import. دقیقاً همین روی /settings اتفاق افتاد.
+    """
+    from fastapi.routing import APIRoute
+    from pydantic import BaseModel
+    from app.main import app
+    bad = []
+    for r in app.routes:
+        if not isinstance(r, APIRoute) or not (r.methods & {"POST", "PATCH", "PUT"}):
+            continue
+        for f in r.dependant.query_params:
+            ann = f.field_info.annotation
+            try:
+                if isinstance(ann, type) and issubclass(ann, BaseModel):
+                    bad.append(f"{sorted(r.methods)[0]} {r.path} -> {f.name}")
+            except TypeError:
+                continue
+    assert not bad, f"body models parsed as query params: {bad}"
+
+
+def test_specific_session_routes_win_over_the_greedy_one():
+    """
+    `{sid:path}` حریص است: اگر مسیر جزئیات زودتر ثبت شود،
+    `/api/session/pi/X/settings` را می‌بلعد و sid می‌شود "X/settings".
+    """
+    from fastapi.routing import APIRoute
+    from app.main import app
+    paths = [r.path for r in app.routes if isinstance(r, APIRoute)
+             and r.path.startswith("/api/session/{app_key}")
+             and "GET" in r.methods]
+    detail = paths.index("/api/session/{app_key}/{sid:path}")
+    setts = paths.index("/api/session/{app_key}/{sid:path}/settings")
+    assert setts < detail, "the greedy route is registered first and wins"
