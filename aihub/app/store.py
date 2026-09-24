@@ -56,6 +56,16 @@ create table if not exists projects(
 );
 
 -- نقش هر ایجنت در پروژه
+-- رشتهٔ گفت‌وگوی مشترک پروژه: کاربر و همهٔ ایجنت‌ها در یک جا
+create table if not exists thread(
+  id         integer primary key autoincrement,
+  project_id text not null,
+  app        text,                     -- null = خود کاربر
+  text       text,
+  created_at real
+);
+create index if not exists thread_pid on thread(project_id, id);
+
 create table if not exists project_roles(
   project_id text not null,
   app        text not null,
@@ -485,6 +495,39 @@ def proj_delete(pid: str) -> bool:
     if d.exists():
         shutil.move(str(d), str(TRASH / f"{int(now())}_proj_{pid}"))
     return True
+
+
+def thread_add(pid: str, app: str | None, text: str) -> dict:
+    """
+    یک پیام در رشتهٔ مشترک پروژه.
+
+    app=None یعنی خود کاربر. این رشته همان چیزی است که همهٔ ایجنت‌ها
+    می‌بینند، پس کار واقعاً بینشان پاس داده می‌شود نه اینکه هرکدام در
+    جزیرهٔ خودش کار کند.
+    """
+    with db() as c:
+        cur = c.execute(
+            "insert into thread(project_id,app,text,created_at) values(?,?,?,?)",
+            (pid, app, (text or "")[:20000], now()))
+        rid = cur.lastrowid
+        r = c.execute("select * from thread where id=?", (rid,)).fetchone()
+        return dict(r) if r else {}
+
+
+def thread_list(pid: str, limit: int = 100) -> list[dict]:
+    with db() as c:
+        rows = c.execute(
+            "select * from thread where project_id=? order by id desc limit ?",
+            (pid, limit)).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+
+def role_session(pid: str, app: str) -> str | None:
+    """نشستی که این ایجنت داخل این پروژه استفاده می‌کند."""
+    with db() as c:
+        r = c.execute("select session_id from project_roles"
+                      " where project_id=? and app=?", (pid, app)).fetchone()
+        return (dict(r).get("session_id") if r else None) or None
 
 
 def role_set(pid: str, app: str, role: str = "", ord_: int = 0,

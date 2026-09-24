@@ -1642,3 +1642,61 @@ def test_specific_session_routes_win_over_the_greedy_one():
     detail = paths.index("/api/session/{app_key}/{sid:path}")
     setts = paths.index("/api/session/{app_key}/{sid:path}/settings")
     assert setts < detail, "the greedy route is registered first and wins"
+
+
+# ═══════════ v2.6: فضای کار پروژه به سبک Grok Bot
+
+
+def test_project_has_a_shared_thread_all_agents_see(client):
+    """
+    الگوی Grok Bot: «چند بات در یک رشته، کار را بین خودشان پاس می‌دهند».
+    بدون رشتهٔ مشترک، هر ایجنت در جزیرهٔ خودش کار می‌کند.
+    """
+    pid = client.post("/api/projects", json={"name": "t"}).json()["project"]["id"]
+    client.post(f"/api/projects/{pid}/thread", json={"text": "شروع"})
+    ms = client.get(f"/api/projects/{pid}/thread").json()["messages"]
+    assert [m["text"] for m in ms] == ["شروع"]
+    assert ms[0]["app"] is None, "a user note must not look like an agent reply"
+
+
+def test_shared_workspace_is_readable_and_writable(client):
+    pid = client.post("/api/projects", json={"name": "w"}).json()["project"]["id"]
+    client.post(f"/api/projects/{pid}/file",
+                json={"path": "notes/plan.md", "text": "سلام"})
+    got = client.get(f"/api/projects/{pid}/file",
+                     params={"path": "notes/plan.md"}).json()
+    assert got["text"] == "سلام"
+    names = [i["name"] for i in
+             client.get(f"/api/projects/{pid}/files").json()["items"]]
+    assert "notes" in names
+
+
+def test_workspace_refuses_to_escape_its_folder(client):
+    """`../../etc/passwd` نباید از پوشهٔ پروژه بیرون برود."""
+    pid = client.post("/api/projects", json={"name": "esc"}).json()["project"]["id"]
+    for bad in ("../../../etc/passwd", "/etc/passwd", "a/../../../../tmp/x"):
+        r = client.get(f"/api/projects/{pid}/file", params={"path": bad})
+        assert r.status_code in (400, 404), f"escaped with {bad}"
+
+
+def test_deleting_a_workspace_file_keeps_a_trash_copy(client):
+    pid = client.post("/api/projects", json={"name": "d"}).json()["project"]["id"]
+    client.post(f"/api/projects/{pid}/file", json={"path": "x.txt", "text": "hi"})
+    before = len(client.get("/api/trash").json()["items"])
+    client.delete(f"/api/projects/{pid}/file", params={"path": "x.txt"})
+    assert len(client.get("/api/trash").json()["items"]) == before + 1
+
+
+def test_frontend_projects_use_the_teammate_rail():
+    h = _html()
+    assert "pgrid" in h and "prail" in h, "no teammate rail"
+    assert "data-ag=" in h, "agents are not individually selectable"
+    assert "paintAgent" in h, "no per-agent chat"
+    assert "paintThread" in h, "no shared thread"
+    assert "paintFiles" in h, "no shared workspace"
+
+
+def test_frontend_keeps_the_review_gate():
+    """دروازهٔ بازبینی نباید در بازطراحی گم شود."""
+    h = _html()
+    assert "paintReceipts" in h and "reviewDlg" in h

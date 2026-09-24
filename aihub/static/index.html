@@ -412,6 +412,40 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
 .tgl.on{border-color:var(--accent);color:var(--accent);background:var(--raised)}
 .tgl:hover{color:var(--txt)}
 
+/* ── چیدمان پروژه به سبک Grok Bot: نوار هم‌تیمی‌ها + صفحهٔ اصلی ── */
+.pgrid{display:grid;grid-template-columns:212px 1fr;height:100%;min-height:0}
+.prail{border-inline-end:1px solid var(--line);background:var(--panel2);
+  overflow-y:auto;padding:8px 6px}
+.prh{display:flex;align-items:center;font-size:10.5px;text-transform:uppercase;
+  letter-spacing:.7px;color:var(--faint);padding:6px 8px 4px}
+.prh .add{margin-inline-start:auto;font-size:14px;color:var(--accent);
+  width:26px;height:26px;border-radius:6px}
+.prh .add:hover{background:var(--raised)}
+.pagent{display:flex;align-items:center;gap:8px;padding:8px;border-radius:9px;
+  cursor:pointer;margin-bottom:2px;min-height:44px}
+.pagent:hover{background:var(--raised)}
+.pagent.on{background:var(--raised);box-shadow:inset 2px 0 0 var(--accent)}
+.pav{width:26px;height:26px;display:grid;place-items:center;flex:0 0 auto}
+.ptx{min-width:0;flex:1}
+.pn{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pr{font-size:10.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pst{font-size:9.5px;padding:2px 5px;border-radius:5px;background:var(--panel);color:var(--faint)}
+.pst.running{color:var(--warn)}.pst.done{color:var(--ok)}.pst.blocked{color:var(--bad)}
+.pmain{display:flex;flex-direction:column;min-width:0;min-height:0}
+.phd{display:flex;align-items:center;gap:9px;padding:10px 14px;
+  border-bottom:1px solid var(--line);font-size:13px;font-weight:600;flex-wrap:wrap}
+.pbody{flex:1;overflow-y:auto;padding:12px 14px;min-height:0}
+.pfoot{display:flex;gap:6px;align-items:flex-end;padding:9px 12px;
+  border-top:1px solid var(--line);background:var(--panel2)}
+.pfoot select{max-width:170px;font-size:12px}
+.pfoot textarea{flex:1;resize:none;max-height:130px;font-size:13.5px}
+@media(max-width:860px){
+  .pgrid{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+  .prail{border-inline-end:none;border-bottom:1px solid var(--line);
+    display:flex;gap:6px;overflow-x:auto;padding:6px;max-height:84px}
+  .prail .prh{display:none}
+  .pagent{flex:0 0 auto;min-width:130px}
+}
 .filt{display:flex;gap:4px;align-items:center}
 .filt input{flex:1}
 .cdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-inline-end:5px;vertical-align:1px}
@@ -1272,17 +1306,29 @@ function projDlg(p){
   $('#pn').focus();
 }
 
-async function openProject(pid){
+// ═══════════ فضای کار پروژه — الگوی Grok Bot ═══════════
+//
+// از x.ai/bot: هم‌تیمی‌ها در یک نوار کنار هم، هرکدام چتِ خودش، همه روی
+// «یک کامپیوتر مشترک» (فایل‌ها + حافظه) و یک رشتهٔ مشترک که کار را بین
+// خودشان پاس می‌دهند.
+//
+// pv = وضعیت نمای پروژه: کدام زیربخش باز است و کدام هم‌تیمی انتخاب شده.
+let pv={tab:'thread',agent:null,path:''};
+
+async function openProject(pid,keep){
   view={kind:'project',pid}; tab='projects';
+  if(!keep)pv={tab:'thread',agent:null,path:''};
   $$('.tabs button').forEach(x=>x.classList.toggle('on',x.dataset.t==='projects'));
   tree(); drawers(false);
   $('#comp').style.display='none';
   $('#stage').className='page';
-  $('#stage').innerHTML='<div class="pwrap"><div class="empty">Loading…</div></div>';
+  if(!keep)$('#stage').innerHTML='<div class="pwrap"><div class="empty">Loading…</div></div>';
   let p;
   try{p=await api('/api/projects/'+pid);}
   catch(e){$('#stage').innerHTML=`<div class="pwrap"><div class="empty">${esc(e.message)}</div></div>`;return;}
+  view.p=p;
   const over=(p.spent_usd||0)>=(p.budget_usd||0);
+
   $('#mhead').innerHTML=`<span class="ic">${p.icon||'📁'}</span>
     <span class="ti rtl">${esc(p.name)}</span>
     <span class="pill ${over?'live':''} hide-sm">$${(p.spent_usd||0).toFixed(3)} / $${(p.budget_usd||0).toFixed(2)}</span>
@@ -1293,8 +1339,6 @@ async function openProject(pid){
     </div>`;
   $('#edP').onclick=()=>projDlg(p);
   $('#runP').onclick=()=>runProject(p);
-  // تا امروز هیچ راهی برای حذف پروژه در رابط نبود — endpoint وجود داشت
-  // ولی هیچ دکمه‌ای صدایش نمی‌زد، پس پروژه‌ها برای همیشه می‌ماندند.
   $('#delP').onclick=()=>confirmDlg(`Delete “${esc(p.name)}”?`,
     'The project, its roles and its shared memory are removed. The chats '+
     'themselves stay — they just go back to General.','Delete',async()=>{
@@ -1302,105 +1346,265 @@ async function openProject(pid){
         toast('Project deleted','ok'); await refresh(); home();}
       catch(e){toast('Failed: '+e.message,'bad');}});
 
-  const runnable=S.apps.filter(a=>a.capabilities.includes('send'));
-  $('#stage').innerHTML=`<div class="pwrap">
-    <div class="fh rtl">${esc(p.goal||'No goal set yet')}</div>
-    <div class="fsub">${p.mode} mode · ${(p.roles||[]).length} agents ·
-      ${(p.memory||[]).length} memory entries
-      ${over?'<span style="color:var(--bad)"> · budget reached, runs are blocked</span>':''}</div>
+  const roles=p.roles||[];
+  const tabs=[['thread','🧵 Team thread'],['files','📁 Workspace'],
+              ['memory','🧠 Memory'],['receipts','✅ Review'],
+              ['activity','⚡ Activity']];
 
-    <div class="sech">👥 Team
-      <button class="add" id="addRole">＋ assign an agent</button></div>
-    ${(p.roles||[]).length?p.roles.map(r=>`
-      <div class="srow">
-        <span style="font-size:15px">${brand(r.app)}</span>
-        <div class="tx"><div class="t1">${esc(app(r.app).name)}</div>
-          <div class="t2 rtl">${esc(r.role||'no task assigned')}</div></div>
-        <span class="tag ${r.status==='done'?'g':r.status==='running'?'w':
-          r.status==='blocked'?'b':''}">${r.status}</span>
-        <button class="sm gh" data-run="${r.app}">▶</button>
-        <button class="sm gh" data-ctx="${r.app}" title="Preview injected context">👁</button>
-        <button class="sm gh" data-rmrole="${r.app}">✕</button>
-      </div>`).join(''):'<div class="empty">No agents assigned yet.</div>'}
-
-    <div class="sech">🧠 Shared memory
-      <button class="add" id="addMem">＋ add entry</button></div>
-    ${(p.memory||[]).length?p.memory.map(m=>`
-      <div class="srow">
-        <span style="font-size:13px">${m.pinned?'📌':'•'}</span>
-        <div class="tx"><div class="t1 rtl">${esc(m.text)}</div>
-          <div class="t2">${m.app?esc(app(m.app).name):'you'} · ${esc(m.kind)}</div></div>
-        <button class="sm gh" data-pinm="${m.id}" data-on="${m.pinned?0:1}">📌</button>
-        <button class="sm gh" data-delm="${m.id}">✕</button>
-      </div>`).join(''):
-      `<div class="empty">Memory is empty.<br>
-       Agents write to it by starting a line with <code>MEMORY:</code>,
-       or you can pin any message from a chat.</div>`}
-
-    <div class="sech">🕐 Timeline</div>
-    ${(p.timeline||[]).length?p.timeline.map(t=>`
-      <div class="ev" style="padding:7px 2px">
-        <span class="d" style="background:${t.kind==='error'||t.kind==='blocked'?'var(--bad)':
-          t.kind==='done'?'var(--ok)':'var(--warn)'}"></span>
-        <span class="x rtl">${t.app?'<b>'+esc(app(t.app).name)+'</b> ':''}${esc(t.text)}</span>
-        <span class="t">${ago(new Date(t.created_at*1000).toISOString())}</span></div>`).join(''):
-      '<div class="empty">No activity yet</div>'}
-
-    <div class="sech">📜 Receipts <span class="add" style="pointer-events:none">
-      what actually finished</span></div>
-    <div id="recs"><div class="empty">—</div></div>
+  $('#stage').innerHTML=`<div class="pgrid">
+    <aside class="prail">
+      <div class="prh">Teammates<button class="add" id="addRole">＋</button></div>
+      ${roles.length?roles.map(r=>`
+        <div class="pagent ${pv.agent===r.app?'on':''}" data-ag="${esc(r.app)}">
+          <span class="pav">${brand(r.app,18)}</span>
+          <div class="ptx"><div class="pn">${esc(app(r.app).name)}</div>
+            <div class="pr rtl">${esc(r.role||'no task yet')}</div></div>
+          ${S.busy[r.app+':'+(r.session_id||'')]?'<span class="busyspin"></span>':
+            `<span class="pst ${r.status}">${r.status}</span>`}
+        </div>`).join(''):
+        '<div class="empty" style="font-size:11.5px;padding:12px">No teammates yet.<br>Add one with ＋</div>'}
+      <div class="prh" style="margin-top:10px">Views</div>
+      ${tabs.map(([k,l])=>`<div class="pagent ${pv.tab===k&&!pv.agent?'on':''}"
+         data-pt="${k}"><div class="ptx"><div class="pn">${l}</div></div></div>`).join('')}
+    </aside>
+    <section class="pmain" id="pmain"></section>
   </div>`;
 
-  $('#addRole').onclick=()=>{
-    mask(`<div class="dlg"><h3>👥 Assign an agent</h3>
-      <div class="fld"><label>Agent</label><select id="ra">
-        ${runnable.map(a=>`<option value="${a.key}">${brand(a.key)} ${esc(a.name)}</option>`).join('')}
-      </select></div>
-      <div class="fld"><label>Its task in this project</label>
-        <textarea id="rr" class="rtl" placeholder="پیدا کردن سرویس‌های پرمصرف"></textarea></div>
-      <div class="fld"><label>Order (sequential mode)</label>
-        <input id="ro" type="number" value="${(p.roles||[]).length}"></div>
-      <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
-        <button class="sm pri" id="ok">Assign</button></div></div>`);
-    $('#ok').onclick=async()=>{
-      const b={app:$('#ra').value,role:$('#rr').value.trim(),ord:+$('#ro').value||0};
-      close_();try{await post(`/api/projects/${pid}/role`,b);openProject(pid);toast('Assigned','ok');}
-      catch(e){toast('Failed','bad');}};
-  };
-  $('#addMem').onclick=()=>{
-    mask(`<div class="dlg"><h3>🧠 Add to shared memory</h3>
-      <p>Every agent in this project will see this line in its prompt.</p>
-      <div class="fld"><textarea id="mt" class="rtl"
-        placeholder="nginx worker_processes = 8 (بیش از حد)"></textarea></div>
-      <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
-        <button class="sm pri" id="ok">Add</button></div></div>`);
-    $('#ok').onclick=async()=>{const t=$('#mt').value.trim();close_();if(!t)return;
-      try{await post(`/api/projects/${pid}/memory`,{text:t});openProject(pid);}
-      catch(e){toast('Failed','bad');}};
-  };
-  $$('#stage [data-run]').forEach(b=>b.onclick=()=>runRole(pid,b.dataset.run));
-  $$('#stage [data-ctx]').forEach(b=>b.onclick=()=>ctxPreview(pid,b.dataset.ctx));
-  $$('#stage [data-rmrole]').forEach(b=>b.onclick=async()=>{
-    await del(`/api/projects/${pid}/role/${b.dataset.rmrole}`);openProject(pid);});
-  $$('#stage [data-delm]').forEach(b=>b.onclick=async()=>{
-    await del('/api/memory/'+b.dataset.delm);openProject(pid);});
-  $$('#stage [data-pinm]').forEach(b=>b.onclick=async()=>{
-    await post(`/api/memory/${b.dataset.pinm}/pin?on=${b.dataset.on}`);openProject(pid);});
-
-  try{
-    const rc=await api('/api/receipts?project_id='+pid);
-    $('#recs').innerHTML=(rc.receipts||[]).length?rc.receipts.map(r=>`
-      <div class="srow"><span style="font-size:14px">${brand(r.app)}</span>
-        <div class="tx"><div class="t1 rtl">${esc(r.task)}</div>
-          <div class="t2">${(r.evidence.memory_added||[]).length} findings ·
-            ${r.evidence.duration_s||0}s · $${(r.cost_usd||0).toFixed(4)}</div></div>
-        <span class="tag ${r.status==='approved'?'g':r.status==='rejected'?'b':'w'}">${r.status}</span>
-        ${r.status==='pending'?`<button class="sm gh" data-rev="${r.id}">Review</button>`:''}
-      </div>`).join(''):'<div class="empty">No completed work yet</div>';
-    $$('#recs [data-rev]').forEach(b=>b.onclick=()=>reviewDlg(pid,b.dataset.rev));
-  }catch(e){}
-  rail(null,p);
+  $('#addRole').onclick=e=>{e.stopPropagation();assignDlg(pid);};
+  $$('#stage [data-ag]').forEach(el=>el.onclick=()=>{
+    pv.agent=el.dataset.ag; pv.tab='agent'; paint(pid);});
+  $$('#stage [data-pt]').forEach(el=>el.onclick=()=>{
+    pv.agent=null; pv.tab=el.dataset.pt; paint(pid);});
+  paint(pid);
 }
+
+function paint(pid){
+  const p=view.p||{};
+  $$('#stage [data-ag]').forEach(e=>e.classList.toggle('on',pv.agent===e.dataset.ag));
+  $$('#stage [data-pt]').forEach(e=>e.classList.toggle('on',!pv.agent&&pv.tab===e.dataset.pt));
+  if(pv.agent)return paintAgent(pid,pv.agent);
+  if(pv.tab==='files')return paintFiles(pid);
+  if(pv.tab==='memory')return paintMemory(pid,p);
+  if(pv.tab==='receipts')return paintReceipts(pid);
+  if(pv.tab==='activity')return paintActivity(pid,p);
+  return paintThread(pid);
+}
+
+/* ── رشتهٔ مشترک: همه می‌بینند، کار بینشان پاس می‌شود ── */
+async function paintThread(pid){
+  const m=$('#pmain');
+  m.innerHTML=`<div class="phd">🧵 Team thread
+    <span class="hint" style="margin:0">Everyone sees this. Findings go to the shared memory on their own.</span></div>
+    <div class="pbody" id="th"><div class="empty">Loading…</div></div>
+    <div class="pfoot">
+      <select id="who"><option value="">Everyone (note only)</option>
+        ${(view.p.roles||[]).map(r=>`<option value="${esc(r.app)}">Ask ${esc(app(r.app).name)}</option>`).join('')}
+      </select>
+      <textarea id="tmsg" class="rtl" rows="1" placeholder="بنویس…"></textarea>
+      <button class="sm pri" id="tsend">➤</button></div>`;
+  const draw=async()=>{
+    let ms=[];
+    try{ms=(await api(`/api/projects/${pid}/thread`)).messages||[];}catch(e){}
+    $('#th').innerHTML=ms.length?ms.map(x=>`
+      <div class="m"><div class="av ${x.app?'a':'u'}">${x.app?brand(x.app,16):'H'}</div>
+        <div class="mb"><div class="mn">${x.app?esc(app(x.app).name):'You'}
+          <span class="tm">${ago(new Date(x.created_at*1000).toISOString())}</span></div>
+        <div class="mt rtl">${md(x.text||'')}</div></div></div>`).join(''):
+      '<div class="empty">Nothing yet. Ask a teammate to start.</div>';
+    $('#th').scrollTop=9e5;
+  };
+  await draw();
+  const go=async()=>{
+    const t=$('#tmsg').value.trim(); if(!t)return;
+    const who=$('#who').value;
+    $('#tmsg').value='';
+    try{
+      if(who){
+        const r=await post(`/api/projects/${pid}/ask`,{app:who,text:t});
+        await draw();
+        pollThread(pid,r.job_id,draw);
+      }else{
+        await post(`/api/projects/${pid}/thread`,{text:t});
+        await draw();
+      }
+    }catch(e){toast('Failed: '+e.message,'bad');}
+  };
+  $('#tsend').onclick=()=>go();
+  $('#tmsg').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();go();}};
+}
+
+async function pollThread(pid,jid,draw){
+  const m=$('#th');
+  if(m)m.insertAdjacentHTML('beforeend',
+    `<div class="m" id="thpend"><div class="av a">⋯</div><div class="mb">
+     <div class="mn"><span id="thph">در صف…</span></div>
+     <div class="typing"><i></i><i></i><i></i></div></div></div>`);
+  for(;;){
+    await new Promise(r=>setTimeout(r,1100));
+    let j; try{j=await api('/api/job/'+jid);}catch(e){break;}
+    const ph=$('#thph'); if(ph)ph.textContent=j.phase||j.state;
+    if(['done','error','cancelled'].includes(j.state)){
+      if(j.state==='error')toast('پاسخ نگرفت: '+(j.error||'').slice(0,60),'bad');
+      break;
+    }
+  }
+  const pe=$('#thpend'); if(pe)pe.remove();
+  await draw(); refresh();
+}
+
+/* ── چت اختصاصی هر هم‌تیمی ── */
+async function paintAgent(pid,ak){
+  const r=(view.p.roles||[]).find(x=>x.app===ak)||{};
+  const m=$('#pmain');
+  m.innerHTML=`<div class="phd">${brand(ak,18)} ${esc(app(ak).name)}
+    <span class="hint" style="margin:0">${esc(r.role||'no task assigned')}</span>
+    <span style="flex:1"></span>
+    <button class="sm gh" id="ctxBtn" title="What this agent is told">👁 context</button>
+    <button class="sm gh" id="taskBtn">✏️ task</button>
+    <button class="sm pri" id="runOne">▶ run</button></div>
+    <div class="pbody" id="ab"><div class="empty">Loading…</div></div>
+    <div class="pfoot">
+      <textarea id="amsg" class="rtl" rows="1" placeholder="پیام مستقیم به ${esc(app(ak).name)}…"></textarea>
+      <button class="sm pri" id="asend">➤</button></div>`;
+  $('#ctxBtn').onclick=()=>ctxPreview(pid,ak);
+  $('#taskBtn').onclick=()=>assignDlg(pid,ak);
+  $('#runOne').onclick=()=>runRole(pid,ak);
+  const draw=async()=>{
+    if(!r.session_id){
+      $('#ab').innerHTML=`<div class="empty">No chat yet.<br>
+        Send a message and ${esc(app(ak).name)} starts one inside this project.</div>`;
+      return;
+    }
+    try{
+      const d=await api(`/api/session/${ak}/${encodeURIComponent(r.session_id)}`);
+      const ms=d.messages||[];
+      $('#ab').innerHTML=ms.length?ms.map(x=>`
+        <div class="m"><div class="av ${x.role==='user'?'u':'a'}">${x.role==='user'?'H':brand(ak,16)}</div>
+        <div class="mb"><div class="mn">${x.role==='user'?'You':esc(app(ak).name)}</div>
+        <div class="mt rtl">${md(x.text||'')}</div></div></div>`).join(''):
+        '<div class="empty">No readable messages yet.</div>';
+      $('#ab').scrollTop=9e5;
+    }catch(e){$('#ab').innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+  };
+  await draw();
+  const go=async()=>{
+    const t=$('#amsg').value.trim(); if(!t)return;
+    $('#amsg').value='';
+    try{
+      const res=await post(`/api/projects/${pid}/ask`,{app:ak,text:t});
+      $('#ab').insertAdjacentHTML('beforeend',
+        `<div class="m" id="thpend"><div class="av a">⋯</div><div class="mb">
+         <div class="mn"><span id="thph">در صف…</span></div>
+         <div class="typing"><i></i><i></i><i></i></div></div></div>`);
+      for(;;){
+        await new Promise(x=>setTimeout(x,1100));
+        let j; try{j=await api('/api/job/'+res.job_id);}catch(_){break;}
+        const ph=$('#thph'); if(ph)ph.textContent=j.phase||j.state;
+        if(['done','error','cancelled'].includes(j.state))break;
+      }
+      await openProject(pid,true);
+    }catch(e){toast('Failed: '+e.message,'bad');}
+  };
+  $('#asend').onclick=()=>go();
+  $('#amsg').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();go();}};
+}
+
+/* ── فضای کار مشترک: همان «یک کامپیوتر مشترک» ── */
+async function paintFiles(pid){
+  const m=$('#pmain');
+  m.innerHTML=`<div class="phd">📁 Shared workspace
+    <span class="hint" style="margin:0">Every teammate reads and writes here.</span>
+    <span style="flex:1"></span>
+    <button class="sm gh" id="newFile">＋ file</button></div>
+    <div class="pbody" id="fb"><div class="empty">Loading…</div></div>`;
+  const draw=async()=>{
+    let d={items:[]};
+    try{d=await api(`/api/projects/${pid}/files?path=`+encodeURIComponent(pv.path));}
+    catch(e){$('#fb').innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+    $('#fb').innerHTML=`
+      ${pv.path?`<div class="mrow" data-up="1"><span class="nm">↰ ..</span></div>`:''}
+      ${d.items.length?d.items.map(f=>`<div class="mrow" data-f="${esc(f.rel)}" data-d="${f.dir?1:0}">
+        <span class="nm">${f.dir?'📂':'📄'} ${esc(f.name)}
+          <div class="sub">${f.dir?'folder':(f.size>1024?Math.round(f.size/1024)+' KB':f.size+' B')}</div></span>
+        <button class="sm gh" data-del="${esc(f.rel)}" style="color:var(--bad)">✕</button>
+      </div>`).join(''):'<div class="empty">Empty. Agents can drop results here.</div>'}`;
+    const up=$('#fb [data-up]'); if(up)up.onclick=()=>{
+      pv.path=pv.path.split('/').slice(0,-1).join('/');draw();};
+    $$('#fb [data-f]').forEach(el=>el.onclick=e=>{
+      if(e.target.dataset.del)return;
+      if(el.dataset.d==='1'){pv.path=el.dataset.f;draw();}
+      else fileView(pid,el.dataset.f,draw);});
+    $$('#fb [data-del]').forEach(b=>b.onclick=e=>{e.stopPropagation();
+      confirmDlg('Delete this?','A copy goes to the trash.','Delete',async()=>{
+        try{await del(`/api/projects/${pid}/file?path=`+encodeURIComponent(b.dataset.del));draw();}
+        catch(x){toast('Failed','bad');}});});
+  };
+  $('#newFile').onclick=()=>fileView(pid,null,draw);
+  draw();
+}
+
+async function fileView(pid,rel,after){
+  let text='';
+  if(rel){try{text=(await api(`/api/projects/${pid}/file?path=`+encodeURIComponent(rel))).text||'';}
+    catch(e){toast(e.message,'bad');return;}}
+  mask(`<div class="dlg wide"><h3>${rel?'📄 '+esc(rel):'＋ New file'}</h3>
+    ${rel?'':'<div class="fld"><label>Path</label><input id="fp" placeholder="notes/plan.md"></div>'}
+    <div class="fld"><label>Content</label>
+      <textarea id="fc" class="rtl" style="min-height:44vh;font-family:var(--mono);font-size:12px">${esc(text)}</textarea></div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Close</button>
+      <button class="sm pri" id="fs">Save</button></div></div>`);
+  $('#fs').onclick=async()=>{
+    const path=rel||($('#fp').value.trim());
+    if(!path){toast('Path required','bad');return;}
+    try{await post(`/api/projects/${pid}/file`,{path,text:$('#fc').value});
+      close_();toast('Saved','ok');after&&after();}
+    catch(e){toast('Failed: '+e.message,'bad');}
+  };
+}
+
+function paintMemory(pid,p){
+  $('#pmain').innerHTML=`<div class="phd">🧠 Shared memory
+    <span class="hint" style="margin:0">Filled automatically from every chat here —
+      an agent can also force an entry by starting a line with <code>MEMORY:</code>.</span>
+    <span style="flex:1"></span><button class="sm gh" id="addMem">＋ add</button></div>
+    <div class="pbody">${(p.memory||[]).length?(p.memory||[]).map(m=>`
+      <div class="mrow"><span class="nm rtl">${m.pinned?'📌 ':''}${esc(m.text)}
+        <div class="sub">${m.app?esc(app(m.app).name):'—'} · ${esc(m.kind||'note')}</div></span>
+      <button class="sm gh" data-mdel="${m.id}" style="color:var(--bad)">✕</button></div>`).join(''):
+      '<div class="empty">Nothing learned yet.</div>'}</div>`;
+  $('#addMem').onclick=()=>memDlg(pid);
+  $$('#pmain [data-mdel]').forEach(b=>b.onclick=async()=>{
+    try{await del('/api/memory/'+b.dataset.mdel);openProject(pid,true);}catch(e){}});
+}
+
+// دروازهٔ بازبینی: کار تا وقتی یک ایجنت دیگر تأییدش نکرده «تمام» نیست.
+async function paintReceipts(pid){
+  $('#pmain').innerHTML=`<div class="phd">✅ Review gate
+    <span class="hint" style="margin:0">Work is not done until another agent verified it.</span></div>
+    <div class="pbody" id="rb"><div class="empty">Loading…</div></div>`;
+  let rs=[];
+  try{rs=(await api('/api/receipts?project_id='+encodeURIComponent(pid))).receipts||[];}
+  catch(e){$('#rb').innerHTML=`<div class="empty">${esc(e.message)}</div>`;return;}
+  $('#rb').innerHTML=rs.length?rs.map(r=>`
+    <div class="mrow"><span class="nm rtl">${r.task?esc(r.task):'(no task)'}
+      <div class="sub">${r.app?esc(app(r.app).name):'—'} · ${esc(r.status||'pending')}${
+        r.reviewer?' · by '+esc(app(r.reviewer).name):''}</div></span>
+    ${r.status==='pending'?`<button class="sm gh" data-rv="${esc(String(r.id))}">Review</button>`:
+      `<span class="pst ${r.status==='approved'?'done':'blocked'}">${esc(r.status)}</span>`}
+    </div>`).join(''):'<div class="empty">Nothing to review yet.</div>';
+  $$('#rb [data-rv]').forEach(b=>b.onclick=()=>reviewDlg(pid,b.dataset.rv));
+}
+
+function paintActivity(pid,p){
+  const ev=(p.timeline||[]);
+  $('#pmain').innerHTML=`<div class="phd">⚡ Activity</div>
+    <div class="pbody">${ev.length?ev.map(t=>`
+      <div class="mrow"><span class="nm rtl">${esc(t.text)}
+        <div class="sub">${t.app?esc(app(t.app).name):'—'} · ${esc(t.kind)} · ${
+          ago(new Date(t.created_at*1000).toISOString())}</div></span></div>`).join(''):
+      '<div class="empty">No activity yet.</div>'}</div>`;
+}
+
 
 async function ctxPreview(pid,a){
   mask(`<div class="dlg wide"><h3>👁 Context injected into ${esc(app(a).name)}</h3>
@@ -1413,6 +1617,59 @@ async function ctxPreview(pid,a){
       <p style="margin-top:9px;font-size:12px">${d.chars} characters ≈ ${d.approx_tokens}
        tokens added to every prompt.</p>`;}
   catch(e){$('#cp').innerHTML=`<div class="empty">${esc(e.message)}</div>`;}
+}
+
+// افزودن/ویرایش هم‌تیمی و وظیفه‌اش
+function assignDlg(pid,ak){
+  const p=view.p||{};
+  const cur=(p.roles||[]).find(r=>r.app===ak);
+  const free=S.apps.filter(a=>a.key!=='router'&&a.capabilities.includes('send'));
+  mask(`<div class="dlg"><h3>${ak?'✏️ Task for '+esc(app(ak).name):'＋ Add a teammate'}</h3>
+    ${ak?'':`<div class="fld"><label>Agent</label>
+      <div class="emo" id="ag">${free.map((a,i)=>
+        `<button data-a="${a.key}" class="${i===0?'on':''}"
+          title="${esc(a.name)}">${brand(a.key,18)}</button>`).join('')}</div></div>`}
+    <div class="fld"><label>What should it do?</label>
+      <textarea id="rl" class="rtl" placeholder="مثلاً: مصرف رم را بررسی کن و گزارش بده">${esc(cur?.role||'')}</textarea></div>
+    <div class="fld"><label>Order (for sequential runs)</label>
+      <input id="ro" type="number" value="${cur?.ord??0}" min="0"></div>
+    <div class="dlgf">
+      ${ak?`<button class="sm gh" id="rmRole" style="color:var(--bad);margin-inline-end:auto">Remove</button>`:''}
+      <button class="sm gh" onclick="close_()">Cancel</button>
+      <button class="sm pri" id="rgo">Save</button></div></div>`);
+  let pickA=ak||(free[0]&&free[0].key);
+  $$('#ag button').forEach(b=>b.onclick=()=>{pickA=b.dataset.a;
+    $$('#ag button').forEach(x=>x.classList.toggle('on',x===b));});
+  const rm=$('#rmRole');
+  if(rm)rm.onclick=()=>confirmDlg('Remove this teammate?',
+    'Its chat stays, it just leaves the project.','Remove',async()=>{
+      try{await del(`/api/projects/${pid}/role/${ak}`);pv.agent=null;pv.tab='thread';
+        openProject(pid);}catch(e){toast('Failed','bad');}});
+  $('#rgo').onclick=async()=>{
+    if(!pickA){toast('Pick an agent','bad');return;}
+    close_();
+    try{await post(`/api/projects/${pid}/role`,
+      {app:pickA,role:$('#rl').value.trim(),ord:parseInt($('#ro').value)||0});
+      openProject(pid,true);toast('Saved','ok');}
+    catch(e){toast('Failed: '+e.message,'bad');}
+  };
+}
+
+// افزودن دستی به حافظهٔ مشترک (معمولاً خودکار پر می‌شود)
+function memDlg(pid){
+  mask(`<div class="dlg"><h3>🧠 Add to shared memory</h3>
+    <p class="hint">Normally this fills itself from the chats. Add something by
+      hand only if it matters and nobody said it out loud.</p>
+    <div class="fld"><label>Entry</label>
+      <textarea id="mx" class="rtl" placeholder="nginx هشت worker دارد"></textarea></div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
+      <button class="sm pri" id="mgo">Add</button></div></div>`);
+  $('#mgo').onclick=async()=>{
+    const t=$('#mx').value.trim(); if(!t)return;
+    close_();
+    try{await post(`/api/projects/${pid}/memory`,{text:t});openProject(pid,true);}
+    catch(e){toast('Failed','bad');}
+  };
 }
 
 async function runRole(pid,a){

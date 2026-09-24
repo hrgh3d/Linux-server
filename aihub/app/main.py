@@ -20,6 +20,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -1330,3 +1331,169 @@ async def overview2():
     ex = await cached("overview2x", extra, ttl=4)
     live = await models_live()
     return {**base, **ex, "live": live}
+
+
+# ═══════════════════════════════════════════ فضای کار مشترک پروژه
+#
+# الگوی گرفته‌شده از Grok Bot: چند «هم‌تیمی» که **یک کامپیوتر مشترک**
+# دارند — فایل‌ها و زمینه بین‌شان رد و بدل می‌شود و کار را به هم پاس
+# می‌دهند. اینجا همان را با پوشهٔ مشترکِ پروژه پیاده می‌کنیم.
+
+
+def _ws_root(pid: str) -> Path:
+    d = store.PROJECTS / pid / "workspace"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _safe(root: Path, rel: str) -> Path:
+    """
+    جلوگیری از فرار از پوشه (`../../etc/passwd`).
+    هر مسیری که بعد از resolve بیرون از ریشه بیفتد رد می‌شود.
+    """
+    p = (root / rel.lstrip("/")).resolve()
+    if not str(p).startswith(str(root.resolve())):
+        raise HTTPException(400, "path escapes the workspace")
+    return p
+
+
+@app.get("/api/projects/{pid}/files")
+async def ws_list(pid: str, path: str = ""):
+    """فهرست فایل‌های فضای کار مشترک پروژه."""
+    if not store.proj_get(pid):
+        raise HTTPException(404, "unknown project")
+    root = _ws_root(pid)
+    base = _safe(root, path)
+    if not base.exists():
+        return {"path": path, "items": []}
+    items = []
+    for f in sorted(base.iterdir(), key=lambda x: (x.is_file(), x.name)):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        items.append({"name": f.name, "dir": f.is_dir(), "size": st.st_size,
+                      "mtime": st.st_mtime,
+                      "rel": str(f.relative_to(root))})
+    return {"path": path, "items": items, "root": str(root)}
+
+
+@app.get("/api/projects/{pid}/file")
+async def ws_read(pid: str, path: str):
+    root = _ws_root(pid)
+    f = _safe(root, path)
+    if not f.is_file():
+        raise HTTPException(404, "not a file")
+    if f.stat().st_size > 512_000:
+        raise HTTPException(413, "file too large to preview")
+    try:
+        return {"path": path, "text": f.read_text(errors="replace")}
+    except Exception as exc:                                   # noqa: BLE001
+        raise HTTPException(400, str(exc)[:200])
+
+
+class FileBody(BaseModel):
+    path: str
+    text: str = ""
+
+
+@app.post("/api/projects/{pid}/file")
+async def ws_write(pid: str, b: FileBody):
+    root = _ws_root(pid)
+    f = _safe(root, b.path)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(b.text)
+    store.tl(pid, None, "file", f"wrote {b.path}")
+    return {"ok": True, "path": b.path, "size": f.stat().st_size}
+
+
+@app.delete("/api/projects/{pid}/file")
+async def ws_delete(pid: str, path: str):
+    root = _ws_root(pid)
+    f = _safe(root, path)
+    if not f.exists():
+        raise HTTPException(404, "not found")
+    store.trash_put(str(f))
+    shutil.rmtree(f) if f.is_dir() else f.unlink()
+    store.tl(pid, None, "file", f"deleted {path}")
+    return {"ok": True}
+
+
+class ThreadBody(BaseModel):
+    text: str
+    app: str | None = None           # None = پیام خودِ کاربر
+
+
+@app.get("/api/projects/{pid}/thread")
+async def thread_get(pid: str, limit: int = 100):
+    """
+    گفت‌وگوی مشترک پروژه: جایی که همهٔ ایجنت‌ها و کاربر یک رشته را
+    می‌بینند و کار را به هم پاس می‌دهند.
+    """
+    if not store.proj_get(pid):
+        raise HTTPException(404, "unknown project")
+    return {"messages": store.thread_list(pid, limit)}
+
+
+@app.post("/api/projects/{pid}/thread")
+async def thread_post(pid: str, b: ThreadBody):
+    if not store.proj_get(pid):
+        raise HTTPException(404, "unknown project")
+    m = store.thread_add(pid, b.app, b.text)
+    return {"ok": True, "message": m}
+
+
+class AskBody(BaseModel):
+    app: str
+    text: str
+
+
+@app.post("/api/projects/{pid}/ask")
+async def thread_ask(pid: str, b: AskBody):
+    """
+    یک ایجنت را داخل رشتهٔ مشترک صدا بزن.
+
+    پیام کاربر و جواب ایجنت هر دو در همان رشته ثبت می‌شوند تا بقیهٔ
+    ایجنت‌ها هم ببینند — همان «کار را بین خودشان پاس می‌دهند».
+    """
+    if b.app not in ADAPTERS:
+        raise HTTPException(404, "unknown agent")
+    if not store.proj_get(pid):
+        raise HTTPException(404, "unknown project")
+    store.thread_add(pid, None, b.text)
+    sid = store.role_session(pid, b.app)
+    jid = jobs.new(b.app, sid, b.text, pid)
+    jobs.set_(jid, thread=pid)
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(POOL, _run_thread, jid, pid, b.app, b.text, sid)
+    return {"ok": True, "job_id": jid}
+
+
+def _run_thread(jid: str, pid: str, app_key: str, text: str,
+                sid: str | None) -> None:
+    ad = ADAPTERS[app_key]
+    try:
+        jobs.set_(jid, state="running", phase=f"{ad.name} در حال کار")
+        ctx = store.build_context(pid, app_key)
+        recent = store.thread_list(pid, 12)
+        convo = "\n".join(f"[{m['app'] or 'کاربر'}] {m['text'][:400]}"
+                          for m in recent[:-1])
+        prompt = (f"{ctx}\n[گفت‌وگوی تیم]\n{convo}\n\n{text}"
+                  if ctx or convo else text)
+        ok, out, real = ad.send(prompt, sid, job=jid)
+        if (jobs.get(jid) or {}).get("state") == "cancelled":
+            return
+        if real:
+            store.role_set(pid, app_key, session_id=real)
+            store.meta_set(app_key, real, project_id=pid, draft=0)
+        store.thread_add(pid, app_key, out or "(بدون پاسخ)")
+        learned = store.auto_harvest(pid, app_key, out) if ok else []
+        jobs.set_(jid, state="done" if ok else "error", ended=time.time(),
+                  output=out, learned=learned, session_id=real,
+                  phase="انجام شد" if ok else "خطا",
+                  error=None if ok else (out or "")[:400])
+        invalidate()
+    except Exception as exc:                                   # noqa: BLE001
+        store.thread_add(pid, app_key, f"⚠️ {str(exc)[:300]}")
+        jobs.set_(jid, state="error", ended=time.time(),
+                  error=str(exc)[:400], phase="خطا")
