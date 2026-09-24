@@ -739,38 +739,19 @@ class OpenClawAdapter(Adapter):
 
     def delete_session(self, sid: str) -> tuple[bool, str]:
         """
-        اول CLI، بعد دیتابیس.
+        openclaw sessions delete <key>
 
-        نسخهٔ نصب‌شده زیرفرمان delete ندارد، پس ردیف‌های همان نشست از
-        session_nodes و transcript_events پاک می‌شوند. فایل jsonl هم اگر
-        بود برداشته می‌شود. حذف دستیِ دیتابیس فقط وقتی انجام می‌شود که
-        CLI واقعاً نتواند — نه به‌عنوان راه اول.
+        **هرگز مستقیم روی دیتابیس ننویس.** یک بار امتحان شد و نتیجه‌اش
+        این بود که ایجنت با «Agent database execution admission is closed»
+        از کار افتاد و تا ری‌استارت کامل برنگشت — در حالی که
+        `pragma integrity_check` می‌گفت «ok»، یعنی خرابی فایل نبود بلکه
+        رانتایمِ زنده وضعیتش را از دست داده بود. حذف فقط از راه CLI.
         """
-        rc, out = _sh(["openclaw", "sessions", "delete", sid], timeout=60)
-        if rc == 0 and "unknown command" not in (out or "").lower():
-            return True, (out or "").strip()[-400:]
-        n = 0
-        try:
-            con = sqlite3.connect(self.DB, timeout=10)
-            for tbl, col in (("transcript_events", "session_id"),
-                             ("session_nodes", "current_session_id")):
-                try:
-                    cur = con.execute(f"delete from {tbl} where {col}=?", (sid,))
-                    n += cur.rowcount or 0
-                except sqlite3.Error:
-                    continue
-            con.commit()
-            con.close()
-        except Exception as exc:                               # noqa: BLE001
-            return False, f"db delete failed: {exc}"
-        import glob as _g
-        for f in _g.glob(rp(f"/root/.openclaw/agents/*/sessions/{sid}.jsonl")):
-            try:
-                os.remove(f)
-                n += 1
-            except OSError:
-                pass
-        return n > 0, f"removed {n} row(s)/file(s)"
+        rc, out = _sh(["openclaw", "sessions", "delete", sid], timeout=90)
+        body = (out or "").strip()
+        if rc == 0 and "not found" not in body.lower():
+            return True, body[-400:]
+        return False, body[-400:] or "openclaw refused the delete"
 
     def send(self, text: str, session_id: str | None = None) -> SendOut:
         """

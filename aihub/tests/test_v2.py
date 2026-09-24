@@ -1229,3 +1229,17 @@ def test_draft_session_can_be_deleted(client):
     sid = client.post("/api/session/new/pi", json={}).json()["session_id"]
     assert client.delete(f"/api/session/pi/{sid}?hard=1").status_code == 200
     assert sid not in [s["id"] for s in client.get("/api/sessions").json()]
+
+
+def test_openclaw_delete_never_writes_to_the_live_database():
+    """
+    درس گران: حذف مستقیم ردیف از دیتابیس زندهٔ اوپن‌کلاو، ایجنت را با
+    «Agent database execution admission is closed» از کار انداخت، در حالی
+    که integrity_check سالم بود. حذف باید فقط از راه CLI باشد.
+    """
+    import inspect
+    from app import adapters
+    src = inspect.getsource(adapters.OpenClawAdapter.delete_session)
+    assert "delete from" not in src.lower()
+    assert "sqlite3.connect" not in src
+    assert "sessions" in src and "delete" in src
