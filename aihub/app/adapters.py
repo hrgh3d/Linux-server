@@ -723,7 +723,18 @@ class PiAdapter(Adapter):
         rc, out = _sh(cmd, timeout=300)
         body = "\n".join(ln for ln in (out or "").splitlines()
                           if not ln.startswith("Warning: No project session"))
-        return SendOut(rc == 0, body.strip()[-4000:], sid)
+        # Pi فایل را `<timestamp>_<uuid>` می‌نامد، پس شناسه‌ای که در پنل
+        # فهرست می‌شود با آنچه دادیم یکی نیست. شناسهٔ واقعی را برگردان،
+        # وگرنه ردیفِ پیش‌نویس به‌عنوان یک نشست خالیِ جدا باقی می‌ماند.
+        real = sid
+        try:
+            for se in self.sessions():
+                if sid in se.id:
+                    real = se.id
+                    break
+        except Exception:                                      # noqa: BLE001
+            pass
+        return SendOut(rc == 0, body.strip()[-4000:], real)
 
 
 # ================================================================ OpenClaw
@@ -737,22 +748,50 @@ class OpenClawAdapter(Adapter):
     # REST ندارد ⇒ خواندن از دیتابیس، نوشتن از CLI (تصمیم ۵-ج)
     capabilities = ["status", "sessions", "send", "set_model", "restart"]
 
+    def _session_key(self, sid: str) -> str | None:
+        """
+        اوپن‌کلاو با «کلید» حذف می‌کند نه با شناسه:
+            key       = agent:main:explicit:<uuid>   (یا agent:main:main)
+            sessionId = <uuid>
+        دادنِ uuid خام «Session not found» می‌گیرد.
+        """
+        rc, out = _sh(["openclaw", "sessions", "list", "--json",
+                       "--limit", "all"], timeout=60)
+        if rc != 0:
+            return None
+        body = out or ""
+        try:
+            i = body.index("[")
+            items = json.loads(body[i:body.rindex("]") + 1])
+        except Exception:                                      # noqa: BLE001
+            try:
+                d = json.loads(body[body.index("{"):body.rindex("}") + 1])
+                items = d.get("sessions") or d.get("data") or []
+            except Exception:                                  # noqa: BLE001
+                return None
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if it.get("sessionId") == sid or it.get("key") == sid:
+                return it.get("key")
+        return None
+
     def delete_session(self, sid: str) -> tuple[bool, str]:
         """
-        openclaw sessions delete <key>
+        openclaw sessions delete <key> --yes
 
-        **هرگز مستقیم روی دیتابیس ننویس.** یک بار امتحان شد و نتیجه‌اش
-        این بود که ایجنت با «Agent database execution admission is closed»
-        از کار افتاد و تا ری‌استارت کامل برنگشت — در حالی که
-        `pragma integrity_check` می‌گفت «ok»، یعنی خرابی فایل نبود بلکه
-        رانتایمِ زنده وضعیتش را از دست داده بود. حذف فقط از راه CLI.
+        **هرگز مستقیم روی دیتابیس ننویس.** یک بار امتحان شد: حذف ردیف از
+        session_nodes، ۱۵۹۰ ارجاع یتیم در board_tabs/session_participants/
+        session_windows جا گذاشت، gateway با foreign_key_check از بالا آمدن
+        سر باز زد (exit 78) و `openclaw doctor --fix` هم به‌خاطر یک مهاجرتِ
+        مسدودکننده نتوانست ترمیم کند. حذف فقط از راه CLI.
         """
-        rc, out = _sh(["openclaw", "sessions", "delete", sid], timeout=90)
+        key = self._session_key(sid) or sid
+        rc, out = _sh(["openclaw", "sessions", "delete", key, "--yes"],
+                      timeout=90)
         body = (out or "").strip()
-        # «پیدا نشد» یعنی از قبل رفته ⇒ حذف موفق است. خطا دادن برای چیزی
-        # که هدفش همین نبودن است، پاک‌سازی دسته‌جمعی را بی‌دلیل می‌شکند.
         if rc == 0 or "not found" in body.lower():
-            return True, body[-400:] or "already gone"
+            return True, body[-400:] or "deleted"
         return False, body[-400:] or "openclaw refused the delete"
 
     def send(self, text: str, session_id: str | None = None) -> SendOut:

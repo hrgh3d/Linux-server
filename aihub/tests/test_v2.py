@@ -1282,3 +1282,38 @@ def test_ghost_metadata_rows_are_not_listed_as_sessions(client):
     store.meta_set("pi", "vanished-session-xyz", title="روح")
     ids = [s["id"] for s in client.get("/api/sessions").json()]
     assert "vanished-session-xyz" not in ids
+
+
+def test_openclaw_delete_uses_the_session_key_not_the_bare_id(monkeypatch):
+    """
+    `openclaw sessions delete <uuid>` می‌دهد «Session not found»؛ کلید
+    درست `agent:main:explicit:<uuid>` است و `--yes` هم لازم دارد.
+    """
+    from app import adapters
+    ad = adapters.OpenClawAdapter()
+    listing = json.dumps([{"key": "agent:main:explicit:abc", "sessionId": "abc"}])
+    seen = []
+
+    def fake_sh(cmd, timeout=0):
+        seen.append(cmd)
+        if "list" in cmd:
+            return 0, listing
+        return 0, "deleted"
+    monkeypatch.setattr(adapters, "_sh", fake_sh)
+    ok, _ = ad.delete_session("abc")
+    assert ok
+    assert "agent:main:explicit:abc" in seen[-1]
+    assert "--yes" in seen[-1]
+
+
+def test_pi_returns_the_real_decorated_session_id(monkeypatch):
+    from app import adapters
+    ad = adapters.PiAdapter()
+    monkeypatch.setattr(adapters, "_sh", lambda c, timeout=0: (0, "ok"))
+    monkeypatch.setattr(ad, "_settings", lambda: {})
+
+    class S:
+        id = "2026-09-24T08-14-18-535Z_the-uuid"
+    monkeypatch.setattr(ad, "sessions", lambda: [S()])
+    out = ad.send("hi", "the-uuid")
+    assert out.session_id == "2026-09-24T08-14-18-535Z_the-uuid"
