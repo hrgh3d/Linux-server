@@ -1254,3 +1254,31 @@ def test_deleting_an_already_gone_session_is_success_not_error():
     ok, msg = _delete_jsonl("/nonexistent/*/*.jsonl", "ghost")
     assert ok is True
     assert "gone" in msg
+
+
+def test_draft_is_reconciled_when_the_agent_decorates_the_id(client, monkeypatch):
+    """
+    Pi فایل نشست را `<timestamp>_<uuid>` می‌نامد، پس شناسهٔ واقعی با
+    آنچه ساختیم یکی نیست. بدون تطبیق، ردیف پیش‌نویس تا ابد به‌عنوان یک
+    نشست خالیِ جداگانه در سایدبار می‌ماند.
+    """
+    from app.adapters import ADAPTERS, SendOut
+    sid = client.post("/api/session/new/pi", json={}).json()["session_id"]
+    real = f"2026-09-24T08-06-32-714Z_{sid}"
+    monkeypatch.setattr(ADAPTERS["pi"], "send",
+                        lambda t, s=None: SendOut(True, "ok", real))
+    client.post("/api/send", json={"app": "pi", "text": "hi", "session_id": sid})
+    from app import store
+    assert not store.meta_get("pi", sid), "draft row survived as a ghost"
+    assert store.meta_get("pi", real), "real session was not registered"
+
+
+def test_ghost_metadata_rows_are_not_listed_as_sessions(client):
+    """
+    ردیف متادیتا برای نشستی که دیگر روی دیسک نیست نباید در پنل
+    به‌عنوان یک نشست واقعی ظاهر شود.
+    """
+    from app import store
+    store.meta_set("pi", "vanished-session-xyz", title="روح")
+    ids = [s["id"] for s in client.get("/api/sessions").json()]
+    assert "vanished-session-xyz" not in ids

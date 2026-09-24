@@ -184,6 +184,15 @@ async def sessions(app_key: str | None = Query(None, alias="app"),
         # نگرفته‌اند، پس روی دیسکِ خود ایجنت وجود ندارند و در خروجی
         # آداپتور نمی‌آیند. اگر اضافه‌شان نکنیم، ＋ انگار هیچ کاری نمی‌کند.
         have = {f"{s['source']}:{s['id']}" for s in out}
+        # ردیف متادیتایی که نشست واقعی‌اش دیگر وجود ندارد و پیش‌نویس هم
+        # نیست، یک «نشست روح» است: در پنل دیده می‌شود ولی هیچ‌جا نیست.
+        # پاکش کن تا فهرست با واقعیتِ روی دیسک یکی بماند.
+        for key, m in list(meta.items()):
+            if key in have or m.get("draft"):
+                continue
+            akey, _, dead = key.partition(":")
+            if akey in ADAPTERS:
+                store.meta_del(akey, dead)
         for key, m in meta.items():
             if not m.get("draft") or key in have:
                 continue
@@ -464,6 +473,15 @@ async def send(body: SendBody):
 
     # شناسهٔ واقعی برمی‌گردد تا رابط آن را نگه دارد. بدون این، هر پیام یک
     # نشست تازه می‌ساخت و ایجنت چیزی از پیام قبلی یادش نمی‌ماند.
+    # آداپتور ممکن است شناسه را «تزیین» کند: Pi فایل را
+    # `<timestamp>_<uuid>` می‌نامد، پس شناسهٔ واقعی با آنچه دادیم یکی
+    # نیست ولی همان نشست است. اگر این را تطبیق ندهیم، ردیفِ پیش‌نویس
+    # برای همیشه به‌عنوان یک نشست خالیِ جدا باقی می‌ماند.
+    if sid and body.session_id and sid != body.session_id:
+        bare = body.session_id.replace("pending-", "")
+        if bare and bare in sid:
+            store.meta_del(body.app, body.session_id)
+
     if sid and sid != body.session_id:
         carry: dict = {}
         if body.session_id:
