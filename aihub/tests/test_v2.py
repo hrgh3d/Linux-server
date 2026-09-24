@@ -380,7 +380,8 @@ def test_frontend_has_per_agent_new_button():
     """خواستهٔ ۳: دکمهٔ ＋ روی هدر هر ایجنت، نه یک دکمهٔ کلی بالا."""
     h = _html()
     assert 'data-new="' in h, "per-agent new button missing"
-    assert "newSession(e.target.dataset.new)" in h
+    # ＋ حالا کادر نام/رنگ باز می‌کند و بعد می‌سازد
+    assert "newSessionDlg(e.target.dataset.new)" in h
 
 
 def test_frontend_shows_real_model_behind_combo():
@@ -1168,7 +1169,8 @@ def test_frontend_new_session_button_calls_the_api():
 def test_frontend_keeps_the_returned_session_id():
     h = _html()
     assert "r.session_id" in h, "reply session id discarded — chat restarts"
-    assert "view.sid=r.session_id" in h.replace(" ", "")
+    # شناسه حالا از نتیجهٔ کار (job) می‌آید، نه از پاسخ فوری /api/send
+    assert "view.sid=j.session_id" in h.replace(" ", "")
 
 
 def test_frontend_has_a_delete_project_control():

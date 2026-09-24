@@ -143,11 +143,18 @@ input,textarea,select{font:inherit;color:inherit;background:0;border:0;outline:0
 .mn{font-size:11.5px;font-weight:600;color:var(--dim);margin-bottom:4px;
   display:flex;align-items:center;gap:7px}
 .mn .tm{font-weight:400;color:var(--faint);font-size:10.5px}
-.mn .macts{margin-left:auto;display:flex;gap:2px}
-.mn .pinb{opacity:0;font-size:12px;color:var(--faint);min-width:28px;height:26px;
-  border-radius:5px;transition:opacity .12s}
-.m:hover .pinb{opacity:1}
-.mn .pinb:hover{color:var(--accent);background:var(--raised)}
+/* اکشن‌های پیام: ظریف و در گوشهٔ پایینِ متن، مثل چت‌بات‌های متعارف.
+   قبلاً کنار نامِ بالای پیام بودند و درشت‌تر از خودِ محتوا جلب توجه می‌کردند. */
+.mb{position:relative}
+.macts{position:absolute;bottom:-9px;inset-inline-end:6px;display:flex;gap:1px;
+  background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+  padding:1px;opacity:0;transition:opacity .12s;z-index:2}
+.m:hover .macts,.macts:focus-within{opacity:1}
+.macts button{width:24px;height:22px;display:grid;place-items:center;
+  font-size:11px;line-height:1;color:var(--faint);border-radius:5px;background:none}
+.macts button:hover{color:var(--txt);background:var(--raised)}
+.macts button.done{color:var(--ok)}
+@media(hover:none){.macts{opacity:.85}.macts button{width:32px;height:30px;font-size:13px}}
 .mn .pinb:active{background:var(--line2)}
 .mn .pinb.done{opacity:1;color:var(--ok)}
 .mt{font-size:14px;line-height:1.72;white-space:pre-wrap;word-break:break-word}
@@ -385,6 +392,34 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
   border-radius:10px;padding:4px;min-width:190px;box-shadow:0 14px 40px rgba(0,0,0,.6);
   display:none}
 .menu.on{display:block}
+/* منو باید اسکرول شود: با ۱۲ گزینه، موارد پایین از صفحه بیرون می‌افتادند
+   و اصلاً قابل انتخاب نبودند — مخصوصاً روی موبایل. */
+.menu{max-height:min(70vh,420px);overflow-y:auto;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch}
+.menu::-webkit-scrollbar{width:8px}
+.menu::-webkit-scrollbar-thumb{background:var(--line2);border-radius:4px}
+.bi{vertical-align:-3px;flex:0 0 auto}
+#send.cancel{background:var(--bad);color:#fff}
+#send.cancel:hover{filter:brightness(1.1)}
+/* چرخ‌دندهٔ کوچک کنار نشستِ مشغول — بقیهٔ نشست‌ها آزادند */
+.busyspin{display:inline-block;width:11px;height:11px;margin-inline-end:5px;
+  border:2px solid var(--line2);border-top-color:var(--accent);border-radius:50%;
+  animation:sp .7s linear infinite;vertical-align:-1px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.tgl{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:7px;
+  border:1px solid var(--line);font-size:11px;color:var(--dim);cursor:pointer;
+  min-height:28px;background:var(--panel2)}
+.tgl.on{border-color:var(--accent);color:var(--accent);background:var(--raised)}
+.tgl:hover{color:var(--txt)}
+
+.filt{display:flex;gap:4px;align-items:center}
+.filt input{flex:1}
+.cdot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-inline-end:5px;vertical-align:1px}
+.sw{width:22px;height:22px;border-radius:50%;border:2px solid transparent}
+.sw.on{border-color:var(--txt);box-shadow:0 0 0 2px var(--panel)}
+.selbar{display:flex;align-items:center;gap:6px;padding:7px 10px;background:var(--raised);
+  border-bottom:1px solid var(--line);font-size:12px;flex-wrap:wrap}
+.si .pick{width:16px;height:16px;accent-color:var(--accent);flex:0 0 auto;margin-inline-end:6px}
 .menu button{display:flex;align-items:center;gap:9px;width:100%;padding:7px 10px;
   border-radius:7px;font-size:12.5px;color:var(--dim);text-align:left}
 .menu button:hover{background:var(--panel2);color:var(--txt)}
@@ -449,7 +484,9 @@ pre.out{background:#080b10;border:1px solid var(--line);border-radius:9px;paddin
       </div>
       <button class="iconb" id="btnHome" title="Home">⌂</button>
     </div>
-    <div class="filt"><input id="filt" placeholder="Filter…"></div>
+    <div class="filt"><input id="filt" placeholder="Filter…">
+      <button class="iconb" id="btnPick" title="Select several">☑</button>
+      <button class="iconb" id="btnTrash" title="Trash">🗑</button></div>
     <div class="sblist" id="tree"></div>
     <div class="sbfoot"><div class="spend">
       <span>Today</span><div class="bar"><i id="spendBar" style="width:0%"></i></div>
@@ -532,11 +569,29 @@ const md=s=>{
           .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
 };
 const num=n=>(n??0).toLocaleString('en-US');
-const ICON={hermes:'🤖',claude:'💻',pi:'🥧',openclaw:'🐾',router:'🔀'};
+// نشانِ هر برنامه به‌صورت SVG درون‌خطی: از ایموجی واضح‌تر است، در همهٔ
+// سیستم‌ها یکسان رندر می‌شود و رنگِ خودِ برنامه را دارد.
+// درون‌خطی و نه فایل، چون پیش‌نمایش سندباکس شبکه ندارد.
+const BRAND={
+  hermes:{c:'#c9a227',svg:'<path d="M12 2.6c1.5 0 2.7 1.1 2.7 2.5 0 .9-.5 1.7-1.2 2.1v1h2.1c.5 0 .9.4.9.9s-.4.9-.9.9h-2.1v8.5c0 .6-.5 1.1-1.1 1.1h-.8c-.6 0-1.1-.5-1.1-1.1V10h-2.1c-.5 0-.9-.4-.9-.9s.4-.9.9-.9h2.1v-1C9.8 6.8 9.3 6 9.3 5.1c0-1.4 1.2-2.5 2.7-2.5z"/><path d="M6.6 6.2c1.9 1.6 2.6 3.6 2.2 6M17.4 6.2c-1.9 1.6-2.6 3.6-2.2 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>'},
+  claude:{c:'#d97757',svg:'<path d="M12 2.2l2.2 5.9 5.9 2.2-5.9 2.2L12 18.4l-2.2-5.9L3.9 10.3l5.9-2.2z"/><circle cx="18.6" cy="17.8" r="2.1"/>'},
+  pi:{c:'#7c9cf5',svg:'<path d="M4.4 7.3c0-.6.5-1.1 1.1-1.1h12.9c.6 0 1.1.5 1.1 1.1s-.5 1.1-1.1 1.1h-1.6v8.2c0 .5.2.8.6.8.3 0 .5-.1.7-.3.4-.3.9-.2 1.1.2.3.4.2.9-.2 1.2-.5.4-1.1.6-1.8.6-1.5 0-2.4-.9-2.4-2.5V8.4h-3.3l-.5 5.9c-.2 2.6-1.1 4.4-2.9 5.3-.5.2-1-.0-1.2-.5-.2-.5 0-1 .5-1.2 1.1-.6 1.6-1.7 1.8-3.7l.5-5.8H5.5c-.6 0-1.1-.5-1.1-1.1z"/>'},
+  openclaw:{c:'#5fb8a6',svg:'<path d="M7.6 3.2c.9 0 1.6 1 1.6 2.3S8.5 7.8 7.6 7.8 6 6.8 6 5.5s.7-2.3 1.6-2.3zM16.4 3.2c.9 0 1.6 1 1.6 2.3s-.7 2.3-1.6 2.3-1.6-1-1.6-2.3.7-2.3 1.6-2.3zM3.9 8.1c.8-.2 1.7.5 2 1.7.3 1.2-.2 2.3-1 2.5s-1.7-.5-2-1.7c-.3-1.2.2-2.3 1-2.5zM20.1 8.1c.8.2 1.3 1.3 1 2.5-.3 1.2-1.2 1.9-2 1.7s-1.3-1.3-1-2.5c.3-1.2 1.2-1.9 2-1.7zM12 9.6c2.7 0 5.3 2.4 5.3 5 0 2-1.5 3.1-3.4 3.1-1 0-1.3-.3-1.9-.3s-.9.3-1.9.3c-1.9 0-3.4-1.1-3.4-3.1 0-2.6 2.6-5 5.3-5z"/>'},
+  router:{c:'#9a8cff',svg:'<path d="M4 5.5h6.2a2 2 0 012 2v9a2 2 0 002 2H20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 18.5h6.2a2 2 0 002-2v-9a2 2 0 012-2H20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="5.5" r="2"/><circle cx="20" cy="18.5" r="2"/><circle cx="4" cy="12" r="2"/>'}
+};
+function brand(k,size){
+  const b=BRAND[k];
+  if(!b)return `<span class="bi">•</span>`;
+  return `<svg class="bi" viewBox="0 0 24 24" width="${size||17}" height="${size||17}"
+    fill="${b.c}" color="${b.c}" aria-hidden="true">${b.svg}</svg>`;
+}
+// سازگاری با کدی که ICON[...] می‌خواند
+const ICON=new Proxy({},{get:(_,k)=>brand(String(k))});
 
 let S={apps:[],sessions:[],projects:[],live:{combos:{},agents:{}},usage:{},
-       combos:[],timeline:[],health:{},perms:{},skills:[]};
+       combos:[],timeline:[],health:{},perms:{},skills:[],busy:{},jobs:[]};
 let view={kind:'home'}, closed={}, filt='', tab='sessions', busy=false;
+let pick=null;            // null = خاموش، Set = مجموعهٔ 'app:sid' انتخاب‌شده
 
 function toast(m,k=''){const t=$('#toast');t.textContent=m;t.className='toast on '+k;
   clearTimeout(t._h);t._h=setTimeout(()=>t.className='toast',2600);}
@@ -555,7 +610,7 @@ async function patch(p,b){return api(p,{method:'PATCH',headers:{'Content-Type':'
   body:JSON.stringify(b||{})});}
 async function del(p){return api(p,{method:'DELETE'});}
 
-const app=k=>S.apps.find(a=>a.key===k)||{key:k,name:k,icon:ICON[k]||'●',capabilities:[]};
+const app=k=>S.apps.find(a=>a.key===k)||{key:k,name:k,capabilities:[]};
 
 /* ═══════════ modal / menu ═══════════ */
 function mask(h){$('#mask').innerHTML=h;$('#mask').classList.add('on');}
@@ -629,13 +684,13 @@ function addChatDlg(pid){
       with any agent. Once inside, its findings feed the shared memory by itself.</p>
     <div class="flist" style="max-height:44vh;overflow:auto">${free.map(s=>`
       <label class="fc"><input type="radio" name="ac" value="${esc(s.id)}|${s.source}">
-        <span>${ICON[s.source]||'•'} ${esc(s.title||s.id)}</span>
+        <span>${brand(s.source)} ${esc(s.title||s.id)}</span>
         <span class="hint" style="margin:0">${esc((s.preview||'').slice(0,70))}</span>
       </label>`).join('')}</div>`:
       '<p class="hint">No free chats. Start a new one below.</p>'}
     <div class="row" style="margin-top:10px;gap:6px;flex-wrap:wrap">
       ${S.apps.filter(a=>a.key!=='router'&&a.capabilities.includes('send')).map(a=>
-        `<button class="qb" data-na="${a.key}">${a.icon} New ${esc(a.name)} chat</button>`).join('')}
+        `<button class="qb" data-na="${a.key}">${brand(a.key)} New ${esc(a.name)} chat</button>`).join('')}
     </div>
     <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
       ${free.length?'<button class="sm pri" id="acGo">Add</button>':''}</div></div>`);
@@ -645,10 +700,72 @@ function addChatDlg(pid){
     if(!r){toast('Pick one');return;}
     const [id,a]=r.value.split('|');close_();bindSession(a,id,pid);};
   $$('[data-na]').forEach(b=>b.onclick=async()=>{
-    close_();await newSession(b.dataset.na,pid);});
+    close_();newSessionDlg(b.dataset.na,pid);});
 }
 
 /* ═══════════ sidebar ═══════════ */
+// نوار عملیات دسته‌جمعی
+function selBar(){
+  const n=pick.size;
+  return `<div class="selbar">
+    <b>${n}</b> selected
+    <button class="sm gh" data-bulk="archive">📦 Archive</button>
+    <button class="sm gh" data-bulk="pin">📌 Pin</button>
+    <button class="sm gh" data-bulk="project">📁 Move…</button>
+    <button class="sm gh" data-bulk="delete" style="color:var(--bad)">🗑 Delete</button>
+    <span style="flex:1"></span>
+    <button class="sm gh" data-bulk="all">Select all</button>
+    <button class="sm gh" data-bulk="off">✕</button></div>`;
+}
+function wireSelBar(){
+  $$('#tree [data-bulk]').forEach(b=>b.onclick=async e=>{
+    e.stopPropagation();
+    const act=b.dataset.bulk;
+    if(act==='off'){pick=null;tree();return;}
+    if(act==='all'){S.sessions.forEach(s=>pick.add(s.source+':'+s.id));tree();return;}
+    if(!pick.size){toast('Nothing selected');return;}
+    const items=[...pick];
+    if(act==='project'){bulkProject(items);return;}
+    if(act==='delete'){
+      confirmDlg(`Delete ${items.length} chats?`,
+        'A copy of each goes to the trash, so this can be undone.','Delete',
+        ()=>runBulk(items,'delete'));
+      return;
+    }
+    runBulk(items,act);
+  });
+}
+async function runBulk(items,action,project_id){
+  try{
+    const r=await post('/api/sessions/bulk',{items,action,project_id:project_id||null});
+    // گزارش صادقانه: اگر بعضی نشدند، بگو کدام‌ها
+    if(r.done<r.total){
+      const bad=Object.entries(r.results).filter(([,v])=>!v.ok);
+      toast(`${r.done}/${r.total} done · ${bad.length} failed`,'bad');
+      mask(`<div class="dlg"><h3>⚠️ Some items failed</h3>
+        <div class="flist">${bad.map(([k,v])=>`<div class="mrow">
+          <span class="nm">${esc(k)}</span>
+          <span class="sub" style="flex:1;text-align:end">${esc(v.msg||'')}</span></div>`).join('')}</div>
+        <div class="dlgf"><button class="sm pri" onclick="close_()">OK</button></div></div>`);
+    }else toast(`${r.done} chats updated`,'ok');
+    pick=null; await refresh();
+  }catch(e){toast('Failed: '+e.message,'bad');}
+}
+function bulkProject(items){
+  mask(`<div class="dlg"><h3>📁 Move ${items.length} chats</h3>
+    <div class="flist">${S.projects.map(p=>`
+      <label class="fc"><input type="radio" name="bp" value="${esc(p.id)}">
+        <span>${p.icon||'📁'} ${esc(p.name)}</span></label>`).join('')}
+      <label class="fc"><input type="radio" name="bp" value="">
+        <span>↩ Remove from any project</span></label></div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
+      <button class="sm pri" id="bpGo">Move</button></div></div>`);
+  $('#bpGo').onclick=()=>{
+    const r=document.querySelector('input[name=bp]:checked');
+    if(!r){toast('Pick one');return;}
+    close_();runBulk(items,'project',r.value||null);};
+}
+
 function tree(){
   if(tab==='projects')return treeProjects();
   const q=filt.toLowerCase();
@@ -663,7 +780,7 @@ function tree(){
     return `<div class="grp">
       <div class="grph ${closed[a.key]&&!q?'closed':''}" data-g="${a.key}"
            title="${esc(lm.real||a.model||'')}">
-        <span class="tw">▼</span><span class="ic">${a.icon}</span>
+        <span class="tw">▼</span><span class="ic">${brand(a.key)}</span>
         <span class="nm">${esc(a.name)}</span>
         <span class="dot ${!a.running?'down':(live?'busy':'up')}"></span>
         <span class="ct">${ss.length}</span>
@@ -672,9 +789,14 @@ function tree(){
       </div>
       <div class="grpb">${ss.map(s=>`
         <div class="si ${view.sid===s.id?'sel':''}" data-s="${esc(s.id)}" data-a="${s.source}">
+          ${pick?`<input type="checkbox" class="pick" data-pk="${esc(s.source)}:${esc(s.id)}"
+            ${pick.has(s.source+':'+s.id)?'checked':''}>`:''}
           <div class="sb2">
-            <div class="t rtl">${s.pinned?'📌':''}${s.state==='working'?'<span class="livedot"></span>':
-              s.state==='needs_input'?'<span class="needdot"></span>':''}${s.icon?s.icon+' ':''}${esc(s.title||s.id)}
+            <div class="t rtl">${S.busy[s.source+':'+s.id]?'<span class="busyspin"></span>':''}${
+              s.pinned?'📌':''}${s.state==='working'?'<span class="livedot"></span>':
+              s.state==='needs_input'?'<span class="needdot"></span>':''}${
+              s.color?`<span class="cdot" style="background:${esc(s.color)}"></span>`:''}${
+              s.icon?s.icon+' ':''}${esc(s.title||s.id)}
               ${(s.tags||[]).map(t=>`<span class="tg">${esc(t)}</span>`).join('')}</div>
             <div class="p rtl">${esc(s.preview||'')}</div>
           </div>
@@ -682,9 +804,10 @@ function tree(){
           <button class="more" data-menu="${esc(s.id)}|${s.source}">⋯</button>
         </div>`).join('')}</div></div>`;
   }).join('');
-  $('#tree').innerHTML=html||'<div class="empty">No sessions</div>';
+  $('#tree').innerHTML=(pick?selBar():'')+(html||'<div class="empty">No sessions</div>');
+  if(pick)wireSelBar();
   $$('#tree .grph').forEach(g=>g.onclick=e=>{
-    if(e.target.dataset.new){e.stopPropagation();newSession(e.target.dataset.new);return;}
+    if(e.target.dataset.new){e.stopPropagation();newSessionDlg(e.target.dataset.new);return;}
     closed[g.dataset.g]=!closed[g.dataset.g];tree();});
   $$('#tree .si').forEach(el=>el.onclick=e=>{
     if(e.target.dataset.menu){e.stopPropagation();
@@ -715,7 +838,7 @@ function treeProjects(){
         <div class="grpb">${ms.length?ms.map(s=>`
           <div class="si ${view.sid===s.id?'sel':''}" data-s="${esc(s.id)}" data-a="${s.source}">
             <div class="sb2">
-              <div class="t rtl">${ICON[s.source]||'•'} ${esc(s.title||s.id)}</div>
+              <div class="t rtl">${brand(s.source)} ${esc(s.title||s.id)}</div>
               <div class="p rtl">${esc(s.preview||'')}</div>
             </div>
             <div class="tm">${ago(s.last_active)}</div>
@@ -737,7 +860,15 @@ function treeProjects(){
     closed['p:'+g.dataset.pg]=!closed['p:'+g.dataset.pg];tree();});
   $$('#tree [data-addp]').forEach(e=>e.onclick=ev=>{
     ev.stopPropagation();addChatDlg(e.dataset.addp);});
+  $$('#tree .pick').forEach(c=>c.onclick=e=>{
+    e.stopPropagation();
+    const k=c.dataset.pk;
+    c.checked?pick.add(k):pick.delete(k);
+    const bar=$('#tree .selbar b'); if(bar)bar.textContent=pick.size;});
   $$('#tree .si[data-s]').forEach(el=>el.onclick=e=>{
+    if(e.target.classList.contains('pick'))return;
+    if(pick){const k=el.dataset.a+':'+el.dataset.s;
+      pick.has(k)?pick.delete(k):pick.add(k);tree();return;}
     if(e.target.dataset.menu){e.stopPropagation();
       const [id,a]=e.target.dataset.menu.split('|');
       const r=e.target.getBoundingClientRect(); sessMenu(a,id,r.left-140,r.bottom+4);return;}
@@ -771,7 +902,7 @@ function home(){
       const act=ss.filter(s=>s.state==='working'||s.state==='needs_input').length;
       const lm=S.live.agents[a.key]||{};
       return `<div class="fc" data-a="${a.key}">
-        <div class="fct"><div class="ic">${a.icon}</div><div class="nb">
+        <div class="fct"><div class="ic">${brand(a.key)}</div><div class="nb">
           <div class="nm">${esc(a.name)}<span class="dot ${!a.running?'down':(act?'busy':'up')}"></span></div>
           <div class="vr">${a.version?'v'+esc(a.version):''}</div></div></div>
         <div class="fmeta">
@@ -838,10 +969,12 @@ async function openSession(a,id){
   const s=S.sessions.find(x=>x.id===id&&x.source===a)||{id,source:a,title:id};
   const A=app(a), lm=S.live.agents[a]||{};
   const P=s.project_id?S.projects.find(x=>x.id===s.project_id):null;
-  $('#mhead').innerHTML=`<span class="ic">${s.icon||A.icon}</span>
+  $('#mhead').innerHTML=`<span class="ic">${s.icon?s.icon:brand(a)}</span>
     <span class="ti rtl">${esc(s.title||id)}</span>
     <span class="pill model click" id="mp">◆ ${esc(s.model||A.model||'model')}
       ${lm.real?`<span class="real">${mark(lm.exact)}${esc(lm.real)}</span>`:''}</span>
+    <button class="tgl" id="tgReason" title="Ask the model to think step by step">🧠 reasoning</button>
+    <button class="tgl" id="tgExec" title="Allow the agent to run commands">⚡ commands</button>
     ${s.state==='working'?'<span class="pill live hide-sm">● generating</span>':''}
     ${P?`<span class="pill click" data-projbadge="1" title="Shared project — memory is automatic"
       onclick="openProject('${P.id}')">📁 ${esc(P.name)} · 🧠 auto</span>`:''}
@@ -851,6 +984,23 @@ async function openSession(a,id){
       <button class="iconb" id="moreBtn" title="More">⋯</button>
     </div>`;
   $('#mp').onclick=()=>modelDlg(a);
+  // استدلال و اجرای فرمان، جدا برای هر نشست: در یک پروژه ممکن است بخواهی
+  // فقط یک ایجنت اجازهٔ اجرا داشته باشد.
+  (async()=>{
+    let st={};
+    try{st=await api(`/api/session/${a}/${encodeURIComponent(id)}/settings`);}catch(_){}
+    const wire=(el,k)=>{
+      if(!el)return;
+      el.classList.toggle('on',!!st[k]);
+      el.onclick=async()=>{
+        const nv=!el.classList.contains('on');
+        el.classList.toggle('on',nv);
+        try{await post(`/api/session/${a}/${encodeURIComponent(id)}/settings`,{[k]:nv});}
+        catch(e){el.classList.toggle('on',!nv);toast('Failed: '+e.message,'bad');}
+      };
+    };
+    wire($('#tgReason'),'reasoning'); wire($('#tgExec'),'exec_tools');
+  })();
   $('#hoBtn').onclick=()=>handoffDlg(a,id);
   $('#moreBtn').onclick=e=>{const r=e.target.getBoundingClientRect();
     sessMenu(a,id,r.left-160,r.bottom+6);};
@@ -860,7 +1010,7 @@ async function openSession(a,id){
   // نشست پیش‌نویس هنوز روی دیسکِ ایجنت نیست؛ رفتن سراغ API یعنی خطا.
   if(s.draft){
     $('#stage').innerHTML=`<div class="wrap"><div class="empty">
-      ${A.icon} Start talking to ${esc(A.name)}.</div></div>`;
+      ${brand(a)} Start talking to ${esc(A.name)}.</div></div>`;
     $('#ta').focus(); rail(s); return;
   }
   $('#stage').innerHTML='<div class="wrap"><div class="empty">Loading…</div></div>';
@@ -868,17 +1018,25 @@ async function openSession(a,id){
     const d=await api(`/api/session/${a}/${encodeURIComponent(id)}`);
     const ms=d.messages||[];
     $('#stage').innerHTML=`<div class="wrap">${ms.length?ms.map((m,i)=>`
-      <div class="m"><div class="av ${m.role==='user'?'u':'a'}">${m.role==='user'?'H':A.icon}</div>
+      <div class="m"><div class="av ${m.role==='user'?'u':'a'}">${m.role==='user'?'H':brand(a)}</div>
         <div class="mb"><div class="mn">${m.role==='user'?'You':esc(A.name)}
           <span class="tm">${m.ts?ago(m.ts):''}</span>
+          </div>
+          <div class="mt rtl">${md(m.text)}</div>
           <span class="macts">
-            <button class="pinb" data-copy="${i}" title="Copy message">⧉</button>
-            <button class="pinb" data-pin="${i}" title="Pin to project memory">📌</button>
-          </span></div>
-          <div class="mt rtl">${md(m.text)}</div></div></div>`).join(''):
+            <button data-copy="${i}" title="Copy">⧉</button>
+            ${m.role==='user'?`<button data-again="${i}" title="Send again">↻</button>`:''}
+            <button data-pin="${i}" title="Pin to project memory">📌</button>
+          </span></div></div>`).join(''):
       '<div class="empty">No readable messages yet.</div>'}</div>`;
     $$('#stage [data-pin]').forEach(b=>b.onclick=()=>pinToMemory(ms[+b.dataset.pin]));
     $$('#stage [data-copy]').forEach(b=>b.onclick=()=>copyText(ms[+b.dataset.copy].text,b));
+    // ارسال دوباره: متن پیام کاربر را در کادر بگذار تا بتواند ویرایش هم بکند
+    $$('#stage [data-again]').forEach(b=>b.onclick=()=>{
+      const t=ms[+b.dataset.again].text||'';
+      $('#ta').value=t; $('#ta').focus();
+      $('#ta').dispatchEvent(new Event('input'));
+      toast('Ready to send again');});
     bindCodeCopy();
     $('#stage').scrollTop=9e5;
   }catch(e){$('#stage').innerHTML=`<div class="wrap"><div class="empty">${esc(e.message)}</div></div>`;}
@@ -1041,7 +1199,7 @@ async function modelDlg(k){
 function defaultReport(model,r){
   mask(`<div class="dlg"><h3>◆ ${esc(model)} — result per agent</h3>
     <div class="flist">${Object.entries(r.results).map(([a,v])=>`
-      <div class="mrow"><span class="nm">${ICON[a]||'•'} ${esc(a)}</span>
+      <div class="mrow"><span class="nm">${brand(a)} ${esc(a)}</span>
         <span class="ct" style="color:${v.ok?'var(--ok)':(v.skipped?'var(--faint)':'var(--bad)')}">
           ${v.ok?'applied':(v.skipped?'skipped':'failed')}</span>
         <span class="sub" style="flex:1;text-align:right">${esc(v.msg||'')}</span>
@@ -1155,7 +1313,7 @@ async function openProject(pid){
       <button class="add" id="addRole">＋ assign an agent</button></div>
     ${(p.roles||[]).length?p.roles.map(r=>`
       <div class="srow">
-        <span style="font-size:15px">${app(r.app).icon}</span>
+        <span style="font-size:15px">${brand(r.app)}</span>
         <div class="tx"><div class="t1">${esc(app(r.app).name)}</div>
           <div class="t2 rtl">${esc(r.role||'no task assigned')}</div></div>
         <span class="tag ${r.status==='done'?'g':r.status==='running'?'w':
@@ -1196,7 +1354,7 @@ async function openProject(pid){
   $('#addRole').onclick=()=>{
     mask(`<div class="dlg"><h3>👥 Assign an agent</h3>
       <div class="fld"><label>Agent</label><select id="ra">
-        ${runnable.map(a=>`<option value="${a.key}">${a.icon} ${esc(a.name)}</option>`).join('')}
+        ${runnable.map(a=>`<option value="${a.key}">${brand(a.key)} ${esc(a.name)}</option>`).join('')}
       </select></div>
       <div class="fld"><label>Its task in this project</label>
         <textarea id="rr" class="rtl" placeholder="پیدا کردن سرویس‌های پرمصرف"></textarea></div>
@@ -1232,7 +1390,7 @@ async function openProject(pid){
   try{
     const rc=await api('/api/receipts?project_id='+pid);
     $('#recs').innerHTML=(rc.receipts||[]).length?rc.receipts.map(r=>`
-      <div class="srow"><span style="font-size:14px">${app(r.app).icon}</span>
+      <div class="srow"><span style="font-size:14px">${brand(r.app)}</span>
         <div class="tx"><div class="t1 rtl">${esc(r.task)}</div>
           <div class="t2">${(r.evidence.memory_added||[]).length} findings ·
             ${r.evidence.duration_s||0}s · $${(r.cost_usd||0).toFixed(4)}</div></div>
@@ -1281,7 +1439,7 @@ function reviewDlg(pid,rid){
     <p>Another agent checks the work and returns APPROVE or REJECT. Work is not
        "done" until someone else verified it.</p>
     <div class="fld"><label>Reviewer</label><select id="rv">
-      ${revs.map(a=>`<option value="${a.key}">${a.icon} ${esc(a.name)}</option>`).join('')}
+      ${revs.map(a=>`<option value="${a.key}">${brand(a.key)} ${esc(a.name)}</option>`).join('')}
     </select></div>
     <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
       <button class="sm pri" id="ok">Review</button></div></div>`);
@@ -1339,7 +1497,7 @@ function rail(s,proj){
   const lm=s?(S.live.agents[s.source]||{}):{};
   $('#ctx').innerHTML=`
   ${s?`<div class="cs"><div class="csh">Session</div>
-    <div class="kv"><span class="k">Agent</span><span class="v">${a.icon} ${esc(a.name)}</span></div>
+    <div class="kv"><span class="k">Agent</span><span class="v">${brand(a.key)} ${esc(a.name)}</span></div>
     <div class="kv"><span class="k">Combo</span><span class="v" style="color:var(--purple)">${esc(s.model||'—')}</span></div>
     ${lm.real?`<div class="kv"><span class="k">Real model</span>
       <span class="v" style="font-size:11px">${mark(lm.exact)}${esc(lm.real)}</span></div>`:''}
@@ -1490,27 +1648,73 @@ async function skillsDlg(){
 }
 window.skillsDlg=skillsDlg;
 
-async function newSession(a,pid){
-  // نشست را همان لحظه روی سرور بساز و شناسه‌اش را نگه دار.
-  // قبلاً sid=null می‌ماند، پس هر پیام یک گفت‌وگوی تازه می‌شد.
-  let sid=null,pending=false;
-  try{const r=await post('/api/session/new/'+a,{project_id:pid||null});
-      sid=r.session_id; pending=!!r.pending;}
-  catch(e){toast('Could not start a session: '+e.message,'bad');}
-  view={kind:'session',app:a,sid,newIn:pid||null,pending}; drawers(false);
-  // بدون این، نشست تازه تا وقتی کاربر دستی صفحه را تازه نکند در سایدبار
-  // پیدایش نمی‌شد و ＋ انگار هیچ کاری نکرده بود.
-  if(sid)refresh();
+const SCOLORS=['#7c9cf5','#5fb8a6','#d97757','#c9a227','#9a8cff','#e06c9f',
+               '#6fb1d8','#8bc34a'];
+
+// کادر ساخت نشست: نام/رنگ/آیکون می‌گیرد و **منتظر تأیید سرور می‌ماند**.
+// تا وقتی نشست واقعاً روی سرور نیامده، کادر ارسال باز نمی‌شود؛ و اگر
+// نیامد، ردیف نیم‌بند پاک می‌شود و خطا نشان داده می‌شود.
+function newSessionDlg(a,pid){
   const A=app(a);
   const P=pid?S.projects.find(x=>x.id===pid):null;
-  $('#mhead').innerHTML=`<span class="ic">${A.icon}</span>
+  mask(`<div class="dlg"><h3>${brand(a,18)} New ${esc(A.name)} chat</h3>
+    ${P?`<p class="hint">Joins <b>${esc(P.name)}</b> — shared memory is automatic.</p>`:''}
+    <div class="fld"><label>Name</label>
+      <input id="sn" class="rtl" placeholder="مثلاً: بررسی مصرف رم" autocomplete="off"></div>
+    <div class="fld"><label>Colour</label>
+      <div class="emo" id="sc">${SCOLORS.map((c,i)=>
+        `<button data-c="${c}" class="sw ${i===0?'on':''}"
+           style="background:${c}" title="${c}"></button>`).join('')}</div></div>
+    <div class="fld"><label>Icon</label><div class="emo" id="se">
+      ${['','💬','🔎','🐞','📐','🧪','📝','🚀'].map((e,i)=>
+        `<button data-e="${e}" class="${i===0?'on':''}">${e||'—'}</button>`).join('')}
+    </div></div>
+    <div class="dlgf"><button class="sm gh" onclick="close_()">Cancel</button>
+      <button class="sm pri" id="mk">Create</button></div></div>`);
+  let col=SCOLORS[0], ico='';
+  $$('#sc button').forEach(b=>b.onclick=()=>{col=b.dataset.c;
+    $$('#sc button').forEach(x=>x.classList.toggle('on',x===b));});
+  $$('#se button').forEach(b=>b.onclick=()=>{ico=b.dataset.e;
+    $$('#se button').forEach(x=>x.classList.toggle('on',x===b));});
+  $('#sn').focus();
+  $('#sn').onkeydown=e=>{if(e.key==='Enter')$('#mk').click();};
+  $('#mk').onclick=async()=>{
+    const btn=$('#mk'); btn.disabled=true; btn.textContent='Creating…';
+    try{
+      await newSession(a,pid,{title:$('#sn').value.trim(),color:col,icon:ico});
+      close_();
+    }catch(e){
+      btn.disabled=false; btn.textContent='Create';
+      toast('Could not create: '+e.message,'bad');
+    }
+  };
+}
+
+async function newSession(a,pid,opts){
+  // نشست را همان لحظه روی سرور بساز و شناسه‌اش را نگه دار.
+  // قبلاً sid=null می‌ماند، پس هر پیام یک گفت‌وگوی تازه می‌شد.
+  // اگر ساخت شکست بخورد، پرتاب می‌کنیم تا کادر خطا را نشان دهد و هیچ
+  // نشستِ نیم‌بندی در رابط جا نماند.
+  const r=await post('/api/session/new/'+a,{project_id:pid||null});
+  const sid=r.session_id, pending=!!r.pending;
+  if(!sid)throw new Error('server returned no session id');
+  if(opts&&(opts.title||opts.color||opts.icon)){
+    try{await patch(`/api/session/${a}/${encodeURIComponent(sid)}/meta`,
+      {title:opts.title||'',color:opts.color||'',icon:opts.icon||''});}
+    catch(e){/* نام‌گذاری اختیاری است؛ نبودش نباید نشست را باطل کند */}
+  }
+  view={kind:'session',app:a,sid,newIn:pid||null,pending}; drawers(false);
+  await refresh();
+  const A=app(a);
+  const P=pid?S.projects.find(x=>x.id===pid):null;
+  $('#mhead').innerHTML=`<span class="ic">${brand(a)}</span>
     <span class="ti">New ${esc(A.name)} chat</span>
     ${P?`<span class="pill" title="Joins this project on first reply">📁 ${esc(P.name)}</span>`:''}
     <span class="pill model click" onclick="modelDlg('${a}')">◆ ${esc(A.model||'model')}</span>
     <div class="sp"><button class="iconb" onclick="home()">✕</button></div>`;
   $('#stage').className='msgs';
   $('#stage').innerHTML=`<div class="wrap"><div class="empty">
-    ${A.icon} Start talking to ${esc(A.name)}.<br>
+    ${brand(a)} Start talking to ${esc(A.name)}.<br>
     The chat appears in the sidebar after the first reply.
     ${P?`<br><br><span style="color:var(--accent)">It joins “${esc(P.name)}”, so it
       sees the shared memory and adds to it on its own.</span>`:''}</div></div>`;
@@ -1563,55 +1767,113 @@ ta.addEventListener('keydown',e=>{
     if(hl){$('#slash').classList.remove('on');ta.value='';
       (CMDS.find(c=>c.c===hl.dataset.c)||{}).fn?.();return;}
     send();}});
-$('#send').onclick=()=>send();
+$('#send').onclick=()=>{ $('#send').classList.contains('cancel')?cancelCurrent():send(); };
 $('#cmdBtn').onclick=()=>{ta.value='/';ta.focus();slashDraw('/');};
 $('#skillBtn').onclick=()=>skillsDlg();
 $('#modelBtn2').onclick=()=>modelDlg(view.app||'claude');
 
+// کارهای در جریان، به تفکیک نشست: 'app:sid' → job_id
+const MYJOBS={};
+
 async function send(){
-  const t=ta.value.trim(); if(!t||busy)return;
+  const t=ta.value.trim(); if(!t)return;
   const a=view.app||'claude';
-  busy=true;$('#send').disabled=true;$('#send').innerHTML='<span class="spin"></span>';
+  const key=a+':'+view.sid;
+  if(MYJOBS[key]){toast('این گفت‌وگو همین حالا مشغول است');return;}
+
   const w=$('#stage .wrap');
   if(w){w.insertAdjacentHTML('beforeend',`<div class="m">
     <div class="av u">H</div><div class="mb"><div class="mn">You</div>
     <div class="mt rtl">${md(t)}</div></div></div>
-    <div class="m" id="pend"><div class="av a">${app(a).icon}</div>
-    <div class="mb"><div class="mn">${esc(app(a).name)}</div>
+    <div class="m" id="pend"><div class="av a">${brand(a)}</div>
+    <div class="mb"><div class="mn">${esc(app(a).name)}
+      <span class="tm" id="phase">در صف…</span></div>
     <div class="typing"><i></i><i></i><i></i></div></div></div>`);
     $('#stage').scrollTop=9e5;}
   ta.value='';ta.style.height='auto';
+
+  let jid=null;
   try{
     const r=await post('/api/send',
       {app:a,text:t,session_id:view.sid,project_id:view.newIn||null});
-    // ایجنت ممکن است شناسهٔ دیگری برگرداند (هرمس شناسهٔ خودش را می‌سازد).
-    // نگه‌داشتنش یعنی پیام بعدی همان گفت‌وگو را ادامه می‌دهد.
-    if(r.session_id&&r.session_id!==view.sid){view.sid=r.session_id;view.pending=false;}
-    const p=$('#pend');
-    // آنچه خودکار وارد حافظهٔ تیم شد، شفاف نشان داده می‌شود تا کاربر
-    // بداند دقیقاً چه چیزی ذخیره شد — حافظهٔ نامرئی قابل اعتماد نیست.
-    const learned=(r.learned||[]).length?`<div class="learned">🧠 added to shared memory:
-      ${r.learned.map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:'';
-    if(p)p.outerHTML=`<div class="m"><div class="av a">${app(a).icon}</div>
-      <div class="mb"><div class="mn">${esc(app(a).name)}
-        <span class="macts"><button class="pinb" id="lastCopy" title="Copy">⧉</button></span></div>
-      <div class="mt rtl">${md(r.output||'(empty)')}</div>${learned}</div></div>`;
-    const lc=$('#lastCopy'); if(lc)lc.onclick=()=>copyText(r.output||'',lc);
-    bindCodeCopy();
-    $('#stage').scrollTop=9e5;
-    // پیوند به پروژه را خودِ سرور هنگام ارسال انجام می‌دهد (project_id در
-    // بدنهٔ /api/send). کد قبلی «تازه‌ترین نشستِ بی‌پروژه» را حدس می‌زد و
-    // وصلش می‌کرد — که می‌توانست گفت‌وگوی اشتباهی را به پروژه ببندد و
-    // view را هم روی همان نشستِ اشتباه بنشاند.
-    view.newIn=null;
-    refresh();
+    jid=r.job_id;
+    MYJOBS[key]=jid;
+    sendBtn(true);            // دکمه به «لغو» تبدیل می‌شود
+    const j=await trackJob(jid,a);
+    finishSend(j,a,key);
   }catch(e){
     const p=$('#pend');
     if(p)p.outerHTML=`<div class="m"><div class="av a">⚠</div><div class="mb">
-      <div class="mn">Error</div><div class="mt">${esc(e.message)}</div></div></div>`;
-    toast('Failed','bad');
+      <div class="mn">ارسال نشد</div><div class="mt">${esc(e.message)}</div></div></div>`;
+    toast('Failed: '+e.message,'bad');
+    delete MYJOBS[key]; sendBtn(false);
   }
-  busy=false;$('#send').disabled=false;$('#send').textContent='➤';
+}
+
+// دکمهٔ ارسال ↔ لغو. بقیهٔ نشست‌ها آزادند؛ فقط همین گفت‌وگو مشغول است.
+function sendBtn(running){
+  const b=$('#send');
+  b.disabled=false;
+  b.classList.toggle('cancel',!!running);
+  b.innerHTML=running?'■':'➤';
+  b.title=running?'لغو پاسخ':'ارسال';
+}
+
+// نظرسنجی وضعیت کار + به‌روزرسانی زندهٔ «الان چه خبر است»
+async function trackJob(jid,a){
+  for(;;){
+    await new Promise(r=>setTimeout(r,900));
+    let j;
+    try{ j=await api('/api/job/'+jid); }
+    catch(e){ return {state:'error',error:'ارتباط با سرور قطع شد'}; }
+    const ph=$('#phase');
+    if(ph)ph.textContent=j.phase||j.state;
+    if(['done','error','cancelled'].includes(j.state))return j;
+  }
+}
+
+function finishSend(j,a,key){
+  delete MYJOBS[key]; sendBtn(false);
+  const p=$('#pend');
+  if(j.session_id&&j.session_id!==view.sid){view.sid=j.session_id;view.pending=false;}
+  if(j.state==='cancelled'){
+    if(p)p.outerHTML=`<div class="m"><div class="av a">⃠</div><div class="mb">
+      <div class="mn">لغو شد</div>
+      <div class="mt" style="color:var(--faint)">پاسخ نیمه‌کاره رها شد.</div></div></div>`;
+    refresh(); return;
+  }
+  if(j.state==='error'){
+    // خطا را کامل نشان بده — کاربر باید بداند ایراد از کجاست.
+    if(p)p.outerHTML=`<div class="m"><div class="av a">⚠</div><div class="mb">
+      <div class="mn" style="color:var(--bad)">${esc(app(a).name)} خطا داد</div>
+      <div class="mt rtl">${md(j.error||j.output||'بدون توضیح')}</div></div></div>`;
+    toast('پاسخ نگرفت','bad'); refresh(); return;
+  }
+  const learned=(j.learned||[]).length?`<div class="learned">🧠 added to shared memory:
+    ${j.learned.map(x=>`<span>${esc(x)}</span>`).join('')}</div>`:'';
+  if(p)p.outerHTML=`<div class="m"><div class="av a">${brand(a)}</div>
+    <div class="mb"><div class="mn">${esc(app(a).name)}</div>
+    <div class="mt rtl">${md(j.output||'(empty)')}</div>${learned}
+    <span class="macts"><button id="lastCopy" title="Copy">⧉</button></span>
+    </div></div>`;
+  const lc=$('#lastCopy'); if(lc)lc.onclick=()=>copyText(j.output||'',lc);
+  bindCodeCopy();
+  $('#stage').scrollTop=9e5;
+  view.newIn=null;
+  refresh();
+}
+
+// لغو با پرسش — نیمه‌کاره رها کردن یک پاسخ باید عمدی باشد
+function cancelCurrent(){
+  const key=(view.app||'')+':'+view.sid;
+  const jid=MYJOBS[key];
+  if(!jid)return;
+  confirmDlg('لغو این پاسخ؟',
+    'پردازش همین حالا متوقف می‌شود و پاسخ نیمه‌کاره از بین می‌رود.',
+    'بله، لغو کن',async()=>{
+      try{await post('/api/job/'+jid+'/cancel',{});}
+      catch(e){toast('لغو نشد: '+e.message,'bad');}
+    });
 }
 
 /* ═══════════ palette ═══════════ */
@@ -1640,7 +1902,7 @@ function pal(pre){
         <div class="tt rtl">${esc(s.title)}<small>${esc(s.preview||'')}</small></div>
         <span class="kb">${ago(s.last_active)}</span></div>`).join(''):'')+
       (as.length&&q?'<div class="pg">Agents</div>'+as.map(a=>
-        `<div class="pi" data-a2="${a.key}"><span class="g">${a.icon}</span>
+        `<div class="pi" data-a2="${a.key}"><span class="g">${brand(a.key)}</span>
         <div class="tt">${esc(a.name)}<small>${esc(a.model||'')} · ${esc(a.detail||'')}</small></div></div>`).join(''):'');
     $('#pr').innerHTML=html||'<div class="empty">Nothing</div>';
     bind();
@@ -1650,7 +1912,7 @@ function pal(pre){
         if(!hits.length)return;
         $('#pr').insertAdjacentHTML('beforeend','<div class="pg">In conversations</div>'+
           hits.slice(0,8).map(h=>`<div class="pi" data-s="${esc(h.session)}" data-a="${h.app}">
-            <span class="g">${ICON[h.app]||'●'}</span>
+            <span class="g">${brand(h.app)}</span>
             <div class="tt rtl">${esc(h.snippet)}<small>${esc(h.app)} · ${esc(h.role)}</small></div>
             </div>`).join(''));
         bind();}catch(e){}},260);}
@@ -1688,6 +1950,7 @@ async function refresh(){
   try{
     const [ov,ss]=await Promise.all([api('/api/overview2'),api('/api/sessions')]);
     applyOverview(ov);S.sessions=ss;
+    try{const jb=await api('/api/jobs');S.busy=jb.busy||{};S.jobs=jb.jobs||[];}catch(_){}
     lastFp=null;                 // رندر بعدیِ استریم را مجبور کن تازه بسازد
     tree();
     if(view.kind==='home')home();
@@ -1706,6 +1969,8 @@ function startPolling(){
 function applyLive(d){
   applyOverview(d);
   if(Array.isArray(d.sessions))S.sessions=d.sessions;
+  if(d.busy)S.busy=d.busy;
+  if(d.jobs)S.jobs=d.jobs;
   // درخت را فقط وقتی بساز که واقعاً چیزی عوض شده باشد. رندرِ هر ۵ ثانیه
   // منوی ⋯ باز را می‌بست، فوکوس را می‌پراند و اسکرول سایدبار را به بالا
   // برمی‌گرداند.
@@ -1737,6 +2002,49 @@ function stream(){
 $('#omni').onclick=()=>pal();
 $('#btnHome').onclick=()=>home();
 $('#filt').oninput=e=>{filt=e.target.value;tree();};
+$('#btnPick').onclick=()=>{pick=pick?null:new Set();tree();};
+$('#btnTrash').onclick=()=>trashDlg();
+
+// ═══════════ سطل زباله ═══════════
+// تا امروز هرچه پاک می‌شد به اینجا می‌رفت ولی هیچ راهی برای دیدنش نبود.
+async function trashDlg(){
+  mask(`<div class="dlg wide"><h3>🗑 Trash</h3>
+    <p class="hint">Deleted chats and projects are kept here for 30 days.</p>
+    <div id="tl"><div class="empty">Loading…</div></div>
+    <div class="dlgf">
+      <button class="sm gh" id="emptyAll" style="color:var(--bad);margin-inline-end:auto">Empty trash</button>
+      <button class="sm gh" onclick="close_()">Close</button></div></div>`);
+  const draw=async()=>{
+    let items=[];
+    try{items=(await api('/api/trash')).items||[];}
+    catch(e){$('#tl').innerHTML='<div class="empty">Could not read the trash.</div>';return;}
+    $('#tl').innerHTML=items.length?`<div class="flist" style="max-height:48vh;overflow:auto">
+      ${items.map(i=>`<div class="mrow">
+        <span class="nm">${i.kind==='project'?'📁':'💬'} ${esc(i.name)}
+          <div class="sub">${ago(new Date(i.deleted_at*1000).toISOString())} ago · ${
+            i.size>1024?Math.round(i.size/1024)+' KB':i.size+' B'}${
+            i.restorable?'':' · origin unknown'}</div></span>
+        ${i.restorable?`<button class="sm gh" data-rs="${esc(i.id)}">↩ Restore</button>`:''}
+        <button class="sm gh" data-pg="${esc(i.id)}" style="color:var(--bad)">Delete</button>
+      </div>`).join('')}</div>`:'<div class="empty">The trash is empty.</div>';
+    $$('#tl [data-rs]').forEach(b=>b.onclick=async()=>{
+      try{const r=await post('/api/trash/'+encodeURIComponent(b.dataset.rs)+'/restore',{});
+        toast('Restored','ok');draw();refresh();}
+      catch(e){toast('Restore failed: '+e.message,'bad');}});
+    $$('#tl [data-pg]').forEach(b=>b.onclick=()=>confirmDlg('Delete for good?',
+      'This cannot be undone.','Delete',async()=>{
+        try{await del('/api/trash/'+encodeURIComponent(b.dataset.pg));draw();}
+        catch(e){toast('Failed','bad');}
+        trashDlg();}));
+  };
+  $('#emptyAll').onclick=()=>confirmDlg('Empty the whole trash?',
+    'Everything in it is gone for good.','Empty',async()=>{
+      try{await del('/api/trash');toast('Trash emptied','ok');}
+      catch(e){toast('Failed','bad');}
+      trashDlg();});
+  draw();
+}
+window.trashDlg=trashDlg;
 function drawers(open){
   if(open===false){$('#sb').classList.remove('open');$('#ctx').classList.remove('force');
     $('#scrim').classList.remove('on');}
