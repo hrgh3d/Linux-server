@@ -160,6 +160,10 @@ def _ensure() -> None:
 # غایب می‌ماند و کوئری با «no such column» می‌شکند. صریح اضافه می‌کنیم.
 _ADDED = [
     ("session_meta", "project_id", "text"),
+    # نشستی که ساخته شده ولی هنوز پیامی نگرفته. باید در سایدبار دیده شود
+    # (وگرنه دکمهٔ ＋ انگار هیچ کاری نمی‌کند) ولی جزو نشست‌های واقعی
+    # ایجنت نیست، چون هنوز روی دیسکِ خود ایجنت وجود ندارد.
+    ("session_meta", "draft", "integer default 0"),
 ]
 
 
@@ -211,15 +215,31 @@ def meta_all() -> dict[str, dict]:
                 for r in c.execute("select * from session_meta")}
 
 
-def meta_set(app: str, sid: str, **kw) -> dict:
+def meta_get(app: str, sid: str) -> dict:
+    with db() as c:
+        r = c.execute("select * from session_meta where app=? and sid=?",
+                      (app, sid)).fetchone()
+        return dict(r) if r else {}
+
+
+def meta_set(app: str, sid: str, _fields: dict | None = None, **kw) -> dict:
+    """
+    ابرداده را ست می‌کند. هم dict می‌پذیرد هم kwargs.
+
+    نکته: اگر هیچ فیلد مجازی نیامده باشد باز هم **ردیف ساخته می‌شود** —
+    قبلاً زودهنگام return می‌کرد و نشستِ تازه هرگز ثبت نمی‌شد.
+    """
+    kw = {**(_fields or {}), **kw}
     allowed = {"title", "icon", "color", "pinned", "archived", "tags", "note",
-               "project_id"}
+               "project_id", "draft"}
     fields = {k: v for k, v in kw.items() if k in allowed}
-    if not fields:
-        return {}
     with db() as c:
         c.execute("insert or ignore into session_meta(app,sid,updated_at)"
                   " values(?,?,?)", (app, sid, now()))
+        if not fields:
+            r = c.execute("select * from session_meta where app=? and sid=?",
+                          (app, sid)).fetchone()
+            return dict(r) if r else {}
         sets = ",".join(f"{k}=?" for k in fields)
         c.execute(f"update session_meta set {sets},updated_at=?"
                   " where app=? and sid=?",
@@ -333,14 +353,29 @@ def proj_update(pid: str, **kw) -> dict | None:
     return proj_get(pid)
 
 
-def proj_delete(pid: str) -> None:
+def proj_delete(pid: str) -> bool:
+    """
+    پروژه و همهٔ وابسته‌هایش را حذف می‌کند.
+
+    برمی‌گرداند که واقعاً چیزی حذف شد یا نه — قبلاً همیشه «ok» می‌گفت،
+    حتی وقتی شناسه اصلاً وجود نداشت، و کاربر فکر می‌کرد حذف شده.
+
+    نشست‌ها **پاک نمی‌شوند**، فقط از پروژه آزاد می‌شوند و به «کلی»
+    برمی‌گردند؛ وگرنه حذف یک پروژه گفت‌وگوهای واقعی را با خود می‌برد.
+    """
     with db() as c:
+        row = c.execute("select 1 from projects where id=?", (pid,)).fetchone()
+        if not row:
+            return False
         for t in ("project_roles", "memory", "timeline"):
             c.execute(f"delete from {t} where project_id=?", (pid,))
+        c.execute("update session_meta set project_id=null where project_id=?",
+                  (pid,))
         c.execute("delete from projects where id=?", (pid,))
     d = PROJECTS / pid
     if d.exists():
         shutil.move(str(d), str(TRASH / f"{int(now())}_proj_{pid}"))
+    return True
 
 
 def role_set(pid: str, app: str, role: str = "", ord_: int = 0,

@@ -11,6 +11,8 @@ AI Hub — مرکز فرماندهی همهٔ برنامه‌های هوش مص�
 from __future__ import annotations
 
 import asyncio
+import uuid
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -72,6 +74,7 @@ class SendBody(BaseModel):
     app: str
     text: str
     session_id: str | None = None
+    project_id: str | None = None   # نشست تازه را همان‌جا به پروژه ببند
 
 
 class ModelBody(BaseModel):
@@ -120,6 +123,19 @@ async def overview():
     return await cached("overview", build)
 
 
+def _iso(ts) -> str | None:
+    """timestamp عددی را به همان قالب ISO نشست‌های واقعی تبدیل کن."""
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        return ts
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc)\
+            .isoformat(timespec="seconds").replace("+00:00", "Z")
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
 @app.get("/api/sessions")
 async def sessions(app_key: str | None = Query(None, alias="app"),
                    include_archived: bool = False):
@@ -163,6 +179,33 @@ async def sessions(app_key: str | None = Query(None, alias="app"),
         for s in out:
             if s.get("project_id") and s["project_id"] not in alive:
                 s["project_id"] = None
+
+        # نشست‌های «پیش‌نویس»: با دکمهٔ ＋ ساخته شده‌اند ولی هنوز پیامی
+        # نگرفته‌اند، پس روی دیسکِ خود ایجنت وجود ندارند و در خروجی
+        # آداپتور نمی‌آیند. اگر اضافه‌شان نکنیم، ＋ انگار هیچ کاری نمی‌کند.
+        have = {f"{s['source']}:{s['id']}" for s in out}
+        for key, m in meta.items():
+            if not m.get("draft") or key in have:
+                continue
+            akey, _, sid = key.partition(":")
+            if akey not in ADAPTERS:
+                continue
+            if app_key and akey != app_key:
+                continue
+            pid = m.get("project_id") or None
+            if pid and pid not in alive:
+                pid = None
+            out.append({
+                "id": sid, "source": akey, "title": m.get("title") or "New chat",
+                "real_title": None, "preview": "", "msg_count": 0,
+                # هم‌قالب با نشست‌های واقعی (ISO). قبلاً float بود و
+                # مرتب‌سازی با «'<' not supported between float and str»
+                # کل /api/sessions را ۵۰۰ می‌کرد.
+                "last_active": _iso(m.get("updated_at")), "state": "draft",
+                "draft": True, "project_id": pid,
+                "pinned": bool(m.get("pinned")), "archived": bool(m.get("archived")),
+                "tags": [t for t in (m.get("tags") or "").split(",") if t],
+            })
         if not include_archived:
             out = [s for s in out if not s.get("archived")]
         out.sort(key=lambda s: (not s.get("pinned"),
@@ -409,16 +452,39 @@ async def send(body: SendBody):
             prompt = f"{ctx}\n{body.text}"
 
     loop = asyncio.get_running_loop()
-    ok, out = await loop.run_in_executor(
-        POOL, lambda: ad.send(prompt, body.session_id))
+    # شناسهٔ placeholder هرمس نباید به CLI برود — هرمس آن را نمی‌شناسد و
+    # `--resume pending-…` شکست می‌خورد. فقط نشانهٔ «نشست تازه» است.
+    prev = body.session_id
+    if prev and prev.startswith("pending-"):
+        prev = None
+
+    ok, out, sid = await loop.run_in_executor(
+        POOL, lambda: ad.send(prompt, prev))
     invalidate()
+
+    # شناسهٔ واقعی برمی‌گردد تا رابط آن را نگه دارد. بدون این، هر پیام یک
+    # نشست تازه می‌ساخت و ایجنت چیزی از پیام قبلی یادش نمی‌ماند.
+    if sid and sid != body.session_id:
+        carry: dict = {}
+        if body.session_id:
+            # ابرداده‌ای که روی placeholder نشسته بود (نام، پروژه) را
+            # به شناسهٔ واقعی منتقل کن، بعد placeholder را دور بینداز.
+            old = store.meta_get(body.app, body.session_id) or {}
+            carry = {k: v for k, v in old.items()
+                     if k in ("title", "project_id", "pinned") and v}
+            if body.session_id.startswith("pending-"):
+                store.meta_del(body.app, body.session_id)
+        if body.project_id:
+            carry["project_id"] = body.project_id
+        carry["draft"] = 0
+        store.meta_set(body.app, sid, carry)
 
     learned: list[str] = []
     if ok and pid:
         learned = store.auto_harvest(pid, body.app, out)
         store.tl(pid, body.app, "turn",
                  f"{body.text.strip()[:60]} → {len(out or '')} chars")
-    return {"ok": ok, "output": out, "project": pid,
+    return {"ok": ok, "output": out, "project": pid, "session_id": sid,
             "learned": learned, "context_used": bool(ctx)}
 
 
@@ -684,16 +750,35 @@ async def session_delete(app_key: str, sid: str, hard: int = 0):
 
 
 @app.post("/api/session/new/{app_key}")
-async def session_new(app_key: str):
-    """نشست جدید مخصوص همین ایجنت — دکمهٔ ＋ هر گروه در سایدبار."""
+async def session_new(app_key: str, body: dict | None = Body(None)):
+    """
+    نشست تازه برای این ایجنت — دکمهٔ ＋ هر گروه.
+
+    قبلاً این endpoint **هیچ چیزی نمی‌ساخت**؛ فقط یک «hint» برمی‌گرداند.
+    نتیجه این بود که رابط شناسه‌ای نداشت، با هر پیام `session_id=null`
+    می‌فرستاد و هر پیام یک گفت‌وگوی تازه می‌شد.
+
+    حالا یک شناسهٔ واقعی ساخته و ثبت می‌شود. Pi و OpenClaw و Claude همین
+    شناسه را می‌پذیرند (`--session-id`). هرمس شناسهٔ خودش را می‌سازد، پس
+    برایش placeholder می‌گذاریم و بعد از اولین جواب با شناسهٔ واقعی
+    جایگزین می‌شود.
+    """
     ad = ADAPTERS.get(app_key)
     if ad is None:
         raise HTTPException(404, "unknown app")
     if "send" not in ad.capabilities:
         raise HTTPException(400, f"{ad.name} cannot start sessions")
-    store.tl(None, app_key, "session", f"new {app_key} session requested")
-    return {"ok": True, "app": app_key,
-            "hint": "send the first message to materialise the session"}
+
+    pid = (body or {}).get("project_id") or None
+    sid = f"pending-{uuid.uuid4()}" if app_key == "hermes" else str(uuid.uuid4())
+    meta = {"draft": 1}
+    if pid:
+        meta["project_id"] = pid
+    store.meta_set(app_key, sid, meta)
+    store.tl(pid, app_key, "session", f"new {app_key} session")
+    invalidate()
+    return {"ok": True, "app": app_key, "session_id": sid,
+            "pending": app_key == "hermes", "project_id": pid}
 
 
 @app.get("/api/sessions/junk")
@@ -780,8 +865,11 @@ async def project_patch(pid: str, b: ProjPatch):
 
 @app.delete("/api/projects/{pid}")
 async def project_delete(pid: str):
-    store.proj_delete(pid)
-    return {"ok": True}
+    gone = store.proj_delete(pid)
+    if not gone:
+        raise HTTPException(404, "project not found")
+    invalidate()          # نشست‌های آزادشده باید فوری در «کلی» دیده شوند
+    return {"ok": True, "deleted": pid}
 
 
 @app.post("/api/projects/{pid}/role")
@@ -881,7 +969,7 @@ async def skill_run(b: SkillRun):
     store.skill_bump(b.skill_id)
     text = sk["body"] + ("\n\n" + b.extra if b.extra else "")
     loop = asyncio.get_running_loop()
-    ok, out = await loop.run_in_executor(POOL, lambda: ad.send(text, None))
+    ok, out, _sid = await loop.run_in_executor(POOL, lambda: ad.send(text, None))
     store.tl(None, b.app, "skill", f"ran skill '{sk['name']}'")
     return {"ok": ok, "output": out}
 
@@ -903,7 +991,7 @@ async def handoff(b: HandoffBody):
     if b.note:
         summary += f"\n\nOperator note: {b.note}"
     loop = asyncio.get_running_loop()
-    ok, out = await loop.run_in_executor(POOL, lambda: dst.send(summary, None))
+    ok, out, _sid = await loop.run_in_executor(POOL, lambda: dst.send(summary, None))
     store.tl(None, b.to_app, "handoff",
              f"{b.from_app} → {b.to_app}")
     invalidate()

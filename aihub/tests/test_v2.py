@@ -567,7 +567,7 @@ def test_openclaw_send_does_not_use_local(monkeypatch):
         return 0, '{"ok":true,"reply":"PONG"}'
 
     monkeypatch.setattr(adapters, "_sh", fake_sh)
-    ok, out = adapters.OpenClawAdapter().send("hi")
+    ok, out, _sid = adapters.OpenClawAdapter().send("hi")
     assert ok and out == "PONG"
     cmd = seen["cmd"]
     assert cmd[:2] == ["openclaw", "agent"]
@@ -583,7 +583,7 @@ def test_openclaw_send_surfaces_gateway_errors(monkeypatch):
     err = ('{"ok":false,"error":{"type":"cli_error","message":'
            '"A Gateway is running for this state directory"}}')
     monkeypatch.setattr(adapters, "_sh", lambda c, timeout=10: (1, err))
-    ok, out = adapters.OpenClawAdapter().send("hi")
+    ok, out, _sid = adapters.OpenClawAdapter().send("hi")
     assert ok is False
     assert "Gateway is running" in out
 
@@ -802,7 +802,9 @@ def test_metadata_changes_are_visible_immediately_not_after_cache_ttl(client):
         "mode": "manual", "budget": 1}).json()["project"]["id"]
     ss = client.get("/api/sessions").json()
     assert ss, "fixture has no sessions"
-    s = ss[0]
+    # نشست «پیش‌نویس» (با ＋ ساخته شده، هنوز بی‌پیام) عنوانِ سمتِ ایجنت
+    # ندارد پس real_title آن قاعدتاً None است؛ اینجا نشست واقعی می‌خواهیم.
+    s = [x for x in ss if not x.get("draft")][0]
 
     r = client.post(f"/api/session/{s['source']}/{s['id']}/bind",
                     json={"project_id": pid})
@@ -1033,3 +1035,142 @@ def test_frontend_warns_about_models_without_credentials():
     h = _html()
     assert "needs_key" in h, "UI never surfaces the missing-credential flag"
     assert "no credentials for this provider" in h
+
+
+# ═══════════ v2.3: چرخهٔ عمر نشست — هر پیام نباید نشست تازه بسازد
+
+
+def test_every_adapter_passes_the_session_id_to_its_cli():
+    """
+    ریشهٔ باگ «هر پیام یک سشن جدید باز می‌کند»: Claude و Pi اصلاً
+    session_id را به CLI پاس نمی‌دادند. هر چهار آداپتور باید بدهند.
+    """
+    import inspect
+    from app import adapters
+    for cls, flag in ((adapters.HermesAdapter, "--resume"),
+                      (adapters.ClaudeAdapter, "--session-id"),
+                      (adapters.PiAdapter, "--session-id"),
+                      (adapters.OpenClawAdapter, "--session-id")):
+        src = inspect.getsource(cls.send)
+        assert flag in src, f"{cls.__name__}.send never passes {flag}"
+
+
+def test_send_returns_the_session_id(monkeypatch):
+    """بدون برگرداندن شناسه، رابط نمی‌داند گفت‌وگو را چطور ادامه دهد."""
+    from app import adapters
+    out = adapters.SendOut(True, "hi", "abc-123")
+    ok, text, sid = out
+    assert (ok, text, sid) == (True, "hi", "abc-123")
+    assert out.session_id == "abc-123"
+
+
+def test_hermes_session_id_is_parsed_from_its_output():
+    from app.adapters import _hermes_sid
+    out = ("╭─ ☤ Hermes ─╮\nسلام\n╰──╯\n\nResume this session with:\n"
+           "  hermes --resume 20260924_065919_6b22af\n"
+           '  hermes -c "بگو سلام"\n')
+    assert _hermes_sid(out) == "20260924_065919_6b22af"
+    assert _hermes_sid("no session here") is None
+
+
+def test_hermes_body_excludes_the_resume_block():
+    from app.adapters import _hermes_body
+    out = ("╭─ ☤ Hermes ─╮\nجواب واقعی\n╰──╯\n\nResume this session with:\n"
+           "  hermes --resume 20260924_1\n")
+    b = _hermes_body(out)
+    assert b == "جواب واقعی"
+    assert "resume" not in b.lower()
+
+
+def test_claude_maps_combo_names_to_a_real_model():
+    """
+    تست زنده روی سرور: `claude --model Agentic` می‌دهد
+    [claude-code:unrecognized_model] و بعد پاسخ خالی. کلاد کد نام کامبو را
+    نمی‌شناسد، پس باید به یک مدل واقعی نگاشت شود.
+    """
+    from app.adapters import ClaudeAdapter, COMBO_NAMES
+    ad = ClaudeAdapter()
+    for combo in COMBO_NAMES:
+        ad._env_model = staticmethod(lambda _c=combo: _c)
+        assert ad._real_model() not in COMBO_NAMES
+    ad._env_model = staticmethod(lambda: "cl/anthropic/claude-opus-5.5")
+    assert ad._real_model() == "cl/anthropic/claude-opus-5.5"
+
+
+def test_claude_noise_is_not_shown_as_the_answer():
+    from app.adapters import _strip_claude_noise
+    out = ('[claude-code:unrecognized_model] {"model":"Brain"}\n'
+           "جواب درست\n")
+    assert _strip_claude_noise(out) == "جواب درست"
+
+
+def test_new_session_endpoint_actually_creates_one(client):
+    """
+    قبلاً این endpoint فقط یک «hint» برمی‌گرداند و هیچ نمی‌ساخت، پس رابط
+    شناسه‌ای نداشت و هر پیام یک گفت‌وگوی تازه می‌شد.
+    """
+    r = client.post("/api/session/new/pi", json={})
+    assert r.status_code == 200
+    sid = r.json().get("session_id")
+    assert sid, "no session id returned"
+    rows = client.get("/api/sessions?app_key=pi").json()
+    assert any(s["id"] == sid for s in rows), "new session not listed"
+
+
+def test_new_session_in_a_project_is_bound_immediately(client):
+    pid = client.post("/api/projects", json={"name": "چسبندگی"}).json()["project"]["id"]
+    sid = client.post("/api/session/new/pi",
+                      json={"project_id": pid}).json()["session_id"]
+    row = [s for s in client.get("/api/sessions").json() if s["id"] == sid][0]
+    assert row["project_id"] == pid
+
+
+def test_project_sessions_never_appear_in_general(client):
+    """
+    خواستهٔ صریح کاربر: نشست‌های پروژه نباید در «کلی» هم دیده شوند.
+    """
+    pid = client.post("/api/projects", json={"name": "فقط-پروژه"}).json()["project"]["id"]
+    sid = client.post("/api/session/new/pi",
+                      json={"project_id": pid}).json()["session_id"]
+    rows = client.get("/api/sessions").json()
+    general = [s for s in rows if not s.get("project_id")]
+    assert sid not in [s["id"] for s in general]
+
+
+def test_deleting_a_project_frees_its_sessions_instead_of_hiding_them(client):
+    """
+    نشست نباید با پروژه پاک شود و نباید هم گم شود: باید به «کلی» برگردد.
+    """
+    pid = client.post("/api/projects", json={"name": "موقت"}).json()["project"]["id"]
+    sid = client.post("/api/session/new/pi",
+                      json={"project_id": pid}).json()["session_id"]
+    assert client.delete(f"/api/projects/{pid}").status_code == 200
+    rows = client.get("/api/sessions").json()
+    row = [s for s in rows if s["id"] == sid]
+    assert row, "session vanished with its project"
+    assert row[0]["project_id"] is None, "still bound to a deleted project"
+
+
+def test_deleting_a_missing_project_is_reported_not_faked(client):
+    """قبلاً همیشه ok می‌گفت، حتی برای شناسه‌ای که وجود نداشت."""
+    assert client.delete("/api/projects/does-not-exist").status_code == 404
+
+
+def test_frontend_new_session_button_calls_the_api():
+    h = _html()
+    seg = h[h.index("async function newSession"):]
+    seg = seg[:seg.index("\n}")]
+    assert "/api/session/new/" in seg, "the ＋ button never creates a session"
+
+
+def test_frontend_keeps_the_returned_session_id():
+    h = _html()
+    assert "r.session_id" in h, "reply session id discarded — chat restarts"
+    assert "view.sid=r.session_id" in h.replace(" ", "")
+
+
+def test_frontend_has_a_delete_project_control():
+    """endpoint وجود داشت ولی هیچ دکمه‌ای صدایش نمی‌زد."""
+    h = _html()
+    assert "delP" in h
+    assert "/api/projects/'+encodeURIComponent(p.id)" in h.replace('"', "'")

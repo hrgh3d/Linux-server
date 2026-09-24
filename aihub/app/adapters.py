@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sqlite3
+import uuid
 import subprocess
 import time
 from dataclasses import dataclass, field, asdict
@@ -36,6 +37,64 @@ def rp(path: str) -> str:
 
 
 # ---------------------------------------------------------------- data model
+
+
+# نام کامبوهای روتر — برای تشخیص اینکه «مدل» یک کامبوست یا مدل واقعی.
+COMBO_NAMES = {"Agentic", "Brain", "Image", "ox-alpha", "ultimate", "vps"}
+
+
+class SendOut(tuple):
+    """
+    نتیجهٔ یک ارسال: (ok, text, session_id).
+
+    از tuple ارث می‌برد تا کدهای قدیمی که `ok, out = ad.send(...)` می‌نویسند
+    نشکنند؟ نه — دقیقاً برعکس: آن الگو باید بشکند تا جای فراموش‌شده پیدا
+    شود. پس سه‌تایی است و همهٔ فراخوان‌ها به‌روز شده‌اند. فیلدهای نام‌دار
+    فقط برای خواناییِ کد جدیدند.
+    """
+    __slots__ = ()
+
+    def __new__(cls, ok: bool, text: str, session_id: str | None = None):
+        return super().__new__(cls, (ok, text, session_id))
+
+    ok = property(lambda self: self[0])
+    text = property(lambda self: self[1])
+    session_id = property(lambda self: self[2])
+
+
+def _hermes_sid(out: str) -> str | None:
+    """شناسهٔ نشست از بلوک «Resume this session with:» هرمس."""
+    m = re.search(r"hermes\s+(?:chat\s+)?--resume\s+(\S+)", out or "")
+    return m.group(1) if m else None
+
+
+def _hermes_body(out: str) -> str:
+    """
+    متن جواب از میان قاب هرمس.
+
+    خروجی هرمس یک کادر ╭─ ☤ Hermes ─╮ است و بعدش بلوک
+    «Resume this session with:» که جواب نیست و نباید به کاربر نشان داده شود.
+    """
+    m = re.search(r"╭─.*?Hermes.*?╮\n(.*?)\n╰", out or "", re.S)
+    if m:
+        return m.group(1).strip()[-4000:]
+    return (out or "").split("Resume this session with:")[0].strip()[-4000:]
+
+
+def _strip_claude_noise(out: str) -> str:
+    """
+    هشدارهای غیرکشندهٔ کلاد کد را از جواب جدا کن.
+
+    `[claude-code:unrecognized_model]` روی همان خطی می‌آید که جواب واقعی
+    هم هست؛ اگر پاکش نکنیم کاربر متن خطا را به‌عنوان جواب می‌بیند.
+    """
+    keep = []
+    for ln in (out or "").splitlines():
+        t = ln.strip()
+        if t.startswith("[claude-code:") or t.startswith("API Error:"):
+            continue
+        keep.append(ln)
+    return "\n".join(keep).strip()
 
 
 @dataclass
@@ -248,32 +307,27 @@ class HermesAdapter(Adapter):
         st.session_count = len(self.sessions())
         return st
 
-    def send(self, text: str, session_id: str | None = None) -> tuple[bool, str]:
+    def send(self, text: str, session_id: str | None = None) -> SendOut:
         """
         hermes chat --oneshot -q "…"
 
-        `hermes send` پیام را به یک کانال بیرونی می‌فرستد، نه به خود ایجنت؛
-        چیزی که ما می‌خواهیم chat است. حالت تعاملی روی اجراکنندهٔ بدون TTY
-        هنگ می‌کند، پس --oneshot اجباری است. روی سرور ۲۱ ثانیه طول کشید،
-        پس مهلت را دست‌ودل‌بازانه می‌گیریم.
+        هرمس شناسهٔ نشست را خودش می‌سازد و در انتهای خروجی اعلام می‌کند:
+            Resume this session with:
+              hermes --resume 20260924_065919_6b22af
+        پس نمی‌شود از قبل شناسه داد؛ باید از جواب اول برش داشت و از پیام
+        دوم به بعد با --resume همان را پاس داد. بدون این کار هر پیام یک
+        گفت‌وگوی تازه می‌شد و ایجنت چیزی از قبل یادش نمی‌ماند.
         """
         cmd = ["hermes", "chat", "--oneshot", "-q", text]
         if session_id:
             cmd += ["--resume", session_id]
         rc, out = _sh(cmd, timeout=300)
-        if rc != 0:
-            return False, (out or "hermes failed")[-4000:]
-        m = self._FRAME.search(out)
-        if m:
-            body = m.group(1)
-            # خطوط قاب را پاک کن
-            body = "\n".join(l.strip("│ ").rstrip()
-                              for l in body.splitlines()).strip()
-            if body:
-                return True, body[-4000:]
-        # قاب پیدا نشد: هرچه قبل از بلوک resume هست را بده
-        cut = out.split("Resume this session with:")[0]
-        return True, (cut or out).strip()[-4000:]
+        sid = session_id or _hermes_sid(out)
+        return SendOut(rc == 0, _hermes_body(out), sid)
+
+
+# ================================================================ Claude Code
+
 
     @staticmethod
     def _config_model() -> str | None:
@@ -463,11 +517,35 @@ class ClaudeAdapter(Adapter):
         """مدل پیش‌فرض در فایل محیط مشترک نوشته می‌شود."""
         return set_env_model("ANTHROPIC_MODEL", model)
 
-    def send(self, text: str, session_id: str | None = None) -> tuple[bool, str]:
-        model = self._env_model() or "Agentic"
-        cmd = ["claude", "-p", text, "--model", model]
-        rc, out = _sh(cmd, timeout=180)
-        return rc == 0, out[-4000:]
+    # کلاد کد نام کامبو را نمی‌پذیرد. تست زنده روی سرور:
+    #   --model Agentic  → [claude-code:unrecognized_model] و بعد
+    #                      «API returned an empty or malformed response»
+    #   --model cl/anthropic/claude-opus-5.5 → OK
+    # پس وقتی مدلِ تنظیم‌شده یک کامبوست، به یک مدل واقعیِ آنتروپیک روی
+    # همان روتر نگاشت می‌شود. این تنها ایجنتی است که چنین نگاشتی لازم دارد.
+    COMBO_FALLBACK = "cl/anthropic/claude-opus-5.5"
+
+    def _real_model(self) -> str:
+        m = self._env_model() or ""
+        if not m or m in COMBO_NAMES:
+            return self.COMBO_FALLBACK
+        return m
+
+    def send(self, text: str, session_id: str | None = None) -> SendOut:
+        """
+        claude -p "…" --session-id <uuid>  (بار اول)
+        claude -p "…" --resume    <uuid>  (بارهای بعد)
+
+        بدون شناسه، هر پیام یک گفت‌وگوی مستقل بود.
+        """
+        sid = session_id or str(uuid.uuid4())
+        cmd = ["claude", "-p", text, "--model", self._real_model()]
+        cmd += (["--resume", sid] if session_id else ["--session-id", sid])
+        rc, out = _sh(cmd, timeout=300)
+        body = _strip_claude_noise(out)
+        if rc != 0 and not body:
+            return SendOut(False, out[-4000:], sid)
+        return SendOut(True, body[-4000:], sid)
 
 
 # ================================================================ Pi
@@ -568,14 +646,26 @@ class PiAdapter(Adapter):
         except Exception as exc:                               # noqa: BLE001
             return False, str(exc)
 
-    def send(self, text: str, session_id: str | None = None) -> tuple[bool, str]:
-        s = self._settings()
+    def send(self, text: str, session_id: str | None = None) -> SendOut:
+        """
+        pi -p "…" --session-id <id>
+
+        `--session-id` دقیقاً همان چیزی است که لازم داریم: اگر نشست نبود
+        می‌سازدش، اگر بود ادامه‌اش می‌دهد. تست زنده: پیام اول «اسم من حمید
+        است» و پیام دوم «اسم من چه بود؟» → «حمید». قبلاً این پرچم پاس داده
+        نمی‌شد و Pi از پیام دوم حافظه‌اش خالی بود.
+        """
+        st = self._settings()
+        sid = session_id or str(uuid.uuid4())
         cmd = ["pi", "-p", text,
-               "--provider", s.get("defaultProvider", "ninerouter"),
-               "--model", s.get("defaultModel", "Agentic"),
+               "--provider", st.get("defaultProvider", "ninerouter"),
+               "--model", st.get("defaultModel", "Agentic"),
+               "--session-id", sid,
                "--thinking", "off"]
-        rc, out = _sh(cmd, timeout=180)
-        return rc == 0, out[-4000:]
+        rc, out = _sh(cmd, timeout=300)
+        body = "\n".join(ln for ln in (out or "").splitlines()
+                          if not ln.startswith("Warning: No project session"))
+        return SendOut(rc == 0, body.strip()[-4000:], sid)
 
 
 # ================================================================ OpenClaw
@@ -589,36 +679,48 @@ class OpenClawAdapter(Adapter):
     # REST ندارد ⇒ خواندن از دیتابیس، نوشتن از CLI (تصمیم ۵-ج)
     capabilities = ["status", "sessions", "send", "set_model", "restart"]
 
-    def send(self, text: str, session_id: str | None = None) -> tuple[bool, str]:
+    def send(self, text: str, session_id: str | None = None) -> SendOut:
         """
-        openclaw agent --json --message "…"
+        openclaw agent --json --message "…" --session-id <uuid>
 
         بدون --local: وقتی gateway بالا باشد (همیشه هست) اجرای embedded
         با خطای «A Gateway is running for this state directory» رد می‌شود.
         --deliver هم نمی‌دهیم تا جواب به تلگرام/واتساپ پست نشود؛ فقط
         می‌خواهیم متن را در پنل ببینیم.
         """
-        cmd = ["openclaw", "agent", "--json", "--message", text]
-        if session_id:
-            cmd += ["--session-id", session_id]
+        sid = session_id or str(uuid.uuid4())
+        cmd = ["openclaw", "agent", "--json", "--message", text,
+               "--session-id", sid]
         rc, out = _sh(cmd, timeout=300)
         body = (out or "").strip()
         try:
             d = json.loads(body[body.index("{"):body.rindex("}") + 1])
         except Exception:                                      # noqa: BLE001
-            return rc == 0, body[-4000:]
-        if not d.get("ok", rc == 0):
+            return SendOut(rc == 0, body[-4000:], sid)
+        if not d.get("ok", rc == 0) and d.get("status") != "ok":
             err = (d.get("error") or {})
-            return False, str(err.get("message") or err or body)[:2000]
-        for k in ("reply", "text", "message", "content", "output", "result"):
+            return SendOut(False, str(err.get("message") or err or body)[:2000], sid)
+        # شناسهٔ واقعی را از جواب بردار — ممکن است با آنچه دادیم فرق کند
+        try:
+            real = (((d.get("result") or {}).get("meta") or {})
+                    .get("agentMeta") or {}).get("sessionId")
+            sid = real or sid
+        except Exception:                                      # noqa: BLE001
+            pass
+        # جواب در result.payloads[].text است
+        try:
+            pl = (d.get("result") or {}).get("payloads") or []
+            for it in pl:
+                t = (it or {}).get("text")
+                if isinstance(t, str) and t.strip():
+                    return SendOut(True, t.strip()[-4000:], sid)
+        except Exception:                                      # noqa: BLE001
+            pass
+        for k in ("reply", "text", "message", "content", "output"):
             v = d.get(k)
             if isinstance(v, str) and v.strip():
-                return True, v.strip()[-4000:]
-            if isinstance(v, dict):
-                for k2 in ("text", "content", "body"):
-                    if isinstance(v.get(k2), str) and v[k2].strip():
-                        return True, v[k2].strip()[-4000:]
-        return True, json.dumps(d, ensure_ascii=False)[:4000]
+                return SendOut(True, v.strip()[-4000:], sid)
+        return SendOut(True, json.dumps(d, ensure_ascii=False)[:4000], sid)
 
     def status(self) -> AppStatus:
         st = AppStatus(self.key, self.name, self.icon, url=self.url,

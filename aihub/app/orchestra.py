@@ -77,7 +77,7 @@ async def run_role(pid: str, app: str, extra: str = "",
     before = _spend_today()
     loop = asyncio.get_running_loop()
     try:
-        okk, out = await loop.run_in_executor(
+        okk, out, _sid = await loop.run_in_executor(
             None, lambda: ad.send(prompt, None))
     except Exception as exc:                                   # noqa: BLE001
         store.role_set(pid, app, (role or {}).get("role", ""),
@@ -188,7 +188,7 @@ async def review(pid: str | None, receipt_id: str, reviewer: str) -> dict:
         "Reply with APPROVE or REJECT on the first line, then one short "
         "sentence of reasoning.")
     loop = asyncio.get_running_loop()
-    ok, out = await loop.run_in_executor(None, lambda: ad.send(prompt, None))
+    ok, out, _sid = await loop.run_in_executor(None, lambda: ad.send(prompt, None))
     verdict = "approved" if re.search(r"\bAPPROVE\b", out or "", re.I) else "rejected"
     store.receipt_verdict(receipt_id, verdict, reviewer)
     store.tl(pid, reviewer, "review",

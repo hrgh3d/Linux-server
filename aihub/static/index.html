@@ -1120,11 +1120,20 @@ async function openProject(pid){
     <span class="ti rtl">${esc(p.name)}</span>
     <span class="pill ${over?'live':''} hide-sm">$${(p.spent_usd||0).toFixed(3)} / $${(p.budget_usd||0).toFixed(2)}</span>
     <div class="sp">
-      <button class="sm gh" id="edP">✏️</button>
+      <button class="sm gh" id="edP" title="Edit">✏️</button>
+      <button class="sm gh" id="delP" title="Delete project">🗑</button>
       <button class="sm pri" id="runP">▶ Run ${p.mode}</button>
     </div>`;
   $('#edP').onclick=()=>projDlg(p);
   $('#runP').onclick=()=>runProject(p);
+  // تا امروز هیچ راهی برای حذف پروژه در رابط نبود — endpoint وجود داشت
+  // ولی هیچ دکمه‌ای صدایش نمی‌زد، پس پروژه‌ها برای همیشه می‌ماندند.
+  $('#delP').onclick=()=>confirmDlg(`Delete “${esc(p.name)}”?`,
+    'The project, its roles and its shared memory are removed. The chats '+
+    'themselves stay — they just go back to General.','Delete',async()=>{
+      try{await del('/api/projects/'+encodeURIComponent(p.id));
+        toast('Project deleted','ok'); await refresh(); home();}
+      catch(e){toast('Failed: '+e.message,'bad');}});
 
   const runnable=S.apps.filter(a=>a.capabilities.includes('send'));
   $('#stage').innerHTML=`<div class="pwrap">
@@ -1474,7 +1483,13 @@ async function skillsDlg(){
 window.skillsDlg=skillsDlg;
 
 async function newSession(a,pid){
-  view={kind:'session',app:a,sid:null,newIn:pid||null}; drawers(false);
+  // نشست را همان لحظه روی سرور بساز و شناسه‌اش را نگه دار.
+  // قبلاً sid=null می‌ماند، پس هر پیام یک گفت‌وگوی تازه می‌شد.
+  let sid=null,pending=false;
+  try{const r=await post('/api/session/new/'+a,{project_id:pid||null});
+      sid=r.session_id; pending=!!r.pending;}
+  catch(e){toast('Could not start a session: '+e.message,'bad');}
+  view={kind:'session',app:a,sid,newIn:pid||null,pending}; drawers(false);
   const A=app(a);
   const P=pid?S.projects.find(x=>x.id===pid):null;
   $('#mhead').innerHTML=`<span class="ic">${A.icon}</span>
@@ -1556,7 +1571,11 @@ async function send(){
     $('#stage').scrollTop=9e5;}
   ta.value='';ta.style.height='auto';
   try{
-    const r=await post('/api/send',{app:a,text:t,session_id:view.sid});
+    const r=await post('/api/send',
+      {app:a,text:t,session_id:view.sid,project_id:view.newIn||null});
+    // ایجنت ممکن است شناسهٔ دیگری برگرداند (هرمس شناسهٔ خودش را می‌سازد).
+    // نگه‌داشتنش یعنی پیام بعدی همان گفت‌وگو را ادامه می‌دهد.
+    if(r.session_id&&r.session_id!==view.sid){view.sid=r.session_id;view.pending=false;}
     const p=$('#pend');
     // آنچه خودکار وارد حافظهٔ تیم شد، شفاف نشان داده می‌شود تا کاربر
     // بداند دقیقاً چه چیزی ذخیره شد — حافظهٔ نامرئی قابل اعتماد نیست.
