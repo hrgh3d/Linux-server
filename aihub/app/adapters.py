@@ -68,6 +68,26 @@ def _hermes_sid(out: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _delete_jsonl(pattern: str, sid: str) -> tuple[bool, str]:
+    """
+    حذف فایل نشست بر پایهٔ الگو.
+
+    مسیر کپیِ سطل زباله برگردانده می‌شود، نه مسیر فایل حذف‌شده — پنل آن را
+    به کاربر نشان می‌دهد تا بداند حذف برگشت‌پذیر است.
+    """
+    import glob as _g
+    from . import store as _store
+    for f in _g.glob(pattern):
+        if sid in f:
+            backup = _store.trash_put(f)
+            try:
+                os.remove(f)
+            except OSError as exc:
+                return False, str(exc)
+            return True, backup or f
+    return False, "session file not found"
+
+
 def _hermes_body(out: str) -> str:
     """
     متن جواب از میان قاب هرمس.
@@ -236,6 +256,16 @@ def _clean(s: str, n: int = 110) -> str:
 
 
 class Adapter:
+    def delete_session(self, sid: str) -> tuple[bool, str]:
+        """
+        نشست را از انبار خودِ برنامه حذف می‌کند.
+
+        پیش‌فرض «پشتیبانی نمی‌شود» است و صریح گزارش می‌دهد — قبلاً حذفِ
+        هرمس و اوپن‌کلاو بی‌صدا کاری نمی‌کرد و پنل با HTTP 200 وانمود
+        می‌کرد موفق شده، در حالی که نشست سر جایش بود.
+        """
+        return False, f"{self.name} does not support deleting sessions"
+
     key = "base"
     name = "Base"
     icon = "●"
@@ -328,6 +358,14 @@ class HermesAdapter(Adapter):
 
 # ================================================================ Claude Code
 
+
+    def delete_session(self, sid: str) -> tuple[bool, str]:
+        """hermes sessions delete <id> — انبار SQLite خود هرمس."""
+        rc, out = _sh(["hermes", "sessions", "delete", sid, "--yes"],
+                      timeout=60)
+        if rc != 0:
+            rc, out = _sh(["hermes", "sessions", "delete", sid], timeout=60)
+        return rc == 0, (out or "").strip()[-400:]
 
     @staticmethod
     def _config_model() -> str | None:
@@ -531,17 +569,34 @@ class ClaudeAdapter(Adapter):
             return self.COMBO_FALLBACK
         return m
 
+    def delete_session(self, sid: str) -> tuple[bool, str]:
+        return _delete_jsonl(rp("/root/.claude/projects/*/*.jsonl"), sid)
+
+    def _exists(self, sid: str) -> bool:
+        """آیا کلاد این نشست را روی دیسک دارد؟"""
+        try:
+            return any(x.id == sid for x in self.sessions())
+        except Exception:                                      # noqa: BLE001
+            return False
+
     def send(self, text: str, session_id: str | None = None) -> SendOut:
         """
-        claude -p "…" --session-id <uuid>  (بار اول)
-        claude -p "…" --resume    <uuid>  (بارهای بعد)
+        claude -p "…" --session-id <uuid>   نشست تازه با شناسهٔ دلخواه
+        claude -p "…" --resume     <uuid>   ادامهٔ نشست موجود
 
-        بدون شناسه، هر پیام یک گفت‌وگوی مستقل بود.
+        این دو پرچم جابه‌جاشدنی نیستند: `--resume` روی شناسه‌ای که هنوز
+        گفت‌وگویی ندارد خطای «No conversation found with session ID» می‌دهد.
+        پس اول می‌بینیم نشست واقعاً روی دیسک هست یا نه — نه اینکه صرفاً
+        شناسه‌ای دستمان آمده یا نه.
         """
         sid = session_id or str(uuid.uuid4())
         cmd = ["claude", "-p", text, "--model", self._real_model()]
-        cmd += (["--resume", sid] if session_id else ["--session-id", sid])
+        cmd += (["--resume", sid] if self._exists(sid) else ["--session-id", sid])
         rc, out = _sh(cmd, timeout=300)
+        # اگر باز هم نشست پیدا نشد، یک بار با ساخت نشست تازه تلاش کن.
+        if "No conversation found" in (out or ""):
+            rc, out = _sh(["claude", "-p", text, "--model", self._real_model(),
+                           "--session-id", sid], timeout=300)
         body = _strip_claude_noise(out)
         if rc != 0 and not body:
             return SendOut(False, out[-4000:], sid)
@@ -646,6 +701,9 @@ class PiAdapter(Adapter):
         except Exception as exc:                               # noqa: BLE001
             return False, str(exc)
 
+    def delete_session(self, sid: str) -> tuple[bool, str]:
+        return _delete_jsonl(rp("/root/.pi/agent/sessions/*/*.jsonl"), sid)
+
     def send(self, text: str, session_id: str | None = None) -> SendOut:
         """
         pi -p "…" --session-id <id>
@@ -678,6 +736,41 @@ class OpenClawAdapter(Adapter):
     url = "https://linux-server-vps.tail3641f4.ts.net/"
     # REST ندارد ⇒ خواندن از دیتابیس، نوشتن از CLI (تصمیم ۵-ج)
     capabilities = ["status", "sessions", "send", "set_model", "restart"]
+
+    def delete_session(self, sid: str) -> tuple[bool, str]:
+        """
+        اول CLI، بعد دیتابیس.
+
+        نسخهٔ نصب‌شده زیرفرمان delete ندارد، پس ردیف‌های همان نشست از
+        session_nodes و transcript_events پاک می‌شوند. فایل jsonl هم اگر
+        بود برداشته می‌شود. حذف دستیِ دیتابیس فقط وقتی انجام می‌شود که
+        CLI واقعاً نتواند — نه به‌عنوان راه اول.
+        """
+        rc, out = _sh(["openclaw", "sessions", "delete", sid], timeout=60)
+        if rc == 0 and "unknown command" not in (out or "").lower():
+            return True, (out or "").strip()[-400:]
+        n = 0
+        try:
+            con = sqlite3.connect(self.DB, timeout=10)
+            for tbl, col in (("transcript_events", "session_id"),
+                             ("session_nodes", "current_session_id")):
+                try:
+                    cur = con.execute(f"delete from {tbl} where {col}=?", (sid,))
+                    n += cur.rowcount or 0
+                except sqlite3.Error:
+                    continue
+            con.commit()
+            con.close()
+        except Exception as exc:                               # noqa: BLE001
+            return False, f"db delete failed: {exc}"
+        import glob as _g
+        for f in _g.glob(rp(f"/root/.openclaw/agents/*/sessions/{sid}.jsonl")):
+            try:
+                os.remove(f)
+                n += 1
+            except OSError:
+                pass
+        return n > 0, f"removed {n} row(s)/file(s)"
 
     def send(self, text: str, session_id: str | None = None) -> SendOut:
         """

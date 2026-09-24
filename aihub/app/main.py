@@ -730,23 +730,25 @@ async def session_delete(app_key: str, sid: str, hard: int = 0):
         invalidate("sessions")
         return {"ok": True, "mode": "archived"}
 
-    import glob as _g
-    pats = {"claude": rp("/root/.claude/projects/*/*.jsonl"),
-            "pi": rp("/root/.pi/agent/sessions/*/*.jsonl")}
-    removed, backup = [], None
-    for f in _g.glob(pats.get(app_key, "")):
-        if sid in f:
-            backup = store.trash_put(f)
-            try:
-                os.remove(f)
-                removed.append(f)
-            except Exception as exc:                           # noqa: BLE001
-                raise HTTPException(500, f"delete failed: {exc}")
-            break
+    # نشستِ «پیش‌نویس» فقط در دیتابیس هاب است و روی دیسکِ ایجنت وجود
+    # ندارد؛ حذفش یعنی برداشتن همان ردیف.
+    meta = store.meta_get(app_key, sid)
+    if meta.get("draft"):
+        store.meta_del(app_key, sid)
+        invalidate()
+        return {"ok": True, "mode": "draft removed"}
+
+    # هر آداپتور خودش می‌داند نشستش کجاست. قبلاً اینجا فقط دو الگوی
+    # claude و pi بود، پس حذفِ hermes و openclaw بی‌صدا هیچ کاری نمی‌کرد
+    # و endpoint با HTTP 200 وانمود می‌کرد موفق شده.
+    ok, detail = await asyncio.get_running_loop().run_in_executor(
+        POOL, lambda: ADAPTERS[app_key].delete_session(sid))
     store.meta_del(app_key, sid)
     store.tl(None, app_key, "delete", f"session {sid[:24]} deleted")
     invalidate()
-    return {"ok": bool(removed), "removed": removed, "backup": backup}
+    if not ok:
+        raise HTTPException(502, f"delete failed: {detail}")
+    return {"ok": True, "detail": detail, "backup": detail}
 
 
 @app.post("/api/session/new/{app_key}")

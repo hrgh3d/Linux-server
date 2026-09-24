@@ -1174,3 +1174,58 @@ def test_frontend_has_a_delete_project_control():
     h = _html()
     assert "delP" in h
     assert "/api/projects/'+encodeURIComponent(p.id)" in h.replace('"', "'")
+
+
+def test_claude_uses_session_id_for_new_and_resume_for_existing(monkeypatch):
+    """
+    `--resume` روی نشستی که هنوز وجود ندارد «No conversation found» می‌دهد.
+    این دقیقاً چیزی بود که در تست زندهٔ اول اتفاق افتاد.
+    """
+    from app import adapters
+    ad = adapters.ClaudeAdapter()
+    calls = []
+
+    def fake_sh(cmd, timeout=0):
+        calls.append(cmd)
+        return 0, "ok"
+    monkeypatch.setattr(adapters, "_sh", fake_sh)
+    monkeypatch.setattr(ad, "_real_model", lambda: "m")
+
+    monkeypatch.setattr(ad, "sessions", lambda: [])
+    ad.send("hi", "brand-new")
+    assert "--session-id" in calls[-1] and "--resume" not in calls[-1]
+
+    class S:
+        id = "known"
+    monkeypatch.setattr(ad, "sessions", lambda: [S()])
+    ad.send("hi", "known")
+    assert "--resume" in calls[-1]
+
+
+def test_every_adapter_can_delete_its_own_sessions():
+    """
+    قبلاً حذف فقط برای claude و pi پیاده شده بود؛ hermes و openclaw
+    بی‌صدا رد می‌شدند و endpoint با HTTP 200 وانمود می‌کرد موفق شده.
+    """
+    from app.adapters import ADAPTERS
+    for k, ad in ADAPTERS.items():
+        if "send" not in ad.capabilities:
+            continue
+        assert type(ad).delete_session is not object, k
+        assert "delete_session" in dir(ad)
+        owner = type(ad).delete_session.__qualname__.split(".")[0]
+        assert owner != "Adapter", f"{k} never implements delete_session"
+
+
+def test_failed_delete_is_reported_not_swallowed(client, monkeypatch):
+    from app.adapters import ADAPTERS
+    monkeypatch.setattr(ADAPTERS["pi"], "delete_session",
+                        lambda sid: (False, "nope"))
+    r = client.delete("/api/session/pi/whatever?hard=1")
+    assert r.status_code == 502, "a failed delete must not look successful"
+
+
+def test_draft_session_can_be_deleted(client):
+    sid = client.post("/api/session/new/pi", json={}).json()["session_id"]
+    assert client.delete(f"/api/session/pi/{sid}?hard=1").status_code == 200
+    assert sid not in [s["id"] for s in client.get("/api/sessions").json()]
