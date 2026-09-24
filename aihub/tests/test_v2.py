@@ -1455,3 +1455,18 @@ def test_partial_live_payload_cannot_crash_the_ui():
 def test_no_dead_handler_that_discards_its_arguments():
     h = _html()
     assert "pinSessionDlg" not in h
+
+
+def test_stream_sends_the_v2_overview_not_the_v1_one(client):
+    """
+    استریم `overview()` نسخهٔ یک را می‌فرستاد که نه projects دارد نه
+    live/health/perms — پس پروژه‌ها و مدل زنده هرگز از راه استریم
+    تازه نمی‌شدند و فقط با refresh دستی به‌روز می‌شدند.
+    """
+    import inspect
+    from app import main as m
+    src = inspect.getsource(m.stream)
+    assert "overview2()" in src
+    full = client.get("/api/overview2").json()
+    for k in ("projects", "live", "health", "perms"):
+        assert k in full, k

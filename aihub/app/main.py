@@ -588,7 +588,10 @@ async def stream():
     async def gen():
         while True:
             try:
-                data = await overview()
+                # overview2 و نه overview: نسخهٔ v1 نه projects دارد نه
+                # live/health/perms، پس سایدبار پروژه‌ها و نشانگر مدل
+                # زنده هرگز از راه استریم تازه نمی‌شدند.
+                data = await overview2()
                 try:
                     ss = await sessions(None, False)
                 except Exception:                              # noqa: BLE001
