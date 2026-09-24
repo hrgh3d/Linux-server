@@ -85,7 +85,7 @@ def _delete_jsonl(pattern: str, sid: str) -> tuple[bool, str]:
             except OSError as exc:
                 return False, str(exc)
             return True, backup or f
-    return False, "session file not found"
+    return True, "already gone"     # حذفِ چیزی که نیست، خطا نیست
 
 
 def _hermes_body(out: str) -> str:
@@ -749,8 +749,10 @@ class OpenClawAdapter(Adapter):
         """
         rc, out = _sh(["openclaw", "sessions", "delete", sid], timeout=90)
         body = (out or "").strip()
-        if rc == 0 and "not found" not in body.lower():
-            return True, body[-400:]
+        # «پیدا نشد» یعنی از قبل رفته ⇒ حذف موفق است. خطا دادن برای چیزی
+        # که هدفش همین نبودن است، پاک‌سازی دسته‌جمعی را بی‌دلیل می‌شکند.
+        if rc == 0 or "not found" in body.lower():
+            return True, body[-400:] or "already gone"
         return False, body[-400:] or "openclaw refused the delete"
 
     def send(self, text: str, session_id: str | None = None) -> SendOut:

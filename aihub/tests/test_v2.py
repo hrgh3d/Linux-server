@@ -1243,3 +1243,14 @@ def test_openclaw_delete_never_writes_to_the_live_database():
     assert "delete from" not in src.lower()
     assert "sqlite3.connect" not in src
     assert "sessions" in src and "delete" in src
+
+
+def test_deleting_an_already_gone_session_is_success_not_error():
+    """
+    حذف باید idempotent باشد: «پیدا نشد» یعنی هدف محقق شده. خطا دادن
+    برای آن، پاک‌سازی دسته‌جمعی را وسط کار می‌شکند.
+    """
+    from app.adapters import _delete_jsonl
+    ok, msg = _delete_jsonl("/nonexistent/*/*.jsonl", "ghost")
+    assert ok is True
+    assert "gone" in msg
