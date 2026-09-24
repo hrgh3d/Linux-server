@@ -715,10 +715,16 @@ class PiAdapter(Adapter):
         """
         st = self._settings()
         sid = session_id or str(uuid.uuid4())
+        # Pi خودش فایل را `<timestamp>_<uuid>` می‌نامد. اگر شناسهٔ
+        # تزیین‌شده را دوباره به `--session-id` بدهیم، یک بار دیگر
+        # تزیینش می‌کند و هر پیام یک نشستِ تازه با نامِ درازتر می‌سازد:
+        #   2026-…-21-110Z_2026-…-18-253Z_<uuid>
+        # پس همیشه فقط uuid خام را پاس می‌دهیم.
+        bare = sid.rsplit("_", 1)[-1] if "_" in sid else sid
         cmd = ["pi", "-p", text,
                "--provider", st.get("defaultProvider", "ninerouter"),
                "--model", st.get("defaultModel", "Agentic"),
-               "--session-id", sid,
+               "--session-id", bare,
                "--thinking", "off"]
         rc, out = _sh(cmd, timeout=300)
         body = "\n".join(ln for ln in (out or "").splitlines()
@@ -729,7 +735,7 @@ class PiAdapter(Adapter):
         real = sid
         try:
             for se in self.sessions():
-                if sid in se.id:
+                if bare in se.id:
                     real = se.id
                     break
         except Exception:                                      # noqa: BLE001

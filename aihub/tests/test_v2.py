@@ -1317,3 +1317,21 @@ def test_pi_returns_the_real_decorated_session_id(monkeypatch):
     monkeypatch.setattr(ad, "sessions", lambda: [S()])
     out = ad.send("hi", "the-uuid")
     assert out.session_id == "2026-09-24T08-14-18-535Z_the-uuid"
+
+
+def test_pi_never_double_decorates_its_session_id(monkeypatch):
+    """
+    دادنِ شناسهٔ تزیین‌شده به `--session-id` باعث می‌شد Pi دوباره
+    تزیینش کند و هر پیام یک نشست تازه با نام درازتر بسازد:
+      2026-…-21-110Z_2026-…-18-253Z_<uuid>
+    """
+    from app import adapters
+    ad = adapters.PiAdapter()
+    seen = []
+    monkeypatch.setattr(adapters, "_sh",
+                        lambda c, timeout=0: (seen.append(c), (0, "ok"))[1])
+    monkeypatch.setattr(ad, "_settings", lambda: {})
+    monkeypatch.setattr(ad, "sessions", lambda: [])
+    ad.send("hi", "2026-09-24T08-22-18-253Z_2991b730-4eb0-4393")
+    i = seen[-1].index("--session-id")
+    assert seen[-1][i + 1] == "2991b730-4eb0-4393", seen[-1]
