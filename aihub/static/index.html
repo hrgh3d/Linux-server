@@ -727,7 +727,10 @@ function treeProjects(){
             <div class="sb2"><div class="t">＋ Add a chat here</div></div></div>
         </div></div>`;}).join('')
       ||'<div class="empty">No projects yet</div>');
-  const np=$('#newProj'); if(np)np.onclick=projDlg;
+  // onclick=projDlg یعنی خودِ MouseEvent به‌عنوان «پروژه» پاس می‌شد،
+  // پس ed=!!p درست می‌شد و دیالوگ در حالت «ویرایش» باز می‌شد و روی
+  // ذخیره PATCH /api/projects/undefined می‌زد ⇒ «New project کار نمی‌کند».
+  const np=$('#newProj'); if(np)np.onclick=()=>projDlg();
   $$('#tree [data-pg]').forEach(g=>g.onclick=e=>{
     if(e.target.dataset.open){e.stopPropagation();
       openProject(e.target.dataset.open);drawers(false);return;}
@@ -854,6 +857,12 @@ async function openSession(a,id){
   $('#comp').style.display='';
   $('#mLbl').textContent=s.model||A.model||'model';
   $('#stage').className='msgs';
+  // نشست پیش‌نویس هنوز روی دیسکِ ایجنت نیست؛ رفتن سراغ API یعنی خطا.
+  if(s.draft){
+    $('#stage').innerHTML=`<div class="wrap"><div class="empty">
+      ${A.icon} Start talking to ${esc(A.name)}.</div></div>`;
+    $('#ta').focus(); rail(s); return;
+  }
   $('#stage').innerHTML='<div class="wrap"><div class="empty">Loading…</div></div>';
   try{
     const d=await api(`/api/session/${a}/${encodeURIComponent(id)}`);
@@ -1297,7 +1306,6 @@ async function pinToMemory(m){
     try{await post(`/api/projects/${pid}/memory`,{text:t,app:view.app});
       toast('Added to shared memory','ok');refresh();}catch(e){toast('Failed','bad');}};
 }
-function pinSessionDlg(a,id){pinToMemory({text:''});}
 
 /* ═══════════ handoff ═══════════ */
 function handoffDlg(a,id){
@@ -1490,6 +1498,9 @@ async function newSession(a,pid){
       sid=r.session_id; pending=!!r.pending;}
   catch(e){toast('Could not start a session: '+e.message,'bad');}
   view={kind:'session',app:a,sid,newIn:pid||null,pending}; drawers(false);
+  // بدون این، نشست تازه تا وقتی کاربر دستی صفحه را تازه نکند در سایدبار
+  // پیدایش نمی‌شد و ＋ انگار هیچ کاری نکرده بود.
+  if(sid)refresh();
   const A=app(a);
   const P=pid?S.projects.find(x=>x.id===pid):null;
   $('#mhead').innerHTML=`<span class="ic">${A.icon}</span>
@@ -1552,9 +1563,9 @@ ta.addEventListener('keydown',e=>{
     if(hl){$('#slash').classList.remove('on');ta.value='';
       (CMDS.find(c=>c.c===hl.dataset.c)||{}).fn?.();return;}
     send();}});
-$('#send').onclick=send;
+$('#send').onclick=()=>send();
 $('#cmdBtn').onclick=()=>{ta.value='/';ta.focus();slashDraw('/');};
-$('#skillBtn').onclick=skillsDlg;
+$('#skillBtn').onclick=()=>skillsDlg();
 $('#modelBtn2').onclick=()=>modelDlg(view.app||'claude');
 
 async function send(){
@@ -1588,16 +1599,11 @@ async function send(){
     const lc=$('#lastCopy'); if(lc)lc.onclick=()=>copyText(r.output||'',lc);
     bindCodeCopy();
     $('#stage').scrollTop=9e5;
-    // نشست تازه‌ای که قرار بود عضو پروژه شود، حالا که ساخته شده وصلش کن
-    if(view.newIn){
-      await refresh();
-      const mine=S.sessions.filter(x=>x.source===a&&!x.project_id)
-        .sort((x,y)=>new Date(y.last_active||0)-new Date(x.last_active||0))[0];
-      if(mine){await post(`/api/session/${a}/${encodeURIComponent(mine.id)}/bind`,
-        {project_id:view.newIn});
-        view={kind:'session',app:a,sid:mine.id};}
-      view.newIn=null;
-    }
+    // پیوند به پروژه را خودِ سرور هنگام ارسال انجام می‌دهد (project_id در
+    // بدنهٔ /api/send). کد قبلی «تازه‌ترین نشستِ بی‌پروژه» را حدس می‌زد و
+    // وصلش می‌کرد — که می‌توانست گفت‌وگوی اشتباهی را به پروژه ببندد و
+    // view را هم روی همان نشستِ اشتباه بنشاند.
+    view.newIn=null;
     refresh();
   }catch(e){
     const p=$('#pend');
@@ -1668,7 +1674,9 @@ function applyOverview(d){
   if(d.timeline)S.timeline=d.timeline;
   if(d.perms)S.perms=d.perms;
   if(d.health)S.health=d.health;
-  if(d.live)S.live=d.live;
+  // اگر سرور بارِ ناقص بفرستد، S.live.agents ناموجود می‌شود و هر رندر
+  // بعدی با TypeError کل صفحه را می‌خواباند. شکل را تضمین کن.
+  if(d.live)S.live={combos:d.live.combos||{},agents:d.live.agents||{}};
   const up=S.apps.filter(a=>a.running).length;
   $('#tUp').innerHTML=`<span class="dot up"></span> <b>${up}</b>/${S.apps.length} up`;
   $('#tTok').innerHTML=`⚡ <b>${num((S.usage.prompt||0)+(S.usage.completion||0))}</b>`;
@@ -1680,22 +1688,54 @@ async function refresh(){
   try{
     const [ov,ss]=await Promise.all([api('/api/overview2'),api('/api/sessions')]);
     applyOverview(ov);S.sessions=ss;
+    lastFp=null;                 // رندر بعدیِ استریم را مجبور کن تازه بسازد
     tree();
     if(view.kind==='home')home();
     else if(view.kind==='session'&&view.sid)rail(S.sessions.find(
       x=>x.id===view.sid&&x.source===view.app));
   }catch(e){console.warn(e);}
 }
+let lastFp=null, pollTimer=null;
+
+function startPolling(){
+  // پشتیبان: اگر SSE بمیرد صفحه نباید برای همیشه یخ بزند.
+  if(pollTimer)return;
+  pollTimer=setInterval(refresh,10000);
+}
+
+function applyLive(d){
+  applyOverview(d);
+  if(Array.isArray(d.sessions))S.sessions=d.sessions;
+  // درخت را فقط وقتی بساز که واقعاً چیزی عوض شده باشد. رندرِ هر ۵ ثانیه
+  // منوی ⋯ باز را می‌بست، فوکوس را می‌پراند و اسکرول سایدبار را به بالا
+  // برمی‌گرداند.
+  const fp=d.fp||null;
+  if(fp!==null&&fp===lastFp)return;
+  // منوی باز را وسط کار نبند — ولی اثر انگشت را هم ذخیره نکن، وگرنه این
+  // تغییر برای همیشه نادیده می‌ماند و سایدبار تا تغییرِ بعدی کهنه می‌ماند.
+  const m=$('#menu');
+  if(m&&m.classList.contains('on'))return;
+  lastFp=fp;
+  if(view.kind==='home'){home();return;}
+  const sb=$('#tree'), top=sb?sb.scrollTop:0;
+  tree();
+  if(sb)sb.scrollTop=top;                          // اسکرول را نگه دار
+}
+
 function stream(){
-  try{const es=new EventSource('/api/stream');
-    es.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.error)return;
-      applyOverview(d);if(view.kind==='home')home();else tree();}catch(_){}};
-  }catch(_){setInterval(refresh,10000);}
+  let es;
+  try{ es=new EventSource('/api/stream'); }
+  catch(_){ startPolling(); return; }
+  es.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.error)return;
+    applyLive(d);}catch(_){}};
+  // EventSource خطایش را async می‌دهد، نه با throw — پس catch بالا
+  // هیچ‌وقت نمی‌گرفتش و صفحه بی‌صدا از کار می‌افتاد.
+  es.onerror=()=>{startPolling();};
 }
 
 /* ═══════════ wiring ═══════════ */
 $('#omni').onclick=()=>pal();
-$('#btnHome').onclick=home;
+$('#btnHome').onclick=()=>home();
 $('#filt').oninput=e=>{filt=e.target.value;tree();};
 function drawers(open){
   if(open===false){$('#sb').classList.remove('open');$('#ctx').classList.remove('force');

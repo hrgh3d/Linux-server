@@ -1335,3 +1335,123 @@ def test_pi_never_double_decorates_its_session_id(monkeypatch):
     ad.send("hi", "2026-09-24T08-22-18-253Z_2991b730-4eb0-4393")
     i = seen[-1].index("--session-id")
     assert seen[-1][i + 1] == "2991b730-4eb0-4393", seen[-1]
+
+
+# ═══════════ v2.4: ممیزی رابط — دکمه‌ها و تازه‌سازی زنده
+
+
+def test_new_project_button_does_not_leak_the_click_event():
+    """
+    `np.onclick=projDlg` یعنی خودِ MouseEvent به‌عنوان «پروژه» پاس می‌شد،
+    پس `ed=!!p` درست می‌شد، دیالوگ در حالت «ویرایش» باز می‌شد و روی ذخیره
+    `PATCH /api/projects/undefined` می‌زد ⇒ «New project کار نمی‌کند».
+    """
+    h = _html()
+    assert "np.onclick=projDlg" not in h.replace(" ", "")
+    assert "np.onclick=()=>projDlg()" in h.replace(" ", "")
+
+
+def test_no_handler_passes_a_bare_function_reference():
+    """
+    هر `el.onclick = fnName` رویداد را به‌عنوان آرگومان اول تحویل تابع
+    می‌دهد. برای توابعی که پارامتر دارند این یک باگ خاموش است.
+    """
+    import re
+    h = _html()
+    bad = re.findall(r"\.onclick\s*=\s*([A-Za-z_]\w*)\s*;", h)
+    assert not bad, f"handlers leak the event object: {bad}"
+
+
+def test_stream_carries_sessions_so_the_sidebar_stays_live(client):
+    """
+    ریشهٔ «سشن جدید می‌سازم ولی باید رفرش کنم»: استریم فقط overview
+    می‌فرستاد که نشست ندارد.
+    """
+    import inspect
+    from app import main as m
+    src = inspect.getsource(m.stream)
+    assert '"sessions"' in src, "stream still omits sessions"
+    assert '"fp"' in src, "no change fingerprint for cheap re-render"
+
+
+def test_frontend_consumes_sessions_from_the_stream():
+    h = _html()
+    assert "d.sessions" in h
+    assert "S.sessions=d.sessions" in h.replace(" ", "")
+
+
+def test_frontend_falls_back_to_polling_when_sse_dies():
+    """
+    EventSource خطایش را async می‌دهد؛ try/catch هیچ‌وقت نمی‌گرفتش و صفحه
+    بی‌صدا برای همیشه یخ می‌زد.
+    """
+    h = _html()
+    assert "es.onerror" in h, "SSE failure leaves the page frozen forever"
+    assert "startPolling" in h
+
+
+def test_new_session_refreshes_the_sidebar():
+    h = _html()
+    seg = h[h.index("async function newSession"):]
+    seg = seg[:seg.index("\n}")]
+    assert "refresh()" in seg, "the new chat stays invisible until a reload"
+
+
+def test_live_render_preserves_menu_and_scroll():
+    """
+    رندر هر ۵ ثانیه منوی ⋯ باز را می‌بست و اسکرول سایدبار را به بالا
+    می‌پراند.
+    """
+    h = _html()
+    seg = h[h.index("function applyLive"):]
+    seg = seg[:seg.index("\n}")]
+    assert "scrollTop" in seg, "sidebar scroll is reset on every tick"
+    assert "#menu" in seg, "an open menu is destroyed on every tick"
+
+
+def test_skipping_a_render_does_not_swallow_the_change():
+    """
+    اگر موقع رد کردن رندر (منوی باز) اثر انگشت ذخیره شود، آن تغییر برای
+    همیشه نادیده می‌ماند و سایدبار تا تغییرِ بعدی کهنه می‌ماند.
+    """
+    h = _html()
+    seg = h[h.index("function applyLive"):]
+    seg = seg[:seg.index("\n}")]
+    menu_at = seg.index("classList.contains('on')")
+    save_at = seg.index("lastFp=fp")
+    assert menu_at < save_at, "fingerprint saved before the early return"
+
+
+def test_send_does_not_guess_which_session_to_bind():
+    """
+    کد قبلی «تازه‌ترین نشستِ بی‌پروژه» را حدس می‌زد و وصلش می‌کرد — که
+    می‌توانست گفت‌وگوی اشتباهی را به پروژه ببندد. سرور خودش بایند می‌کند.
+    """
+    h = _html()
+    assert "x.source===a&&!x.project_id" not in h.replace(" ", ""), \
+        "still guessing the session to bind"
+
+
+def test_draft_session_opens_without_hitting_the_detail_api(client):
+    """باز کردن پیش‌نویس روی «Loading…» گیر می‌کرد."""
+    h = _html()
+    assert "s.draft" in h
+    sid = client.post("/api/session/new/pi", json={}).json()["session_id"]
+    r = client.get(f"/api/session/pi/{sid}")
+    assert r.status_code == 200
+    assert r.json()["messages"] == []
+    assert r.json().get("draft") is True
+
+
+def test_partial_live_payload_cannot_crash_the_ui():
+    """
+    اگر سرور `live` ناقص بفرستد، `S.live.agents[...]` با TypeError کل
+    صفحه را می‌خواباند.
+    """
+    h = _html()
+    assert "agents:d.live.agents||{}" in h.replace(" ", "")
+
+
+def test_no_dead_handler_that_discards_its_arguments():
+    h = _html()
+    assert "pinSessionDlg" not in h

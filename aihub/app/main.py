@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import re
@@ -258,6 +259,12 @@ async def session_detail(app_key: str, sid: str, limit: int = 60):
     """متن کامل یک نشست برای نمایش در پنل جزئیات."""
     if app_key not in ADAPTERS:
         raise HTTPException(404, "unknown app")
+
+    # نشست «پیش‌نویس» هنوز روی دیسکِ ایجنت نیست. خطا دادن برایش غلط است:
+    # کاربر تازه با ＋ ساختش و انتظار دارد یک گفت‌وگوی خالی ببیند، نه
+    # «Loading…» که هرگز تمام نمی‌شود.
+    if store.meta_get(app_key, sid).get("draft"):
+        return {"app": app_key, "id": sid, "messages": [], "draft": True}
 
     def build():
         from .adapters import _tail_json_lines, _text_of, _clean
@@ -567,11 +574,32 @@ async def health():
 
 @app.get("/api/stream")
 async def stream():
-    """SSE: هر ۵ ثانیه وضعیت تازه — برای موبایل سبک‌تر از polling است."""
+    """
+    SSE: هر ۵ ثانیه وضعیت تازه — برای موبایل سبک‌تر از polling است.
+
+    **نشست‌ها هم داخل همین پیام می‌آیند.** قبلاً فقط `overview` فرستاده
+    می‌شد که نشست ندارد، پس سایدبار تا وقتی کاربر دستی صفحه را تازه
+    نمی‌کرد کهنه می‌ماند — دقیقاً همان «سشن جدید می‌سازم ولی باید رفرش کنم».
+
+    `fp` یک اثر انگشت سبک است تا سمتِ مرورگر بداند چیزی عوض شده یا نه و
+    بی‌دلیل کل درخت را دوباره نسازد (که منوی باز را می‌بندد و اسکرول را
+    می‌پراند).
+    """
     async def gen():
         while True:
             try:
                 data = await overview()
+                try:
+                    ss = await sessions(None, False)
+                except Exception:                              # noqa: BLE001
+                    ss = []
+                data["sessions"] = ss
+                data["fp"] = hashlib.md5(json.dumps(
+                    [[x.get("source"), x.get("id"), x.get("title"),
+                      x.get("last_active"), x.get("msg_count"),
+                      x.get("project_id"), x.get("state")] for x in ss] +
+                    [[p.get("id"), p.get("name")] for p in data.get("projects", [])],
+                    ensure_ascii=False, sort_keys=True).encode()).hexdigest()
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             except Exception as exc:                           # noqa: BLE001
                 yield f"data: {json.dumps({'error': str(exc)[:200]})}\n\n"
