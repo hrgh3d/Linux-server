@@ -622,6 +622,29 @@ EOF
       && echo "[services] omniroute: tailscale serve 9447 re-established" \
       || echo "[services] omniroute: WARNING tailscale serve 9447 failed"
   fi
+  if [ -f "$SCRIPT_DIR/omniroute_guard.sh" ]; then
+    install -m 755 "$SCRIPT_DIR/omniroute_guard.sh" /usr/local/bin/omniroute_guard.sh
+    cat > /etc/systemd/system/omniroute-guard.service <<'EOG'
+[Unit]
+Description=OmniRoute guard (secrets + service + serve + daily snapshot)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/omniroute_guard.sh
+EOG
+    cat > /etc/systemd/system/omniroute-guard.timer <<'EOG'
+[Unit]
+Description=Run OmniRoute guard every 5 minutes
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=5min
+AccuracySec=30s
+[Install]
+WantedBy=timers.target
+EOG
+    systemctl daemon-reload
+    systemctl enable --now omniroute-guard.timer >/dev/null 2>&1 \
+      && echo "[services] omniroute: guard timer armed"
+  fi
   if curl -fsS -m 4 -o /dev/null http://127.0.0.1:20130/ 2>/dev/null; then
     echo "[services] omniroute: healthy on 127.0.0.1:20130 (https :9447 via tailnet)"
   else
