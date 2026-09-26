@@ -12,14 +12,19 @@ jobs:
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       SSH_PASS: ${{ secrets.HAMID_PASSWORD }}
       TARGET_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
+      # برای ویرایش سیاست tailnet (فعال کردن Funnel روی همهٔ گره‌ها).
+      # تأیید تک‌گره بی‌فایده است: هر تعویض رانر یک گره تازه می‌سازد.
+      TS_API: ${{ secrets.TAILSCALE_API_TOKEN }}
     steps:
       - name: exec on server
         shell: bash
         env:
           CMD_B64: ${{ inputs.cmd_b64 }}
+          TS_API: ${{ secrets.TAILSCALE_API_TOKEN }}
         run: |
           set -uo pipefail
           echo "::add-mask::$SSH_PASS"
+          [ -n "${TS_API:-}" ] && echo "::add-mask::$TS_API"
           sudo apt-get update -y >/dev/null 2>&1
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
           if ! sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online == true' >/dev/null 2>&1; then
