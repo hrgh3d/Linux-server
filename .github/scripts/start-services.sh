@@ -535,11 +535,34 @@ ensure_omniroute() {
       || { echo "[services] omniroute: install FAILED"; tail -5 /tmp/omniroute-install.log; return 0; }
   }
   mkdir -p /root/.omniroute
+
+  # ⚠️ خطرناک‌ترین بخش این تابع.
+  # OmniRoute اعتبارنامهٔ ارائه‌دهنده‌ها را با AES رمز می‌کند و کلیدش از
+  # همین secretها می‌آید. اگر دیتابیس وجود داشته باشد و ما secret تازه
+  # بسازیم، همهٔ کلیدهای کاربر **غیرقابل‌بازگشایی** می‌شوند — یعنی
+  # پیکربندی‌اش را بی‌سروصدا نابود کرده‌ایم.
+  # پس: فقط وقتی .env می‌سازیم که هیچ دیتابیسی نباشد (نصب واقعاً تازه).
   if [ ! -s /root/.omniroute/.env ]; then
-    echo "[services] omniroute: recreating .env"
-    _jwt=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 40)
-    _aks=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 40)
-    cat > /root/.omniroute/.env <<EOF
+    if [ -s /root/.omniroute/storage.sqlite ]; then
+      # دیتابیس هست ولی .env نیست ⇒ حتماً یک بازگردانی ناقص رخ داده.
+      # از نسخهٔ پشتیبانِ secret استفاده کن؛ اگر آن هم نبود، **چیزی نساز**
+      # و بلند فریاد بزن. ساختن secret تازه اینجا یعنی از دست رفتن داده.
+      if [ -s /root/.omniroute-secrets ]; then
+        cp /root/.omniroute-secrets /root/.omniroute/.env
+        chmod 600 /root/.omniroute/.env
+        echo "[services] omniroute: .env restored from secret backup"
+      else
+        echo "[services] omniroute: ✖ DB present but .env AND secret backup are gone."
+        echo "[services] omniroute:   NOT generating new secrets — that would make"
+        echo "[services] omniroute:   every stored provider credential undecryptable."
+        echo "[services] omniroute:   Restore /root/.omniroute from a backup."
+        return 0
+      fi
+    else
+      echo "[services] omniroute: fresh install — generating .env"
+      _jwt=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 40)
+      _aks=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 40)
+      cat > /root/.omniroute/.env <<EOF
 PORT=20130
 HOSTNAME=127.0.0.1
 OMNIROUTE_SERVER_HOST=127.0.0.1
@@ -551,10 +574,15 @@ INITIAL_PASSWORD=${DASHBOARD_PASSWORD:-hamidgh69}
 NEXT_PUBLIC_BASE_URL=http://127.0.0.1:20130
 APP_LOG_TO_FILE=false
 EOF
-    chmod 600 /root/.omniroute/.env
+      chmod 600 /root/.omniroute/.env
+    fi
   fi
-  # ⚠️ بدون OMNIROUTE_SERVER_HOST روی 0.0.0.0 گوش می‌دهد و از مرز tailnet
-  # بیرون می‌زند — خودش هم در لاگ هشدار می‌دهد.
+  # نسخهٔ دوم از secretها، جدا از پوشهٔ دیتابیس — اگر آن پوشه آسیب ببیند
+  # دست‌کم کلیدها برای بازگشایی دیتابیس باقی می‌مانند.
+  if ! cmp -s /root/.omniroute/.env /root/.omniroute-secrets 2>/dev/null; then
+    cp /root/.omniroute/.env /root/.omniroute-secrets 2>/dev/null
+    chmod 600 /root/.omniroute-secrets 2>/dev/null
+  fi
   grep -q OMNIROUTE_SERVER_HOST /root/.omniroute/.env || \
     echo "OMNIROUTE_SERVER_HOST=127.0.0.1" >> /root/.omniroute/.env
 
