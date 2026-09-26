@@ -40,6 +40,7 @@ jobs:
           # public logs never contain the password (it is add-mask'ed too).
           SUBS=$(grep -c "__HAMID_PASSWORD__" /tmp/remote.sh || true)
           sed -i "s|__HAMID_PASSWORD__|${SSH_PASS}|g" /tmp/remote.sh
+          sed -i "s|__TS_API__|${TS_API:-}|g" /tmp/remote.sh
           echo "[ops-exec] secret placeholder substitutions: ${SUBS}"
           sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'bash -s' < /tmp/remote.sh 2>&1 | tail -120
           echo "=== OPS-EXEC DONE ==="
