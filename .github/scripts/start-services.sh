@@ -669,6 +669,33 @@ EOF
       && echo "[services] hermes-serve: funnel 10000 re-established" \
       || echo "[services] hermes-serve: WARNING funnel failed (node may need the funnel nodeAttr)"
   fi
+  # نگهبان: دو بار پشت سر هم بعد از تعویض رانر این اتصال خاموش شکست —
+  # یک‌بار چون یونیتِ بازگردانده‌شده enabled بود ولی استارت نشده بود، و
+  # یک‌بار چون خودِ هرمس موقع مهاجرت پیکربندی public_url را انداخته بود.
+  # اتکا به یک‌بار اجرا در بوت کافی نیست.
+  if [ -f "$SCRIPT_DIR/hermes_serve_guard.sh" ]; then
+    install -m 755 "$SCRIPT_DIR/hermes_serve_guard.sh" /usr/local/bin/hermes_serve_guard.sh
+    cat > /etc/systemd/system/hermes-serve-guard.service <<'EOG'
+[Unit]
+Description=Hermes Desktop backend guard (public_url + service + funnel)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hermes_serve_guard.sh
+EOG
+    cat > /etc/systemd/system/hermes-serve-guard.timer <<'EOG'
+[Unit]
+Description=Run hermes-serve guard every 4 minutes
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=4min
+AccuracySec=30s
+[Install]
+WantedBy=timers.target
+EOG
+    systemctl daemon-reload
+    systemctl enable --now hermes-serve-guard.timer >/dev/null 2>&1 \
+      && echo "[services] hermes-serve: guard timer armed"
+  fi
   if curl -fsS -m 4 -o /dev/null "http://${TSIP}:9122/api/status" 2>/dev/null; then
     echo "[services] hermes-serve: ready on ${TSIP}:9122 (Hermes Desktop remote gateway)"
   else
