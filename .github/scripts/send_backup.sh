@@ -315,6 +315,7 @@ try_tar home-root.tar.gz \
   --exclude=root/workspace.zip --exclude=./root/workspace.zip \
   --exclude=root/.openclaw --exclude=./root/.openclaw \
   --exclude=root/.hermes --exclude=./root/.hermes \
+  --exclude=root/.omniroute --exclude=./root/.omniroute \
   -- /root
 {
   echo "host: $(hostname)"; echo "date: $(date -u +%FT%TZ)"; echo "uptime: $(uptime -p 2>/dev/null)"
