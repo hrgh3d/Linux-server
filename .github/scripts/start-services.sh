@@ -660,6 +660,15 @@ EOF
     curl -fsS -m 3 -o /dev/null "http://${TSIP}:9122/api/status" 2>/dev/null && break
     sleep 4
   done
+  # Funnel: دسترسی عمومی بدون نیاز به Tailscale روی دستگاه کاربر.
+  # فقط پورت‌های 443/8443/10000 مجازند؛ ۴۴۳ و ۸۴۴۳ گرفته‌اند.
+  # ⚠️ نگهبان DNS-rebinding بدون dashboard.public_url هر درخواستی را که
+  # Host‌اش با آدرس bind فرق دارد با ۴۰۰ رد می‌کند.
+  if ! tailscale funnel status 2>/dev/null | grep -q ':10000'; then
+    tailscale funnel --bg --https=10000 "http://${TSIP}:9122" >/dev/null 2>&1 \
+      && echo "[services] hermes-serve: funnel 10000 re-established" \
+      || echo "[services] hermes-serve: WARNING funnel failed (node may need the funnel nodeAttr)"
+  fi
   if curl -fsS -m 4 -o /dev/null "http://${TSIP}:9122/api/status" 2>/dev/null; then
     echo "[services] hermes-serve: ready on ${TSIP}:9122 (Hermes Desktop remote gateway)"
   else
