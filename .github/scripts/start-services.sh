@@ -602,6 +602,72 @@ EOF
 }
 ensure_omniroute
 
+
+# --- Hermes backend برای Hermes Desktop (اتصال راه‌دور) -----------------------
+# این *جدا* از gateway پیام‌رسان است: gateway کار تلگرام/دیسکورد را می‌کند،
+# و `hermes serve` همان چیزی است که اپ دسکتاپ به آن وصل می‌شود. هر دو یک
+# ~/.hermes مشترک دارند.
+ensure_hermes_serve() {
+  local TSIP
+  TSIP=$(tailscale ip -4 2>/dev/null | head -1)
+  [ -n "$TSIP" ] || { echo "[services] hermes-serve: no tailscale IP yet, skip"; return 0; }
+  [ -x /usr/local/lib/hermes-agent/venv/bin/python ] || {
+    echo "[services] hermes-serve: hermes venv missing, skip"; return 0; }
+
+  # ⚠️ bind غیرلوپ‌بک دروازهٔ احراز هویت را فعال می‌کند و بدون provider
+  # سرویس عمداً بالا نمی‌آید (fail closed).
+  if ! grep -q HERMES_DASHBOARD_BASIC_AUTH_USERNAME /root/.hermes/.env 2>/dev/null; then
+    _sec=$(openssl rand -base64 32 2>/dev/null || head -c 32 /dev/urandom | base64)
+    {
+      echo ""
+      echo "# --- Hermes Desktop (remote backend) ---"
+      echo "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=hamid"
+      echo "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${DASHBOARD_PASSWORD:-hamidgh69}"
+      echo "HERMES_DASHBOARD_BASIC_AUTH_SECRET=${_sec}"
+    } >> /root/.hermes/.env
+    chmod 600 /root/.hermes/.env
+  fi
+
+  # آدرس tailnet هر بوت ثابت است ولی یونیت را بازنویسی می‌کنیم تا اگر
+  # روزی عوض شد، سرویس روی آدرس مرده گیر نکند.
+  cat > /etc/systemd/system/hermes-serve.service <<EOF
+[Unit]
+Description=Hermes backend for Hermes Desktop (remote gateway) — tailnet only
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.hermes
+EnvironmentFile=/root/.hermes/.env
+Environment="HERMES_HOME=/root/.hermes"
+Environment="PATH=/usr/local/lib/hermes-agent/venv/bin:/usr/local/bin:/root/.local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="VIRTUAL_ENV=/usr/local/lib/hermes-agent/venv"
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python -m hermes_cli.main serve --host ${TSIP} --port 9122 --skip-build
+Restart=always
+RestartSec=8
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable hermes-serve >/dev/null 2>&1 || true
+  start_system hermes-serve.service
+  for _i in $(seq 1 10); do
+    curl -fsS -m 3 -o /dev/null "http://${TSIP}:9122/api/status" 2>/dev/null && break
+    sleep 4
+  done
+  if curl -fsS -m 4 -o /dev/null "http://${TSIP}:9122/api/status" 2>/dev/null; then
+    echo "[services] hermes-serve: ready on ${TSIP}:9122 (Hermes Desktop remote gateway)"
+  else
+    echo "[services] hermes-serve: not answering yet — Restart=always keeps retrying"
+  fi
+}
+ensure_hermes_serve
+
 # --- Hermes gateway: یونیت user روت ---
 # v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
 # بوت‌های بعدی از راه استاندارد (همین یونیت) بالا می‌آیند.
