@@ -178,6 +178,7 @@ EXCL=(
   # workspace اوپن‌کلاو ۲۱۴MB است: خروجی کار و کلون ریپوهاست، نه پیکربندی.
   # چیزی که واقعاً لازم است (config + state + agents) جداگانه گرفته می‌شود.
   --exclude=./root/.openclaw/workspace  --exclude=root/.openclaw/workspace
+  --exclude=./root/.omniroute/call_logs --exclude=root/.omniroute/call_logs
   # باینری‌های دانلودی داخل agents (fd و امثالش، ۳.۵MB هرکدام) و نسخهٔ
   # legacy که فقط کپی قدیمی همان است. خودِ openclaw-agent.sqlite (۴۵MB،
   # ۱۹MB فشرده) عمداً می‌ماند: تاریخچهٔ گفت‌وگوهاست و بازساختنی نیست.
@@ -256,6 +257,10 @@ snap_sqlite /root/.9router/db/data.sqlite 9router-data.sqlite
 # v6.50: دیتابیس خود هاب — نام نشست‌ها، پروژه‌ها، حافظهٔ مشترک، مهارت‌ها.
 # بدون این، بعد از بازیابی همهٔ نام‌گذاری‌ها و پروژه‌های مشترک صفر می‌شود.
 snap_sqlite /opt/aihub/data/hub.sqlite aihub-hub.sqlite
+# v6.52: OmniRoute — کاربر ارائه‌دهنده‌ها و کلیدها را دستی تنظیم کرده.
+# اعتبارنامه‌ها با AES رمز شده‌اند و کلیدش در .env است، پس دیتابیس بدون
+# .env بی‌فایده است و برعکس. هر دو باید با هم در باندل باشند.
+snap_sqlite /root/.omniroute/storage.sqlite omniroute-storage.sqlite
 
 # v6.35.1 — ترتیب بر اساس بحرانی بودن: اگر روزی بودجه پر شد، چیزهای
 # غیرقابل‌بازسازی باید از قبل داخل باندل باشند.
@@ -287,6 +292,16 @@ try_tar app-code.tar.gz --exclude=root/.hermes/bin --exclude=./root/.hermes/bin 
   -- /opt/9router /root/9router /root/.hermes /var/www
 # v6.50: AI Hub — کد، رابط، و دادهٔ کاربر (پروژه‌ها/حافظه/سطل زباله).
 # venv عمداً نیست: ۷۱MB و با install.sh در چند ثانیه بازساخته می‌شود.
+# v6.52: پیکربندی OmniRoute + کلیدهای رمزش.
+# call_logs یک پوشهٔ ۲۵ مگابایتیِ لاگ است و بازساختنی؛ داخلش نمی‌آید.
+# قبلاً omniroute فقط به‌طور اتفاقی داخل home-root بود — یعنی همان چیزی
+# که یک بار بی‌صدا از بودجه جا ماند.
+try_tar omniroute.tar.gz \
+  --exclude=root/.omniroute/call_logs --exclude=./root/.omniroute/call_logs \
+  --exclude=root/.omniroute/cache --exclude=./root/.omniroute/cache \
+  --exclude=*.sqlite-wal --exclude=*.sqlite-shm \
+  -- /root/.omniroute /root/.omniroute-secrets
+
 try_tar aihub.tar.gz --exclude=opt/aihub/venv --exclude=./opt/aihub/venv \
   --exclude=opt/aihub/data/hub.sqlite-wal --exclude=./opt/aihub/data/hub.sqlite-wal \
   --exclude=opt/aihub/data/hub.sqlite-shm --exclude=./opt/aihub/data/hub.sqlite-shm \
@@ -370,7 +385,8 @@ verify_bundle() {
   fi
   for crit in tailscale-state.tar.gz openclaw.tar.gz sqlite/openclaw-state.sqlite \
               app-code.tar.gz services.tar.gz bin-scripts.tar.gz home-root.tar.gz \
-              aihub.tar.gz sqlite/aihub-hub.sqlite sqlite/9router-data.sqlite; do
+              aihub.tar.gz sqlite/aihub-hub.sqlite sqlite/9router-data.sqlite \
+              omniroute.tar.gz sqlite/omniroute-storage.sqlite; do
     printf '%s\n' "$list" | grep -q "$crit" || { echo "[verify] MISSING $crit"; missing=$((missing+1)); }
   done
   ok=$(printf '%s\n' "$list" | grep -c 'tar.gz\|sqlite')
@@ -405,7 +421,7 @@ verify_bundle() {
   else
     # v6.51: نام اجزای غایب را هم بگو، وگرنه «⚠️ ناقص — ۲ ایراد» یعنی هیچ.
     local miss_names=""
-    for crit in openclaw.tar.gz home-root.tar.gz aihub.tar.gz \
+    for crit in openclaw.tar.gz home-root.tar.gz aihub.tar.gz omniroute.tar.gz \
                 tailscale-state.tar.gz app-code.tar.gz services.tar.gz \
                 sqlite/aihub-hub.sqlite sqlite/openclaw-state.sqlite; do
       printf '%s\n' "$list" | grep -q "$crit" || miss_names="${miss_names} ${crit%%.tar.gz}"
