@@ -523,6 +523,85 @@ if [ -f /etc/systemd/system/cloudcli.service ] && [ -s /etc/cloudcli.env ]; then
   fi
 fi
 
+
+# --- OmniRoute: دروازهٔ AI روی ۲۰۱۳۰ ----------------------------------------
+# عمداً ۲۰۱۲۸ نیست: آن پورت در اختیار 9router است و هر چهار ایجنت به آن
+# وصل‌اند. دو دروازه کنار هم زندگی می‌کنند.
+ensure_omniroute() {
+  command -v omniroute >/dev/null 2>&1 || {
+    echo "[services] omniroute: not installed, installing"
+    CI=1 OMNIROUTE_SKIP_POSTINSTALL=1 timeout 900 npm install -g omniroute \
+      --no-fund --no-audit >/tmp/omniroute-install.log 2>&1 \
+      || { echo "[services] omniroute: install FAILED"; tail -5 /tmp/omniroute-install.log; return 0; }
+  }
+  mkdir -p /root/.omniroute
+  if [ ! -s /root/.omniroute/.env ]; then
+    echo "[services] omniroute: recreating .env"
+    _jwt=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 40)
+    _aks=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 40)
+    cat > /root/.omniroute/.env <<EOF
+PORT=20130
+HOSTNAME=127.0.0.1
+OMNIROUTE_SERVER_HOST=127.0.0.1
+DATA_DIR=/root/.omniroute
+NODE_ENV=production
+JWT_SECRET=${_jwt}
+API_KEY_SECRET=${_aks}
+INITIAL_PASSWORD=${DASHBOARD_PASSWORD:-hamidgh69}
+NEXT_PUBLIC_BASE_URL=http://127.0.0.1:20130
+APP_LOG_TO_FILE=false
+EOF
+    chmod 600 /root/.omniroute/.env
+  fi
+  # ⚠️ بدون OMNIROUTE_SERVER_HOST روی 0.0.0.0 گوش می‌دهد و از مرز tailnet
+  # بیرون می‌زند — خودش هم در لاگ هشدار می‌دهد.
+  grep -q OMNIROUTE_SERVER_HOST /root/.omniroute/.env || \
+    echo "OMNIROUTE_SERVER_HOST=127.0.0.1" >> /root/.omniroute/.env
+
+  if [ ! -f /etc/systemd/system/omniroute.service ]; then
+    cat > /etc/systemd/system/omniroute.service <<'EOF'
+[Unit]
+Description=OmniRoute AI Gateway (port 20130)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.omniroute
+EnvironmentFile=/root/.omniroute/.env
+ExecStart=/usr/local/bin/omniroute
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=40
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+  fi
+  systemctl enable omniroute >/dev/null 2>&1 || true
+  start_system omniroute.service
+  for _i in $(seq 1 12); do
+    curl -fsS -m 3 -o /dev/null http://127.0.0.1:20130/ 2>/dev/null && break
+    sleep 5
+  done
+  # مسیر Serve بعد از چرخش رانر/ری‌استارت tailscaled از بین می‌رود
+  if ! tailscale serve status 2>/dev/null | grep -q '127.0.0.1:20130'; then
+    tailscale serve --bg --https=9447 http://127.0.0.1:20130 >/dev/null 2>&1 \
+      && echo "[services] omniroute: tailscale serve 9447 re-established" \
+      || echo "[services] omniroute: WARNING tailscale serve 9447 failed"
+  fi
+  if curl -fsS -m 4 -o /dev/null http://127.0.0.1:20130/ 2>/dev/null; then
+    echo "[services] omniroute: healthy on 127.0.0.1:20130 (https :9447 via tailnet)"
+  else
+    echo "[services] omniroute: not answering yet — Restart=always keeps retrying"
+  fi
+}
+ensure_omniroute
+
 # --- Hermes gateway: یونیت user روت ---
 # v6.11: اگر یونیت گم شده باشد (خرابی state)، همین‌جا بازسازی‌اش کن —
 # بوت‌های بعدی از راه استاندارد (همین یونیت) بالا می‌آیند.
