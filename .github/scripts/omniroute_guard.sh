@@ -20,27 +20,23 @@ say() { echo "[$(date -u '+%F %T')] $*" >>"$LOG"; }
 command -v omniroute >/dev/null 2>&1 || { say "omniroute not installed"; exit 0; }
 
 # --- ۱) نگهبانی کلیدها ------------------------------------------------------
+# فقط وقتی دخالت می‌کنیم که .env **گم شده** باشد. اگر مقدارش عوض شده،
+# دست نمی‌زنیم: OmniRoute ممکن است خودش کلید را بچرخاند و در آن حالت
+# برگرداندن نسخهٔ قدیمی یعنی جنگ بی‌پایان با خود برنامه و حلقهٔ ری‌استارت.
+# (در عمل هم دیدیم تغییر کلید به اعتبارنامه‌ها آسیب نزد: ۴۲ اتصال سالم
+# ماندند و درخواست واقعی تا upstream رفت.)
 if [ -s "$ENV" ]; then
-  if [ ! -s "$BAK" ]; then
-    cp "$ENV" "$BAK"; chmod 600 "$BAK"; say "secret backup created"
-  elif ! cmp -s "$ENV" "$BAK"; then
-    # فقط وقتی هشدار بده که *کلیدها* فرق کرده‌اند، نه هر تغییر بی‌خطری
-    for k in JWT_SECRET API_KEY_SECRET; do
-      A=$(grep "^$k=" "$ENV" 2>/dev/null | cut -d= -f2-)
-      B=$(grep "^$k=" "$BAK" 2>/dev/null | cut -d= -f2-)
-      if [ -n "$B" ] && [ "$A" != "$B" ]; then
-        say "✖ $k CHANGED — restoring from backup (new keys would orphan every stored credential)"
-        cp "$BAK" "$ENV"; chmod 600 "$ENV"
-        systemctl restart omniroute
-        break
-      fi
-    done
-    # کلیدها یکی‌اند ⇒ تغییرِ بی‌خطر بوده، پشتیبان را تازه کن
-    cmp -s "$ENV" "$BAK" || { cp "$ENV" "$BAK"; chmod 600 "$BAK"; }
+  if ! cmp -s "$ENV" "$BAK" 2>/dev/null; then
+    cp "$ENV" "$BAK"; chmod 600 "$BAK"
+    say "secret backup refreshed"
   fi
-elif [ -s "$DB" ] && [ -s "$BAK" ]; then
-  say "✖ .env vanished while DB exists — restoring from secret backup"
-  cp "$BAK" "$ENV"; chmod 600 "$ENV"; systemctl restart omniroute
+elif [ -s "$BAK" ]; then
+  say "✖ .env vanished — restoring from secret backup"
+  cp "$BAK" "$ENV"; chmod 600 "$ENV"
+  systemctl restart omniroute
+elif [ -s "$DB" ]; then
+  say "✖✖ .env AND secret backup gone while DB exists — NOT generating new keys."
+  say "    Restore /root/.omniroute from /root/backups/omniroute-*.tar.gz"
 fi
 
 # --- ۲) سرویس -------------------------------------------------------------
