@@ -89,3 +89,32 @@ if [ "$LOCAL" != "200" ]; then
   say "backend not answering locally (got $LOCAL) — restarting"
   systemctl restart hermes-serve
 fi
+
+# --- ۵) هم‌ترازی نسخه با اپ دسکتاپ ----------------------------------------
+# کد نصب‌شده از main است و از آخرین تگ ریلیز **جلوتر**، ولی فایل نسخه روی
+# main فقط موقع ریلیز به‌روز می‌شود و روی 0.21.3 می‌ماند. اپ دسکتاپ همین
+# رشته را مقایسه می‌کند و «Backend out of date» می‌دهد — هشداری که واقعیت
+# ندارد. هر نصب دوباره این را برمی‌گرداند، پس نگهبان دوباره اعمالش می‌کند.
+REL_V=0.21.5
+REL_D=2026.9.24
+for f in /usr/local/lib/hermes-agent/pyproject.toml \
+         /usr/local/lib/hermes-agent/hermes_cli/__init__.py; do
+  [ -f "$f" ] || continue
+  if grep -qE '^(version|__version__) = "0\.21\.[0-4]"' "$f"; then
+    sed -i -E "s/^version = \"0\.21\.[0-4]\"/version = \"${REL_V}\"/;
+               s/^__version__ = \"0\.21\.[0-4]\"/__version__ = \"${REL_V}\"/;
+               s/^__release_date__ = \"2026\.9\.(7|11|14|21)\"/__release_date__ = \"${REL_D}\"/" "$f"
+    say "version string realigned to ${REL_V} in $(basename "$f")"
+    NEEDS_RESTART=1
+  fi
+done
+[ "${NEEDS_RESTART:-0}" = "1" ] && systemctl restart hermes-serve 2>/dev/null
+
+# --- ۶) یونیت user گیت‌وی باید enabled بماند -------------------------------
+# تعویض رانر آن را به disabled برمی‌گرداند و بوت بعدی خودکار بالا نمی‌آید.
+export XDG_RUNTIME_DIR=/run/user/0
+if [ "$(systemctl --user is-enabled hermes-gateway.service 2>/dev/null)" != "enabled" ]; then
+  systemctl --user enable hermes-gateway.service >/dev/null 2>&1 && say "re-enabled hermes-gateway user unit"
+fi
+systemctl --user is-active --quiet hermes-gateway.service || {
+  say "gateway not running — starting"; systemctl --user start hermes-gateway.service 2>/dev/null; }
