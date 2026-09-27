@@ -42,3 +42,7 @@
 /root/.omniroute
 # نسخهٔ دوم کلیدهای رمز OmniRoute، جدا از پوشهٔ دیتابیس
 /root/.omniroute-secrets
+# گاوصندوق اسرار (Hermes + OmniRoute) — بدون این، کلیدهای غیر از سه‌تای
+# شناخته‌شدهٔ secrets_inject هیچ راه بازگشتی ندارند
+/var/lib/hermes-guard
+/root/backups/envs

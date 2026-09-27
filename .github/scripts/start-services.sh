@@ -524,6 +524,37 @@ if [ -f /etc/systemd/system/cloudcli.service ] && [ -s /etc/cloudcli.env ]; then
 fi
 
 
+
+# --- گاوصندوق اسرار: پیش از هر سرویسی ------------------------------------
+# سه سازوکار مستقل .env را خالی می‌کنند: پنجرهٔ blanking خود save.sh،
+# secrets_inject که فقط ۳ کلید می‌شناسد، و نصب‌کنندهٔ هرمس که فایل را از
+# روی قالب بازمی‌سازد. این باید **قبل** از استارت سرویس‌ها اجرا شود،
+# وگرنه سرویس با کلید خالی بالا می‌آید و خاموش می‌شکند.
+if [ -f "$SCRIPT_DIR/env_vault.py" ]; then
+  install -m 755 "$SCRIPT_DIR/env_vault.py" /usr/local/bin/env_vault.py
+  python3 /usr/local/bin/env_vault.py 2>&1 | tail -3 || true
+  cat > /etc/systemd/system/env-vault.service <<'EOG'
+[Unit]
+Description=Hermes/OmniRoute env vault (restore blanked or missing secrets)
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/env_vault.py
+EOG
+  cat > /etc/systemd/system/env-vault.timer <<'EOG'
+[Unit]
+Description=Run the env vault every 3 minutes
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=3min
+AccuracySec=20s
+[Install]
+WantedBy=timers.target
+EOG
+  systemctl daemon-reload
+  systemctl enable --now env-vault.timer >/dev/null 2>&1 \
+    && echo "[services] env-vault: timer armed"
+fi
+
 # --- OmniRoute: دروازهٔ AI روی ۲۰۱۳۰ ----------------------------------------
 # عمداً ۲۰۱۲۸ نیست: آن پورت در اختیار 9router است و هر چهار ایجنت به آن
 # وصل‌اند. دو دروازه کنار هم زندگی می‌کنند.
