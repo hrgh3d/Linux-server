@@ -39,7 +39,9 @@ if [ -f "$SENTINEL" ]; then
 fi
 
 vault_one() {
-  local name="$1" env="$2" store="$VAULT/$name"
+  local name="$1"
+  local env="$2"
+  local store="$VAULT/$name"
   [ -n "$env" ] || return 0
   touch "$store" 2>/dev/null; chmod 600 "$store" 2>/dev/null
 
@@ -59,15 +61,16 @@ vault_one() {
 
   # ── بازگردانی: کلیدی که خالی یا غایب است
   [ -s "$store" ] || return 0
-  local restored=0 added=0
+  local restored=0
+  local added=0
   while IFS= read -r line; do
-    local k="${line%%=*}"
+    k="${line%%=*}"
     [ -n "$k" ] || continue
     if grep -qE "^${k}=.{4,}" "$env" 2>/dev/null; then
       continue                               # مقدار دارد، دست نزن
     elif grep -qE "^${k}=" "$env" 2>/dev/null; then
       # هست ولی خالی → پرش کن
-      local esc; esc=$(printf '%s' "$line" | sed 's/[&|\\]/\\&/g')
+      esc=$(printf '%s' "$line" | sed 's/[&|\\]/\\&/g')
       sed -i "s|^${k}=.*|${esc}|" "$env" && { restored=$((restored+1)); }
     else
       printf '%s\n' "$line" >> "$env"; added=$((added+1))
