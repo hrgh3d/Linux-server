@@ -91,10 +91,28 @@ if [ "${NEEDS_RESTART:-0}" = "1" ] || ! systemctl is-active --quiet hermes-serve
 fi
 
 # --- ۳) Funnel ------------------------------------------------------------
-if ! tailscale funnel status 2>/dev/null | grep -q ':10000'; then
-  say "funnel missing — re-establishing"
-  timeout 60 tailscale funnel --bg --https=10000 "http://${TSIP}:9122" >>"$LOG" 2>&1
-fi
+# ⚠️ فقط وقتی دوباره بساز که واقعاً پاسخ ندهد.
+# قبلاً بر اساس grep روی خروجی `funnel status` تصمیم می‌گرفت و مثبتِ کاذب
+# می‌داد: هر ۴ دقیقه funnel را از نو می‌ساخت و اتصال دائمیِ اپ دسکتاپ قطع
+# می‌شد — یعنی خودِ نگهبان عامل Sign in مکرر بود.
+# منبع معتبر و محلی: AllowFunnel در خروجی json، نه متن انسانی.
+_fon=$(tailscale serve status --json 2>/dev/null \
+       | python3 -c "import json,sys
+try: print('yes' if any(':10000' in k and v for k,v in (json.load(sys.stdin).get('AllowFunnel') or {}).items()) else 'no')
+except Exception: print('unknown')" 2>/dev/null)
+_fc=$(curl -s -o /dev/null -w '%{http_code}' -m 12 \
+      "https://linux-server-vps.tail3641f4.ts.net:10000/api/status" 2>/dev/null)
+case "$_fc" in
+  200|401|302|307) : ;;                      # زنده است، دست نزن
+  *)
+    if [ "$_fon" = "yes" ]; then
+      say "funnel registered but endpoint returned '$_fc' — backend issue, not re-creating"
+    else
+      say "funnel really down (AllowFunnel=$_fon http=$_fc) — re-establishing"
+      timeout 60 tailscale funnel --bg --https=10000 "http://${TSIP}:9122" >>"$LOG" 2>&1
+    fi
+    ;;
+esac
 
 # --- ۴) تأیید واقعی از بیرون، نه فقط «active» -----------------------------
 LOCAL=$(curl -s -o /dev/null -w '%{http_code}' -m 8 "http://${TSIP}:9122/api/status" 2>/dev/null)
