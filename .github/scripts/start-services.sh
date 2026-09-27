@@ -555,6 +555,38 @@ EOG
     && echo "[services] env-vault: timer armed"
 fi
 
+# نگهبان‌ها را همین‌جا مسلح کن، نه داخل ensure_*.
+# درس: تابعی که ممکن است زودهنگام return کند جای نصب نگهبان نیست —
+# دو بار پشت سر هم hermes-serve بعد از تعویض رانر بالا نیامد چون
+# تایمرش اصلاً ساخته نشده بود.
+for _g in hermes_serve_guard omniroute_guard; do
+  [ -f "$SCRIPT_DIR/${_g}.sh" ] || continue
+  install -m 755 "$SCRIPT_DIR/${_g}.sh" "/usr/local/bin/${_g}.sh"
+  _unit="${_g//_/-}"
+  cat > "/etc/systemd/system/${_unit}.service" <<EOG
+[Unit]
+Description=${_g} (self-heal)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/${_g}.sh
+EOG
+  cat > "/etc/systemd/system/${_unit}.timer" <<EOG
+[Unit]
+Description=Run ${_g} periodically
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=4min
+AccuracySec=30s
+[Install]
+WantedBy=timers.target
+EOG
+  systemctl daemon-reload
+  systemctl enable --now "${_unit}.timer" >/dev/null 2>&1 \
+    && echo "[services] ${_unit}: timer armed"
+  # یک بار همین حالا اجرا کن تا منتظر تیک اول نمانیم
+  "/usr/local/bin/${_g}.sh" >/dev/null 2>&1 || true
+done
+
 # --- OmniRoute: دروازهٔ AI روی ۲۰۱۳۰ ----------------------------------------
 # عمداً ۲۰۱۲۸ نیست: آن پورت در اختیار 9router است و هر چهار ایجنت به آن
 # وصل‌اند. دو دروازه کنار هم زندگی می‌کنند.
