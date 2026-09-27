@@ -36,6 +36,19 @@ if [ "$CUR" != "$PUBLIC" ]; then
   NEEDS_RESTART=1
 fi
 
+# --- ۱.۵) کلید امضای کوکی نشست ---------------------------------------------
+# بدون HERMES_DASHBOARD_BASIC_AUTH_SECRET، هرمس هر بار کلید تصادفی می‌سازد و
+# همهٔ کوکی‌های قبلی باطل می‌شوند ⇒ اپ دسکتاپ 401 با reason=no_cookie می‌گیرد
+# و مدام Sign in می‌خواهد. نصب‌کننده این کلید را از .env پاک کرده بود.
+if ! grep -qE '^HERMES_DASHBOARD_BASIC_AUTH_SECRET=.{16,}' /root/.hermes/.env 2>/dev/null; then
+  _sec=$(openssl rand -base64 48 2>/dev/null | tr -d '\n')
+  sed -i '/^HERMES_DASHBOARD_BASIC_AUTH_SECRET=/d' /root/.hermes/.env 2>/dev/null
+  printf 'HERMES_DASHBOARD_BASIC_AUTH_SECRET=%s\n' "$_sec" >> /root/.hermes/.env
+  chmod 600 /root/.hermes/.env
+  say "cookie signing secret was missing — generated a stable one (sessions will now survive restarts)"
+  NEEDS_RESTART=1
+fi
+
 # --- ۲) سرویس باید واقعاً در حال اجرا باشد، نه فقط enabled -----------------
 if [ ! -f /etc/systemd/system/hermes-serve.service ]; then
   say "unit missing — recreating"
