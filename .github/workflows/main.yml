@@ -343,7 +343,7 @@ jobs:
             fi
             sleep 12
             # v6.10: بدون --accept-routes (ادعای ساب‌نت داخلی runner به tailnet لازم نبود)
-            timeout 60 sudo tailscale up --hostname="${TS_HOSTNAME:-linux-server-vps}" >/dev/null 2>&1 || true
+            timeout 60 sudo tailscale up --hostname="${TS_HOSTNAME:-linux-server-vps}" --advertise-exit-node=false --exit-node= >/dev/null 2>&1 || true
             sleep 5
             _on=$(timeout 30 sudo tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null || echo false)
             if [ "$_on" = "true" ]; then

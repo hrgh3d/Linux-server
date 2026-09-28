@@ -94,7 +94,7 @@ do_tailscale_up() {
   # tailnet device routes into GitHub infrastructure and was never needed
   # for SSH. Plain node-to-node connectivity is unaffected.
   # shellcheck disable=SC2086
-  if timeout 150 sudo tailscale up --hostname="$TS_HOSTNAME" $extra_args >"$logfile" 2>&1; then
+  if timeout 150 sudo tailscale up --hostname="$TS_HOSTNAME" --advertise-exit-node=false --exit-node= $extra_args >"$logfile" 2>&1; then
     log "tailscale up OK"
     cat "$logfile"
     return 0
@@ -161,6 +161,14 @@ done
 echo "TS_IP=$IP" >> "$GITHUB_ENV" 2>/dev/null || true
 echo "IP=$IP" > /tmp/ts_ip.txt
 export TS_IP="$IP"
+
+# Explicitly clear both roles after every reconnect. The command changes
+# only the specified preferences and is safe on an already-online node.
+if ! timeout 20 sudo tailscale set --advertise-exit-node=false --exit-node= >/dev/null 2>&1; then
+  log "ERROR: could not force exit-node preferences off"
+  exit 1
+fi
+log "exit-node advertise/use explicitly disabled"
 
 log "Current IPv4: ${IP}"
 

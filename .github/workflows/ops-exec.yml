@@ -33,7 +33,7 @@ jobs:
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
           if ! sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online == true' >/dev/null 2>&1; then
             curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
-            sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --accept-routes --ssh=false >/tmp/tsup.log 2>&1 || { tail -5 /tmp/tsup.log; exit 1; }
+            sudo tailscale up --authkey="$TAILSCALE_AUTH_KEY" --accept-routes --ssh=false --advertise-exit-node=false --exit-node= >/tmp/tsup.log 2>&1 || { tail -5 /tmp/tsup.log; exit 1; }
           fi
           for i in {1..15}; do sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online == true' >/dev/null 2>&1 && break || sleep 2; done
           SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/kh -o PreferredAuthentications=password -o PubkeyAuthentication=no -o ConnectTimeout=15)

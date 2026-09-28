@@ -881,6 +881,42 @@ else
   echo "[services] public_webui_guard.sh not found — public facade skipped"
 fi
 
+# --- خروج از نقش exit node: محافظت صریح از preferenceهای Tailscale ---
+if [ -f "$SCRIPT_DIR/tailscale_exitnode_guard.sh" ]; then
+  sudo install -m 0755 "$SCRIPT_DIR/tailscale_exitnode_guard.sh" /usr/local/bin/tailscale_exitnode_guard.sh
+  sudo tee /etc/systemd/system/tailscale-exitnode-guard.service >/dev/null <<'UNIT'
+[Unit]
+Description=Disable Tailscale exit-node advertise and use preferences
+After=tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tailscale_exitnode_guard.sh
+UNIT
+  sudo tee /etc/systemd/system/tailscale-exitnode-guard.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Recheck disabled Tailscale exit-node preferences every three minutes
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=3min
+AccuracySec=20s
+Unit=tailscale-exitnode-guard.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+  sudo systemctl daemon-reload >/dev/null 2>&1 || true
+  sudo systemctl enable --now tailscale-exitnode-guard.timer >/dev/null 2>&1 \
+    && echo "[services] tailscale-exitnode-guard.timer: enabled" \
+    || echo "[services] WARNING: could not enable tailscale-exitnode-guard.timer"
+  sudo /usr/local/bin/tailscale_exitnode_guard.sh >/dev/null 2>&1 \
+    && echo "[services] Tailscale exit-node preference: disabled" \
+    || echo "[services] WARNING: could not verify disabled Tailscale exit-node preference"
+else
+  echo "[services] tailscale_exitnode_guard.sh not found — exit-node guard skipped"
+fi
+
 # --- راستی‌آزمایی ---
 echo "[services] status:"
 sudo systemctl is-active hermes-dashboard.service hermes-tunnel.service 2>/dev/null || true

@@ -30,7 +30,7 @@ jobs:
           echo "=== [2] checks on the server itself ==="
           sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
           curl -fsSL https://tailscale.com/install.sh | sh >/dev/null 2>&1
-          sudo tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname=mrp-check --accept-routes --ssh=false >/tmp/tsup.log 2>&1 || { echo "tailscale up failed:"; tail -5 /tmp/tsup.log; exit 1; }
+          sudo tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname=mrp-check --accept-routes --ssh=false --advertise-exit-node=false --exit-node= >/tmp/tsup.log 2>&1 || { echo "tailscale up failed:"; tail -5 /tmp/tsup.log; exit 1; }
           for i in $(seq 1 12); do sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online==true' >/dev/null && break || sleep 2; done
           SSHOPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/kh -o ConnectTimeout=12 \
                    -o PreferredAuthentications=password -o PubkeyAuthentication=no \
