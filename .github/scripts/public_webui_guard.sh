@@ -112,8 +112,9 @@ server {
         proxy_redirect ~^(/.*)$ https://$host$1;
         sub_filter_once off;
         sub_filter_types text/css application/javascript application/json;
-        sub_filter 'href="/' 'href="/hermes-dashboard/';
-        sub_filter 'src="/' 'src="/hermes-dashboard/';
+        # Hermes itself honors X-Forwarded-Prefix and emits prefix-aware
+        # page/assets after login. Rewriting every href/src here would apply
+        # the prefix a second time and leave the browser on a blank page.
         sub_filter '"/auth/' '"/hermes-dashboard/auth/';
         sub_filter "'/auth/" "'/hermes-dashboard/auth/";
         sub_filter '`/auth/' '`/hermes-dashboard/auth/';
