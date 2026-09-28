@@ -78,6 +78,16 @@ PRUNE_ABS_DIRS = [
     "root/.launchpadlib",
     "root/.local/share/powershell",
     "root/.rpmdb",
+    # Old rescue archives are recursively backing up old backups. They are
+    # neither live application state nor a recovery source of truth.
+    "root/backups",
+    # Preserve Codex configuration/auth, but not downloaded standalone builds.
+    "root/.codex/packages",
+    # Headroom's Hugging Face model cache is rebuilt by the service.
+    "root/.headroom/hf",
+    # OmniRoute config/database are durable; request logs and cache are not.
+    "root/.omniroute/call_logs",
+    "root/.omniroute/cache",
     # Composio's downloaded CLI, ACP adapters and helper runtime are
     # reinstallable toolchain (hundreds of MB), not account/config state.
     # Keep the rest of ~/.composio so future login/config data still persists.
@@ -94,6 +104,8 @@ PRUNE_ABS_FILES = [
     # The Composio CLI binary is recreated by provisioning; config/credential
     # files in ~/.composio remain included by the policy above.
     "root/.composio/composio",
+    # Rebuildable local MCP executable; its source/config remains covered.
+    "root/.local/bin/codebase-memory-mcp",
 ]
 
 # /etc host/image transient entries never stored.
@@ -513,6 +525,11 @@ def selftest():
     assert prune_dir("root/.local/share/powershell") is True
     assert prune_dir("root/.rpmdb") is True
     assert prune_dir("root/.config/.android/cache") is True
+    assert prune_dir("root/backups") is True
+    assert prune_dir("root/.codex/packages") is True
+    assert prune_dir("root/.headroom/hf") is True
+    assert prune_dir("root/.omniroute/call_logs") is True
+    assert prune_file("root/.local/bin/codebase-memory-mcp") is True
     # Composio's toolchain is rebuilt; its account/config files are state.
     assert prune_dir("root/.composio/acp-adapters") is True
     assert prune_file("root/.composio/composio") is True

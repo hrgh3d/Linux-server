@@ -230,12 +230,15 @@ phase "archive created: ${SIZEH} (${SIZE} bytes) sha256=${DIGEST:0:16}"
 # ----------------------------------------------------------- 6) validate (pre-upload)
 phase "validating archive before upload..."
 VALIDATE_FAIL=0
+VALIDATE_REASONS=()
 # 6a) gzip + tar readable
 if ! gzip -t /tmp/state.tar.gz 2>/dev/null; then
   log "ERROR: archive fails gzip integrity test"; VALIDATE_FAIL=1
+  VALIDATE_REASONS+=("gzip integrity failed")
 fi
 if [ $VALIDATE_FAIL -eq 0 ] && ! timeout 120 tar -tzf /tmp/state.tar.gz > "$MEMBERS" 2>/dev/null; then
   log "ERROR: archive cannot be listed with tar -tzf"; VALIDATE_FAIL=1
+  VALIDATE_REASONS+=("tar listing failed")
 fi
 if [ $VALIDATE_FAIL -eq 0 ]; then
   # 6b) member count vs expected (payload list + _meta files)
@@ -243,20 +246,24 @@ if [ $VALIDATE_FAIL -eq 0 ]; then
   if [ "${ACTUAL:-0}" -ne "$EXPECTED" ]; then
     log "ERROR: member count mismatch — expected=${EXPECTED} actual=${ACTUAL}"
     VALIDATE_FAIL=1
+    VALIDATE_REASONS+=("member-count expected=${EXPECTED} actual=${ACTUAL}")
   fi
   # 6c) installed.json really inside
   if ! grep -qx '_meta/installed.json' "$MEMBERS" 2>/dev/null; then
     log "ERROR: _meta/installed.json missing from archive"; VALIDATE_FAIL=1
+    VALIDATE_REASONS+=("installed.json missing")
   fi
   # 6d) no pruned/forbidden content inside
   if ! python3 "$SCRIPT_DIR/payload.py" validate --members "$MEMBERS" >/tmp/validate.log 2>&1; then
     log "ERROR: forbidden content found in archive:"
     tail -20 /tmp/validate.log | sed 's/^/    /'
     VALIDATE_FAIL=1
+    VALIDATE_REASONS+=("forbidden payload member")
   fi
   # 6e) size cap (never upload a giant archive)
   if [ "$SIZE" -gt 1900000000 ]; then
     log "ERROR: archive too large (${SIZEH})"; VALIDATE_FAIL=1
+    VALIDATE_REASONS+=("archive too large=${SIZEH}")
   fi
 fi
 # ---- v6.36: بازسازی خودکار به‌جای تسلیم شدن -------------------------------
@@ -285,14 +292,17 @@ if [ $VALIDATE_FAIL -ne 0 ] && [ "${SAVE_REBUILD_DONE:-0}" != "1" ] \
     SIZE=$(stat -c%s /tmp/state.tar.gz 2>/dev/null || echo 0)
     SIZEH=$(du -h /tmp/state.tar.gz | cut -f1)
     VALIDATE_FAIL=0
+    VALIDATE_REASONS=()
     if ! timeout 120 tar -tzf /tmp/state.tar.gz > "$MEMBERS" 2>/dev/null; then
       log "ERROR: rebuilt archive cannot be listed"; VALIDATE_FAIL=1
+      VALIDATE_REASONS+=("rebuilt tar listing failed")
     fi
     if [ $VALIDATE_FAIL -eq 0 ]; then
       ACTUAL=$(grep -cvE '^_meta/?$' "$MEMBERS" 2>/dev/null || true)
       if [ "${ACTUAL:-0}" -ne "$EXPECTED" ]; then
         log "ERROR: rebuilt member count mismatch — expected=${EXPECTED} actual=${ACTUAL}"
         VALIDATE_FAIL=1
+        VALIDATE_REASONS+=("rebuilt member-count expected=${EXPECTED} actual=${ACTUAL}")
       fi
     fi
     if [ $VALIDATE_FAIL -eq 0 ] && \
@@ -300,10 +310,12 @@ if [ $VALIDATE_FAIL -ne 0 ] && [ "${SAVE_REBUILD_DONE:-0}" != "1" ] \
       log "ERROR: rebuilt archive STILL has forbidden content:"
       tail -20 /tmp/validate.log | sed 's/^/    /'
       VALIDATE_FAIL=1
+      VALIDATE_REASONS+=("rebuilt archive has forbidden payload member")
     fi
     [ $VALIDATE_FAIL -eq 0 ] && log "v6.36: rebuild SUCCEEDED — save proceeds (data loss avoided)"
   else
     log "ERROR: rebuild tar failed (rc=$RC)"; VALIDATE_FAIL=1
+    VALIDATE_REASONS+=("rebuild tar failed rc=${RC}")
   fi
 fi
 
@@ -314,7 +326,7 @@ if [ $VALIDATE_FAIL -ne 0 ]; then
   # three consecutive failures, and immediate messages here caused duplicate
   # VPSReport spam for one healthy server.
   {
-    printf 'archive validation failed: '
+    printf 'archive validation failed: %s. ' "${VALIDATE_REASONS[*]:-reason not recorded}"
     if [ -s /tmp/validate.log ]; then
       grep -E '^\[validate\] (members_total|FAIL)|^[[:space:]]+[^[:space:]]' /tmp/validate.log \
         | head -4 | tr '\n' ' '
