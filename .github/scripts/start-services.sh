@@ -37,7 +37,7 @@ retire_removed_ai_components() {
   # proxy to its retired port; leave all retained dashboard/Funnel config intact.
   local _serve_cfg
   _serve_cfg=$(mktemp)
-  if sudo tailscale serve get-config >"$_serve_cfg" 2>/dev/null; then
+  if sudo tailscale serve get-config --all >"$_serve_cfg" 2>/dev/null; then
     python3 - "$_serve_cfg" <<'PYRETIRE'
 import json, sys
 p = sys.argv[1]
