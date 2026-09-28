@@ -65,7 +65,7 @@ server {
     proxy_set_header Connection "upgrade";
 
     location = /portal { return 301 /portal/; }
-    location /portal/ { alias /var/www/public-webui/; index index.html; }
+    location = /portal/ { root /var/www/public-webui; try_files /index.html =404; }
 
     # 9router owns the public root, avoiding broken absolute static paths.
     location / { proxy_pass http://127.0.0.1:9121; }
