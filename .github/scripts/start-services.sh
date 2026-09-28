@@ -442,6 +442,15 @@ done
 # عمداً ۲۰۱۲۸ نیست: آن پورت در اختیار 9router است و هر چهار ایجنت به آن
 # وصل‌اند. دو دروازه کنار هم زندگی می‌کنند.
 ensure_omniroute() {
+  # The public OmniRoute UI lives below /omniroute/.  Keep its client-side
+  # canonical URL aligned with the Funnel hostname after a fresh runner boot.
+  _omni_fqdn=$(tailscale status --json 2>/dev/null | python3 -c '
+import json,sys
+try: print(json.load(sys.stdin).get("Self",{}).get("DNSName", "").rstrip("."))
+except Exception: pass' 2>/dev/null || true)
+  _omni_public_base=""
+  [ -n "${_omni_fqdn:-}" ] && _omni_public_base="https://${_omni_fqdn}/omniroute"
+
   command -v omniroute >/dev/null 2>&1 || {
     echo "[services] omniroute: not installed, installing"
     CI=1 OMNIROUTE_SKIP_POSTINSTALL=1 timeout 900 npm install -g omniroute \
@@ -485,11 +494,21 @@ NODE_ENV=production
 JWT_SECRET=${_jwt}
 API_KEY_SECRET=${_aks}
 INITIAL_PASSWORD=${DASHBOARD_PASSWORD:-hamidgh69}
-NEXT_PUBLIC_BASE_URL=http://127.0.0.1:20130
+NEXT_PUBLIC_BASE_URL=${_omni_public_base:-http://127.0.0.1:20130}
 APP_LOG_TO_FILE=false
 EOF
       chmod 600 /root/.omniroute/.env
     fi
+  fi
+  # Existing persisted runners may still contain the historic loopback URL.
+  # Canonicalise it before the unit starts, without touching any secret keys.
+  if [ -n "${_omni_public_base:-}" ]; then
+    if grep -q '^NEXT_PUBLIC_BASE_URL=' /root/.omniroute/.env; then
+      sed -i "s|^NEXT_PUBLIC_BASE_URL=.*|NEXT_PUBLIC_BASE_URL=${_omni_public_base}|" /root/.omniroute/.env
+    else
+      echo "NEXT_PUBLIC_BASE_URL=${_omni_public_base}" >> /root/.omniroute/.env
+    fi
+    chmod 600 /root/.omniroute/.env
   fi
   # نسخهٔ دوم از secretها، جدا از پوشهٔ دیتابیس — اگر آن پوشه آسیب ببیند
   # دست‌کم کلیدها برای بازگشایی دیتابیس باقی می‌مانند.
@@ -843,15 +862,14 @@ else
   echo "[services] tailscale_serve_guard.sh not found — guard skipped"
 fi
 
-# --- public Funnel facade: nginx Basic Auth before every internet route ---
-# The auth file is intentionally not generated here. It is created only during
-# the explicit, user-approved public deployment and then persisted in state.
-# If it is absent, the guard fails closed and never invents an internet password.
+# --- public Funnel facade: application-authenticated internet routes ---
+# Nginx only routes/proxies the public paths. Every published application owns
+# its own login screen, so no shared Nginx Basic Auth is generated or restored.
 if [ -f "$SCRIPT_DIR/public_webui_guard.sh" ]; then
   sudo install -m 0755 "$SCRIPT_DIR/public_webui_guard.sh" /usr/local/bin/public_webui_guard.sh
   sudo tee /etc/systemd/system/public-webui-guard.service >/dev/null <<'UNIT'
 [Unit]
-Description=Authenticated public web UI Funnel guard
+Description=Public web UI Funnel routing guard
 After=network-online.target tailscaled.service nginx.service
 Wants=network-online.target
 
@@ -861,7 +879,7 @@ ExecStart=/usr/local/bin/public_webui_guard.sh
 UNIT
   sudo tee /etc/systemd/system/public-webui-guard.timer >/dev/null <<'UNIT'
 [Unit]
-Description=Refresh authenticated public Funnel routes every two minutes
+Description=Refresh public Funnel routes every two minutes
 
 [Timer]
 OnBootSec=120

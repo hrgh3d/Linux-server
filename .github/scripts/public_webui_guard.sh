@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# Public, password-protected web entrypoints for the retained dashboards.
-# Funnel permits only 443, 8443 and 10000; nginx provides the auth boundary
-# and a small portal before any public route is enabled.
+# Public, application-authenticated web entrypoints for the retained dashboards.
+# Funnel permits only 443, 8443 and 10000. Each exposed application owns its
+# own login; Nginx is only the reverse-proxy/path-routing layer.
 set -uo pipefail
 
-AUTH=/etc/nginx/.htpasswd-public-webui
 SITE=/etc/nginx/sites-available/public-webui
 ENABLED=/etc/nginx/sites-enabled/public-webui
 PORTAL=/var/www/public-webui
 LOG=/var/log/public-webui-guard.log
+LEGACY_AUTH=/etc/nginx/.htpasswd-public-webui
 say() { printf '[%s] %s\n' "$(date -u '+%F %T')" "$*" >>"$LOG"; }
 
-# Fail closed: the credential file is created once during the explicit deploy
-# and persisted in the broad state. This guard never invents a public password.
-[ -s "$AUTH" ] || { say 'public auth file absent — Funnel unchanged'; exit 0; }
 command -v nginx >/dev/null 2>&1 || { say 'nginx absent — Funnel unchanged'; exit 0; }
 command -v tailscale >/dev/null 2>&1 || { say 'tailscale absent — Funnel unchanged'; exit 0; }
 
@@ -24,8 +21,8 @@ try: print(json.load(sys.stdin).get("Self",{}).get("DNSName", "").rstrip("."))
 except Exception: pass' 2>/dev/null)
 [ -n "$TSIP" ] && [ -n "$FQDN" ] || { say 'Tailscale identity unavailable — Funnel unchanged'; exit 0; }
 
-# Do not publish a stale/error page. All retained backends must first answer
-# locally; app-level authentication responses are intentionally accepted.
+# Do not publish a stale/error page. App-level authentication responses are
+# valid readiness responses because the application, not Nginx, owns login.
 ready() {
   local url="$1" code
   code=$(curl -ksS -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 "$url" 2>/dev/null || true)
@@ -41,21 +38,19 @@ mkdir -p "$PORTAL" /etc/nginx/sites-available /etc/nginx/sites-enabled
 cat >"$PORTAL/index.html" <<EOF
 <!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hamid Web UI</title>
 <style>body{max-width:760px;margin:3rem auto;padding:0 1rem;font:16px/1.8 system-ui;background:#10151f;color:#edf2f7}a{display:block;margin:12px 0;padding:14px 16px;background:#1f2a3a;color:#9fe3ff;border-radius:10px;text-decoration:none}small{color:#aab7c7}</style>
-<h1>ورود عمومی امن</h1><p>همهٔ مسیرها ابتدا با نام کاربری و رمز Nginx محافظت می‌شوند.</p>
+<h1>ورود به پنل‌ها</h1><p>هر پنل احراز هویت داخلی خودش را دارد؛ Nginx رمز جداگانه‌ای نمایش نمی‌دهد.</p>
 <a href="/">9router</a><a href="/hermes-dashboard/">Hermes Dashboard</a><a href="/omniroute/">OmniRoute</a>
-<a href="https://${FQDN}:8443/">CloudCLI</a><a href="https://${FQDN}:10000/">Hermes Serve</a>
-<small>بعضی اپ‌ها ممکن است پس از دروازهٔ Nginx، ورود داخلی خودشان را نیز نمایش دهند.</small>
+<a href="https://${FQDN}:8443/">CloudCLI</a><a href="https://${FQDN}:10000/">Hermes Server</a>
+<small>برای اطلاعات ورود داخلی هر برنامه، فایل WEBUI-ACCESS.md را ببینید.</small>
 </html>
 EOF
 
 cat >"$SITE" <<'NGINX'
-# Managed by /usr/local/bin/public_webui_guard.sh. Do not place credentials here.
-# All public paths are protected by the separate 0600 htpasswd file.
+# Managed by /usr/local/bin/public_webui_guard.sh.
+# Do not add auth_basic here: every public app has its own authentication.
 server {
     listen 127.0.0.1:10443;
     server_name _;
-    auth_basic "Hamid Public Web UI";
-    auth_basic_user_file /etc/nginx/.htpasswd-public-webui;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -67,21 +62,17 @@ server {
     location = /portal { return 301 /portal/; }
     location = /portal/ {
         default_type text/html;
-        return 200 '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><title>Hamid Web UI</title><style>body{max-width:700px;margin:3rem auto;padding:0 1rem;font:16px/1.8 system-ui;background:#10151f;color:#edf2f7}a{display:block;margin:12px 0;padding:14px;background:#1f2a3a;color:#9fe3ff;border-radius:10px;text-decoration:none}</style><h1>ورود عمومی امن</h1><a href="/">9router</a><a href="/hermes-dashboard/">Hermes Dashboard</a><a href="/omniroute/">OmniRoute</a><a href="https://$host:8443/">CloudCLI</a><a href="https://$host:10000/">Hermes Serve</a></html>';
+        return 200 '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><title>Hamid Web UI</title><style>body{max-width:700px;margin:3rem auto;padding:0 1rem;font:16px/1.8 system-ui;background:#10151f;color:#edf2f7}a{display:block;margin:12px 0;padding:14px;background:#1f2a3a;color:#9fe3ff;border-radius:10px;text-decoration:none}</style><h1>ورود به پنل‌ها</h1><p>هر پنل رمز داخلی خود را دارد؛ Nginx رمز جداگانه‌ای ندارد.</p><a href="/">9router</a><a href="/hermes-dashboard/">Hermes Dashboard</a><a href="/omniroute/">OmniRoute</a><a href="https://$host:8443/">CloudCLI</a><a href="https://$host:10000/">Hermes Server</a></html>';
     }
 
     # 9router owns the public root, avoiding broken absolute static paths.
     location / { proxy_pass http://127.0.0.1:9121; }
 
-    # These applications remain available under explicit paths. The proxy strips
-    # the public prefix and rewrites common HTML links/redirects to that prefix.
     location = /hermes-dashboard { return 301 /hermes-dashboard/; }
     location /hermes-dashboard/ {
         proxy_set_header X-Forwarded-Prefix /hermes-dashboard;
         proxy_set_header Accept-Encoding "";
         proxy_pass http://127.0.0.1:9120/;
-        # Hermes already honors X-Forwarded-Prefix. Rewrite only the backend
-        # scheme/port, never add the path prefix a second time.
         proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
         proxy_redirect ~^(/.*)$ https://$host$1;
         sub_filter_once off;
@@ -89,27 +80,51 @@ server {
         sub_filter 'href="/' 'href="/hermes-dashboard/';
         sub_filter 'src="/' 'src="/hermes-dashboard/';
     }
+
     location = /omniroute { return 301 /omniroute/; }
     location /omniroute/ {
         proxy_set_header X-Forwarded-Prefix /omniroute;
         proxy_set_header Accept-Encoding "";
         proxy_pass http://127.0.0.1:20130/;
-        # OmniRoute does not always honor a forwarded prefix, so preserve it
-        # when a relative redirect is returned.
         proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
         proxy_redirect ~^/(.*)$ https://$host/omniroute/$1;
+
+        # OmniRoute is a Next.js SPA. Its initial HTML is easy to prefix, but
+        # its chunks also emit root-relative /api, /_next and navigation URLs.
+        # Without these rewrites a browser requests 9router at the public root
+        # and remains on the OmniRoute loading screen.
         sub_filter_once off;
         sub_filter_types text/html text/css application/javascript;
+        sub_filter 'window.location.origin' 'window.location.origin+"/omniroute"';
         sub_filter 'href="/' 'href="/omniroute/';
         sub_filter 'src="/' 'src="/omniroute/';
+        sub_filter '"/_next/' '"/omniroute/_next/';
+        sub_filter "'/_next/" "'/omniroute/_next/";
+        sub_filter '`/_next/' '`/omniroute/_next/';
+        sub_filter '"/api/' '"/omniroute/api/';
+        sub_filter "'/api/" "'/omniroute/api/";
+        sub_filter '`/api/' '`/omniroute/api/';
+        sub_filter '"/dashboard' '"/omniroute/dashboard';
+        sub_filter "'/dashboard" "'/omniroute/dashboard";
+        sub_filter '`/dashboard' '`/omniroute/dashboard';
+        sub_filter '"/login' '"/omniroute/login';
+        sub_filter "'/login" "'/omniroute/login";
+        sub_filter '`/login' '`/omniroute/login';
+        sub_filter '"/forgot-password' '"/omniroute/forgot-password';
+        sub_filter "'/forgot-password" "'/omniroute/forgot-password";
+        sub_filter '`/forgot-password' '`/omniroute/forgot-password';
+        sub_filter '"/providers/' '"/omniroute/providers/';
+        sub_filter "'/providers/" "'/omniroute/providers/";
+        sub_filter '`/providers/' '`/omniroute/providers/';
+        sub_filter '"/sw.js' '"/omniroute/sw.js';
+        sub_filter "'/sw.js" "'/omniroute/sw.js";
+        sub_filter '`/sw.js' '`/omniroute/sw.js';
     }
 }
 
 server {
     listen 127.0.0.1:18443;
     server_name _;
-    auth_basic "Hamid Public CloudCLI";
-    auth_basic_user_file /etc/nginx/.htpasswd-public-webui;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -123,8 +138,6 @@ server {
 server {
     listen 127.0.0.1:11000;
     server_name _;
-    auth_basic "Hamid Public Hermes";
-    auth_basic_user_file /etc/nginx/.htpasswd-public-webui;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -136,9 +149,10 @@ server {
 }
 NGINX
 sed -i "s/__HERMES_TSIP__/${TSIP}/g" "$SITE"
-# nginx workers must read the verifier but no non-web user may edit it.
-chown root:www-data "$AUTH" 2>/dev/null || chown root:root "$AUTH"
-chmod 640 "$AUTH"
+
+# The old public Nginx verifier is intentionally retired: authentication now
+# happens inside every listed application.
+rm -f "$LEGACY_AUTH"
 ln -sfn "$SITE" "$ENABLED"
 nginx -t >/dev/null 2>&1 || { say 'nginx validation failed — Funnel unchanged'; exit 1; }
 systemctl reload nginx >/dev/null 2>&1 || { say 'nginx reload failed — Funnel unchanged'; exit 1; }

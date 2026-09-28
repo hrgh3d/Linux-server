@@ -87,7 +87,7 @@ jobs:
       # v6.13: ربات «گزارش سیستم» جدا از ربات Hermes Gateway است؛ notify.sh
       # برای هشدارها اولویت را به REPORT_BOT_TOKEN می‌دهد.
       REPORT_BOT_TOKEN: ${{ secrets.REPORT_BOT_TOKEN || '' }}
-      # v6.10: رمز داشبورد Hermes (nginx basic-auth در dashboard_guard.sh)
+      # رمز اولیه/داخلی پنل‌ها؛ Nginx Basic Auth برای WebUIهای عمومی استفاده نمی‌شود.
       DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD || '' }}
       NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || '' }}
       # v6.11: کانال هشدار مستقیم تلگرام (بدون وبهوک) — notify.sh از این استفاده می‌کند
@@ -188,8 +188,8 @@ jobs:
         # v6.10: secretها در آرشیو state خالی‌اند؛ مقدار واقعی از Secrets تزریق می‌شود
         run: bash .github/scripts/secrets_inject.sh
 
-      - name: Dashboard auth guard (nginx basic-auth front)
-        # v6.10: داشبورد پشت Basic Auth می‌رود (nginx :9119 -> dashboard :9120)
+      - name: Dashboard reverse-proxy guard (application auth)
+        # Nginx فقط reverse proxy است؛ ورود با خود Hermes انجام می‌شود.
         timeout-minutes: 10
         run: bash .github/scripts/dashboard_guard.sh
 
