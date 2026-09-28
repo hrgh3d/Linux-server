@@ -72,6 +72,10 @@ server {
     location /hermes-dashboard/ {
         proxy_set_header X-Forwarded-Prefix /hermes-dashboard;
         proxy_set_header Accept-Encoding "";
+        # These responses are rewritten per public prefix; do not let an older
+        # root-path JavaScript chunk remain immutable in a browser cache.
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store, max-age=0" always;
         proxy_pass http://127.0.0.1:9120/;
         proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
         proxy_redirect ~^(/.*)$ https://$host$1;
@@ -92,6 +96,9 @@ server {
     location /omniroute/ {
         proxy_set_header X-Forwarded-Prefix /omniroute;
         proxy_set_header Accept-Encoding "";
+        # Chunks are rewritten below, so serve the public representation fresh.
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store, max-age=0" always;
         proxy_pass http://127.0.0.1:20130/;
         proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
         proxy_redirect ~^/(.*)$ https://$host/omniroute/$1;
