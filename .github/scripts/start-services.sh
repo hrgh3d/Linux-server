@@ -56,7 +56,7 @@ try:
 except Exception:
     pass
 PYRETIRE
-    sudo tailscale serve set-config "$_serve_cfg" >/dev/null 2>&1 || true
+    sudo tailscale serve set-config --all "$_serve_cfg" >/dev/null 2>&1 || true
   fi
   rm -f "$_serve_cfg"
   # They were installed globally with npm on earlier runners. Removal is
