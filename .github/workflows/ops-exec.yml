@@ -15,6 +15,9 @@ jobs:
       # برای ویرایش سیاست tailnet (فعال کردن Funnel روی همهٔ گره‌ها).
       # تأیید تک‌گره بی‌فایده است: هر تعویض رانر یک گره تازه می‌سازد.
       TS_API: ${{ secrets.TAILSCALE_API_TOKEN }}
+      # Used only for explicit, audited state operations. It is substituted into
+      # stdin after the public cmd_b64 has been logged, never printed.
+      PERSIST_TOKEN: ${{ secrets.PERSIST_TOKEN }}
     steps:
       - name: exec on server
         shell: bash
@@ -25,6 +28,7 @@ jobs:
           set -uo pipefail
           echo "::add-mask::$SSH_PASS"
           [ -n "${TS_API:-}" ] && echo "::add-mask::$TS_API"
+          [ -n "${PERSIST_TOKEN:-}" ] && echo "::add-mask::$PERSIST_TOKEN"
           sudo apt-get update -y >/dev/null 2>&1
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
           if ! sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online == true' >/dev/null 2>&1; then
@@ -41,6 +45,7 @@ jobs:
           SUBS=$(grep -c "__HAMID_PASSWORD__" /tmp/remote.sh || true)
           sed -i "s|__HAMID_PASSWORD__|${SSH_PASS}|g" /tmp/remote.sh
           sed -i "s|__TS_API__|${TS_API:-}|g" /tmp/remote.sh
+          sed -i "s|__PERSIST_TOKEN__|${PERSIST_TOKEN:-}|g" /tmp/remote.sh
           echo "[ops-exec] secret placeholder substitutions: ${SUBS}"
           sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'bash -s' < /tmp/remote.sh 2>&1 | tail -120
           echo "=== OPS-EXEC DONE ==="

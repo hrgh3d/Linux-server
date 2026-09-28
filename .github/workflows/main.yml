@@ -45,14 +45,12 @@ on:
     - cron: '7 * * * *'          # هر ساعت (UTC)
   repository_dispatch:
 
-# concurrency بر اساس trigger جدا شده است تا Manual Dispatch پشت Cron در صف
-# نماند. cancel-in-progress عمداً false است (Cron نباید خودکار یک سرور Manual را
-# بکشد)؛ کنترل با قدم «Single-instance coordination» انجام می‌شود:
-#   manual -> سایر runها (auto و manual) را Cancel می‌کند
-#   auto   -> اگر Manual در حال اجراست خودش Cancel می‌شود؛ وگرنه auto قدیمی را
-#             Cancel (جایگزین) می‌کند تا فقط یک سرور فعال باشد.
+# همهٔ Runها یک صف مشترک دارند. جابه‌جایی runner فقط بعد از checkpoint نهاییِ
+# Hermes انجام می‌شود؛ بنابراین هیچ Run جدیدی نباید Run قبلی را Cancel کند.
+# این کار ممکن است چند دقیقه زمان انتظار ایجاد کند، اما از بالا آمدن با مکالمهٔ
+# ناقص یا خالی مهم‌تر است.
 concurrency:
-  group: linux-server-${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+  group: linux-server-continuity
   cancel-in-progress: false
 
 jobs:
@@ -105,97 +103,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Single-instance coordination (manual preempts auto)
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Single-instance coordination (non-destructive)
         run: |
-          python3 - "$GH_TOKEN" "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" "$GITHUB_REPOSITORY" <<'PY'
-          import json, os, sys, time, urllib.request, urllib.error, datetime
-          tok, run_id, event, repo = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-          api = "https://api.github.com"
-          def req(method, path):
-              r = urllib.request.Request(api + path, method=method, headers={
-                  "Authorization": "Bearer " + tok,
-                  "Accept": "application/vnd.github+json",
-                  "User-Agent": "linux-server-coord",
-              })
-              try:
-                  with urllib.request.urlopen(r, timeout=30) as resp:
-                      raw = resp.read()
-                      return json.loads(raw) if raw else {}
-              except urllib.error.HTTPError as e:
-                  print(f"[coord] HTTP {e.code} on {method} {path}", flush=True)
-                  return {}
-          def list_runs(status):
-              runs, page = [], 1
-              while True:
-                  d = req("GET", f"/repos/{repo}/actions/workflows/main.yml/runs?status={status}&per_page=100&page={page}")
-                  arr = d.get("workflow_runs", [])
-                  runs += arr
-                  if len(arr) < 100:
-                      break
-                  page += 1
-              return runs
-          def run_age_minutes(r):
-              """Minutes since the run started (or was created). None if unknown."""
-              for k in ("run_started_at", "created_at"):
-                  v = r.get(k)
-                  if v:
-                      try:
-                          ts = datetime.datetime.fromisoformat(v.replace("Z", "+00:00"))
-                          return (datetime.datetime.now(datetime.timezone.utc) - ts).total_seconds() / 60.0
-                      except Exception:
-                          return None
-              return None
-          others = []
-          for st in ("in_progress", "queued"):
-              for r in list_runs(st):
-                  if r.get("id") != int(run_id):
-                      others.append(r)
-          mine_event = event
-          is_auto = mine_event in ("schedule", "repository_dispatch")
-          print(f"[coord] run={run_id} event={mine_event} others_in_progress_or_queued={len(others)}", flush=True)
-          if not is_auto:
-              # workflow_dispatch: manual preempts everything else
-              for r in others:
-                  print(f"[coord] manual cancelling run {r['id']} ({r.get('event')}) ...", flush=True)
-                  req("POST", f"/repos/{repo}/actions/runs/{r['id']}/cancel")
-          else:
-              manuals = [r for r in others if r.get("event") == "workflow_dispatch"]
-              # v6.9.2: zombie protection. A healthy manual run always finishes
-              # well before the 360m job timeout (lifetime <=355m + final save).
-              # An in_progress manual older than that is STUCK (e.g. hung inside
-              # a step) — yielding to it would keep the server down for hours
-              # (see 2026-09-10 incident: 07:51 run hung, blocked all auto runs,
-              # 7h+ outage). Cancel zombies, only yield to young/queued manuals.
-              ZOMBIE_MIN = 375
-              zombies, alive = [], []
-              for r in manuals:
-                  if r.get("status") == "in_progress":
-                      age = run_age_minutes(r)
-                      if age is not None and age > ZOMBIE_MIN:
-                          zombies.append((r, age))
-                          continue
-                  alive.append(r)
-              for r, age in zombies:
-                  print(f"[coord] manual run {r['id']} stuck {int(age)}min (> {ZOMBIE_MIN}) — zombie, cancelling", flush=True)
-                  req("POST", f"/repos/{repo}/actions/runs/{r['id']}/cancel")
-              if alive:
-                  print("[coord] auto run yields to manual — self-cancelling", flush=True)
-                  req("POST", f"/repos/{repo}/actions/runs/{run_id}/cancel")
-                  for _ in range(20):
-                      time.sleep(3)
-                      d = req("GET", f"/repos/{repo}/actions/runs/{run_id}")
-                      if d.get("status") == "completed":
-                          break
-                  print("[coord] self-cancelled", flush=True)
-                  sys.exit(3)
-              autos = [r for r in others if r.get("event") in ("schedule", "repository_dispatch")]
-              for r in sorted(autos, key=lambda x: x.get("created_at", "")):
-                  print(f"[coord] auto replacing older auto run {r['id']} ({r.get('event')}) ...", flush=True)
-                  req("POST", f"/repos/{repo}/actions/runs/{r['id']}/cancel")
-          print("[coord] proceeding", flush=True)
-          PY
+          # GitHub concurrency is the lock. Do not cancel another runner here:
+          # it may still be writing the verified Hermes handoff checkpoint.
+          echo "[coord] shared continuity queue acquired for run ${GITHUB_RUN_ID} (${GITHUB_EVENT_NAME})"
 
       - name: Init boot context
         run: |
@@ -265,6 +177,13 @@ jobs:
         timeout-minutes: 30
         run: bash .github/scripts/restore.sh apply
 
+      - name: Restore verified Hermes conversation continuity
+        # Must happen while every Hermes service is still stopped. If neither the
+        # dedicated archive nor a valid generic-restored state exists, fail closed
+        # instead of creating a new empty chat history.
+        timeout-minutes: 3
+        run: timeout 90 bash .github/scripts/hermes_continuity.sh restore
+
       - name: Inject externalized secrets (Telegram bot token)
         # v6.10: secretها در آرشیو state خالی‌اند؛ مقدار واقعی از Secrets تزریق می‌شود
         run: bash .github/scripts/secrets_inject.sh
@@ -277,6 +196,13 @@ jobs:
       - name: Start persistent apps (Hermes dashboard/tunnel/gateway)
         timeout-minutes: 30
         run: bash .github/scripts/start-services.sh
+
+      - name: Establish verified Hermes continuity checkpoint
+        # The first run after this feature is deployed may use the already
+        # validated generic state once; from here onward Hermes has its own
+        # compact, independently verified rollback chain.
+        timeout-minutes: 3
+        run: timeout 90 bash .github/scripts/hermes_continuity.sh checkpoint
 
       - name: 9router panel password guard (persist across runners)
         # v6.20: رمز پنل 9router (bcrypt در settings.data داخل SQLite) در هر بوت
@@ -390,6 +316,9 @@ jobs:
           if [ "$LIFETIME_MIN" -gt 355 ]; then LIFETIME_MIN=355; fi
           echo "Server lifetime: ${LIFETIME_MIN} minutes (root-first) - v6.9 early successor"
           INTERVAL=$(( ${SAVE_INTERVAL_MIN:-5} * 60 ))
+          # Conversation state is small and is checkpointed independently every
+          # minute, even while the large generic archive is being produced.
+          CHECKPOINT_INTERVAL=60
           CONSEC=0
           check_tailscale() {
             local _on _ip _derp
@@ -428,6 +357,55 @@ jobs:
           do_save() {
             if timeout 300 bash "$SCRIPT_DIR/save.sh"; then return 0; else return 1; fi
           }
+          do_continuity_checkpoint() {
+            # The script hashes the compact live Hermes state first, so an idle
+            # minute makes no upload. A real change is copied with SQLite's
+            # online-backup API, verified, then uploaded as an independent asset.
+            timeout 90 bash "$SCRIPT_DIR/hermes_continuity.sh" checkpoint "$@"
+          }
+          PULSE_PID=""
+          start_continuity_pulse() {
+            (
+              failures=0
+              while :; do
+                echo "[continuity $(date -u '+%T')] checkpoint scan..."
+                if do_continuity_checkpoint; then
+                  failures=0
+                else
+                  failures=$((failures + 1))
+                  echo "[continuity] checkpoint FAILED (consecutive=${failures})"
+                  if [ "$failures" -ge 2 ]; then
+                    bash "$SCRIPT_DIR/notify.sh" --type backup --stage hermes-continuity \
+                      --error "Hermes continuity checkpoint failed twice; final handoff will require a verified copy." || true
+                    failures=0
+                  fi
+                fi
+                sleep "$CHECKPOINT_INTERVAL"
+              done
+            ) &
+            PULSE_PID=$!
+            echo "[continuity] independent 60-second checkpoint pulse started (pid=${PULSE_PID})"
+          }
+          stop_continuity_pulse() {
+            [ -n "${PULSE_PID:-}" ] || return 0
+            kill "$PULSE_PID" >/dev/null 2>&1 || true
+            wait "$PULSE_PID" >/dev/null 2>&1 || true
+            PULSE_PID=""
+          }
+          final_handoff() {
+            stop_continuity_pulse
+            echo "[continuity] quiescing Hermes for final verified handoff..."
+            # Stop writers before the final backup. A queued successor cannot
+            # start because the shared GitHub concurrency lock is still held.
+            XDG_RUNTIME_DIR=/run/user/0 systemctl --user stop hermes-gateway.service >/dev/null 2>&1 || true
+            systemctl stop hermes-serve.service >/dev/null 2>&1 || true
+            if do_continuity_checkpoint --handoff; then
+              echo "[continuity] FINAL VERIFIED HANDOFF OK"
+              return 0
+            fi
+            echo "[continuity] FINAL HANDOFF FAILED — no empty-state successor may start"
+            return 1
+          }
           dispatch_successor() {
             # v6.10: اولویت با GITHUB_TOKEN خودِ ران (لو نمی‌رود، rotate لازم
             # ندارد؛ job permission actions:write دارد). SUCCESSOR_TOKEN فقط
@@ -446,16 +424,22 @@ jobs:
             [ "$_code" = "204" ]
           }
           final_save() {
-            echo "[keepalive] final save..."
-            if do_save; then echo "[save] FINAL OK"; return 0; fi
-            echo "[save] FINAL FAILED"
+            # Broad DR state is useful but never substitutes for the Hermes
+            # handoff archive. It is deliberately attempted before writers are
+            # stopped; failure here does not permit a continuity loss.
+            echo "[keepalive] final broad state save..."
+            if do_save; then echo "[save] broad FINAL OK"; return 0; fi
+            echo "[save] broad FINAL FAILED (continuity handoff still required)"
             return 1
           }
           flush_on_signal() {
-            echo "[keepalive] termination signal — running final save..."
-            final_save
+            # GitHub cancellation gives limited grace time: protect the compact
+            # conversation checkpoint first, not the multi-gigabyte DR archive.
+            echo "[keepalive] termination signal — final Hermes handoff..."
+            final_handoff
           }
-          trap 'flush_on_signal || exit 1; exit 0' TERM INT QUIT HUP
+          trap 'stop_continuity_pulse; flush_on_signal || exit 1; exit 0' TERM INT QUIT HUP
+          start_continuity_pulse
           END_TS=$(( $(date +%s) + LIFETIME_MIN * 60 ))
           # v6.9.3: clamp END_TS so the run ALWAYS finishes before the 360m job
           # timeout, even when boot steps take longer than usual (2026-09-10:
@@ -514,7 +498,7 @@ jobs:
               fi
             fi
             if [ $(( NOW - LAST_AUTO )) -ge "$INTERVAL" ]; then
-              echo "[auto-sync $(date -u '+%T')] periodic save..."
+              echo "[auto-sync $(date -u '+%T')] periodic broad save..."
               if do_save; then
                 echo "[auto-sync] OK"
                 CONSEC=0
@@ -539,13 +523,17 @@ jobs:
             fi
             sleep 3
           done
-          echo "[keepalive] lifetime reached — final save"
-          if final_save; then
-            echo "[keepalive] done."
-          else
+          echo "[keepalive] lifetime reached — final broad save then Hermes handoff"
+          if ! final_save; then
             bash "$SCRIPT_DIR/notify.sh" --type backup --stage final-save \
-              --error "final save at lifetime end FAILED (last healthy state kept). اگر 401/Unauthorized بود توکن PERSIST_TOKEN را عوض کن — جانشین از state قدیمی‌تر بالا می‌آید." || true
-            echo "[keepalive] ERROR: final save failed"
+              --error "Broad final snapshot failed; Hermes handoff checkpoint is still required and is attempted next." || true
+          fi
+          if final_handoff; then
+            echo "[keepalive] done: successor may restore the verified Hermes checkpoint."
+          else
+            bash "$SCRIPT_DIR/notify.sh" --type backup --stage hermes-final-handoff \
+              --error "Final Hermes continuity checkpoint failed; no runner may start with an empty Hermes state." || true
+            echo "[keepalive] ERROR: final Hermes handoff failed"
             exit 1
           fi
 

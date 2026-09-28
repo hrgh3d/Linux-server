@@ -82,6 +82,9 @@ PRUNE_ABS_DIRS = [
 PRUNE_ABS_FILES = [
     "usr/local/x-ui/x-ui",
     "usr/local/x-ui/mtg",
+    # Hermes secrets are held by env_vault under /var/lib/hermes-guard. Never
+    # mutate the live .env while archiving just to hide tokens from state.
+    "root/.hermes/.env",
 ]
 
 # /etc host/image transient entries never stored.

@@ -29,9 +29,19 @@ import json
 
 API = "https://api.github.com"
 UPLOADS = "https://uploads.github.com"
-RETRIES = 4
-CONNECT_TIMEOUT = 15
-READ_TIMEOUT = 120
+# A small continuity checkpoint may override these through the environment; the
+# broad DR archive keeps the established defaults. Values are bounded so a bad
+# environment cannot leave a runner waiting indefinitely.
+def _env_int(name, default, low, high):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+RETRIES = _env_int("PERSIST_RETRIES", 4, 1, 6)
+CONNECT_TIMEOUT = _env_int("PERSIST_CONNECT_TIMEOUT", 15, 3, 60)
+READ_TIMEOUT = _env_int("PERSIST_READ_TIMEOUT", 120, 10, 300)
 USER_AGENT = "Linux-server-persist-agent-v4"
 
 
@@ -130,9 +140,21 @@ def ensure_release(repo, tag, token):
     return _request("POST", url, token, body=body)
 
 
-def _asset_is_state(a):
+def _asset_is_state(a, kind="state"):
+    """Return True only for archives belonging to one logical persistence stream."""
     name = a.get("name", "")
-    return name == "state.tar.gz" or (name.startswith("state-") and name.endswith(".tar.gz"))
+    # state.tar.gz is the legacy name used by early broad backups. It must not
+    # be selected by the Hermes continuity stream.
+    if kind == "state" and name == "state.tar.gz":
+        return True
+    return name.startswith(kind + "-") and name.endswith(".tar.gz")
+
+
+def _kind(value):
+    value = (value or "state").strip().lower()
+    if not value or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in value):
+        raise RuntimeError(f"invalid persistence kind: {value!r}")
+    return value
 
 
 def delete_asset(repo, asset_id, token):
@@ -176,20 +198,25 @@ def verify_asset(repo, asset_id, token, digest, size):
         return False
 
 
-def download(repo, tag, dest_file, token):
+def download(repo, tag, dest_file, token, kind="state"):
     print(f"[persist] checking state release '{tag}' in {repo} ...")
     rel = get_release(repo, tag, token)
     if not rel:
         print(f"[persist] no release '{tag}' found (fresh state expected)")
         return False
-    assets = [a for a in rel.get("assets", []) if _asset_is_state(a)]
+    assets = [a for a in rel.get("assets", []) if _asset_is_state(a, kind)]
     if not assets:
         print(f"[persist] no state asset on release '{tag}' (fresh state expected)")
         return False
-    # newest first by created_at
+    # Newest first by created_at. A continuity restore may request a previous
+    # verified asset when its newest local validation rejects an archive.
     assets.sort(key=lambda a: a.get("created_at", ""), reverse=True)
-    target = assets[0]
-    print(f"[persist] newest state asset: {target['name']} "
+    offset = _env_int("PERSIST_DOWNLOAD_OFFSET", 0, 0, 8)
+    if offset >= len(assets):
+        print(f"[persist] no {kind} asset at rollback offset {offset}", file=sys.stderr)
+        return False
+    target = assets[offset]
+    print(f"[persist] selected {kind} asset offset={offset}: {target['name']} "
           f"({target.get('size', 0)} bytes, created {target.get('created_at')})")
     url = target["url"]
     try:
@@ -211,7 +238,7 @@ def download(repo, tag, dest_file, token):
     return True
 
 
-def upload(repo, tag, src_file, token):
+def upload(repo, tag, src_file, token, kind="state"):
     if not os.path.isfile(src_file):
         print(f"[persist] source file not found: {src_file}", file=sys.stderr)
         return False
@@ -223,7 +250,7 @@ def upload(repo, tag, src_file, token):
     assets = rel.get("assets", [])
 
     # 1) Skip upload if identical content already persisted (no new backup).
-    existing = [a for a in assets if _asset_is_state(a)]
+    existing = [a for a in assets if _asset_is_state(a, kind)]
     for a in existing:
         if digest.startswith(a.get("name", "")[-24:].replace(".tar.gz", "")) or \
                 digest[:8] in a.get("name", ""):
@@ -231,7 +258,7 @@ def upload(repo, tag, src_file, token):
             return True
 
     # 2) Upload under a unique name (never collides with previous assets).
-    name = f"state-{now_utc()}-{digest[:8]}.tar.gz"
+    name = f"{kind}-{now_utc()}-{digest[:8]}.tar.gz"
     upload_url = rel["upload_url"].split("{")[0]
     url = f"{upload_url}?name={name}"
     print(f"[persist] uploading {name} ({size} bytes) ...")
@@ -256,18 +283,21 @@ def upload(repo, tag, src_file, token):
             delete_asset(repo, new_id, token)  # best effort cleanup
         return False
 
-    # 3) Purge old state assets — keep the newest (just uploaded) PLUS the
-    #    previous one as a rollback safety net (v6.10: keep-2 instead of
-    #    keep-1; a corrupted/undesired latest state can still be recovered).
+    # 3) Purge only this stream's old assets. Keep the confirmed new copy plus
+    #    a configurable number of previous verified archives for rollback.
+    try:
+        keep_previous = max(1, min(8, int(os.environ.get("PERSIST_KEEP_PREVIOUS", "1"))))
+    except ValueError:
+        keep_previous = 1
     keep_ids = {new_id}
     older = [a for a in assets
-             if a.get("id") != new_id and _asset_is_state(a) and a.get("id")]
+             if a.get("id") != new_id and _asset_is_state(a, kind) and a.get("id")]
     older.sort(key=lambda a: a.get("created_at", ""), reverse=True)
-    if older:
-        keep_ids.add(older[0].get("id"))
-        print(f"[persist] keeping previous asset '{older[0]['name']}' as rollback copy")
+    for prior in older[:keep_previous]:
+        keep_ids.add(prior.get("id"))
+        print(f"[persist] keeping rollback asset '{prior['name']}'")
     for a in assets:
-        if a.get("id") in keep_ids or not _asset_is_state(a):
+        if a.get("id") in keep_ids or not _asset_is_state(a, kind):
             continue
         # never delete an asset whose digest matches ours (already covered by skip)
         print(f"[persist] purging stale asset '{a['name']}' (id {a['id']})")
@@ -277,9 +307,24 @@ def upload(repo, tag, src_file, token):
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: state_sync.py <download|upload> <file_path>", file=sys.stderr)
+        print("Usage: state_sync.py <download|upload> <file_path> [--kind state|hermes]", file=sys.stderr)
         sys.exit(2)
     action, file_path = sys.argv[1], sys.argv[2]
+    if action not in ("download", "upload"):
+        print(f"[persist] ERROR: unknown action {action!r}", file=sys.stderr)
+        sys.exit(2)
+    raw_kind = os.environ.get("PERSIST_KIND", "state")
+    rest = sys.argv[3:]
+    if rest:
+        if len(rest) != 2 or rest[0] != "--kind":
+            print("Usage: state_sync.py <download|upload> <file_path> [--kind state|hermes]", file=sys.stderr)
+            sys.exit(2)
+        raw_kind = rest[1]
+    try:
+        kind = _kind(raw_kind)
+    except RuntimeError as exc:
+        print(f"[persist] ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
     token = os.environ.get("PERSIST_TOKEN") or os.environ.get("GH_TOKEN") or \
         os.environ.get("GITHUB_TOKEN")
     repo = os.environ.get("PERSIST_REPO") or "hrgh3d/Linux-server-state"
@@ -287,7 +332,8 @@ def main():
     if not token:
         print("[persist] ERROR: no token (set PERSIST_TOKEN/GH_TOKEN)", file=sys.stderr)
         sys.exit(1)
-    ok = (download if action == "download" else upload)(repo, tag, file_path, token)
+    operation = download if action == "download" else upload
+    ok = operation(repo, tag, file_path, token, kind)
     sys.exit(0 if ok else 1)
 
 
