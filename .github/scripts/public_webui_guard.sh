@@ -78,7 +78,11 @@ server {
         # and API base to the dedicated /cloudcli prefix.
         sub_filter_once off;
         sub_filter_types text/css application/javascript application/json;
-        sub_filter 'window.location.origin' 'window.location.origin+"/cloudcli"';
+        # CloudCLI detects its own base path from its loaded /cloudcli/assets
+        # files. Do not alter window.location.origin: it is a real URL origin,
+        # and changing it to an origin-plus-path breaks that detection after login.
+        sub_filter '"/health"' '"/cloudcli/health"';
+        sub_filter '"/logo.svg"' '"/cloudcli/logo.svg"';
         sub_filter 'href="/' 'href="/cloudcli/';
         sub_filter 'src="/' 'src="/cloudcli/';
         sub_filter '"/assets/' '"/cloudcli/assets/';
