@@ -282,11 +282,12 @@ jobs:
             if run_snapshot; then
               :
             else
-              # v6.11: غیرکشنده — اگر توکن state مرده باشد، سرور باید بالای بماند و
-              # زنجیرهٔ جانشین ادامه پیدا کند؛ فقط هشدار می‌دهیم و بوت را ادامه می‌دهیم.
+              # غیرکشنده: خطای state به معنی قطع سرویس نیست. save.sh یک شرح
+              # کوتاه و بدون secret می‌نویسد تا گزارش، علت واقعی را نشان دهد.
+              DETAIL="$(tr '\n' ' ' </tmp/persist-last-error.txt 2>/dev/null | head -c 500 || true)"
               bash .github/scripts/notify.sh --type backup --stage initial-snapshot \
-                --error "initial state snapshot failed twice (upload skipped; previous state kept). اگر خطا 401/Unauthorized بود توکن PERSIST_TOKEN منقضی/باطل شده — سکرت را با توکن معتبر عوض کن. سرور بالای می‌ماند تا آن موقع." || true
-              echo "WARN: initial state snapshot failed twice — continuing boot WITHOUT persistence (server stays up; rotates token needed)"
+                --error "initial state snapshot failed twice (upload skipped; previous state kept; server remains ONLINE). علت: ${DETAIL:-not recorded}" || true
+              echo "WARN: initial state snapshot failed twice — continuing boot WITHOUT persistence (server stays up)"
             fi
           fi
 
@@ -356,6 +357,13 @@ jobs:
           }
           do_save() {
             if timeout 300 bash "$SCRIPT_DIR/save.sh"; then return 0; else return 1; fi
+          }
+          save_failure_detail() {
+            if [ -s /tmp/persist-last-error.txt ]; then
+              tr '\n' ' ' </tmp/persist-last-error.txt | head -c 500 || true
+            else
+              printf 'detail not recorded (check workflow save log)'
+            fi
           }
           do_continuity_checkpoint() {
             # The script hashes the compact live Hermes state first, so an idle
@@ -506,10 +514,11 @@ jobs:
                 CONSEC=$(( CONSEC + 1 ))
                 echo "[auto-sync] FAILED (consecutive=${CONSEC})"
                 if [ "$CONSEC" -ge 3 ]; then
-                  # v6.11: سرور خاموش نمی‌شود — در دسترس بودن مهم‌تر از snapshot تازه است.
-                  # هر ۳ شکست یک بار هشدار می‌دهیم (ضد اسپم) و ادامه می‌دهیم.
+                  # سرور خاموش نمی‌شود. تنها یک هشدار thresholded می‌فرستیم؛
+                  # save.sh برای هر تلاش ناموفق پیام جداگانه نمی‌فرستد.
+                  DETAIL="$(save_failure_detail)"
                   bash "$SCRIPT_DIR/notify.sh" --type backup --stage auto-sync \
-                    --error "${CONSEC} consecutive periodic saves FAILED — state is NOT being updated (server kept ONLINE). اگر خطا 401/Unauthorized بود توکن PERSIST_TOKEN را عوض کن." || true
+                    --error "${CONSEC} consecutive periodic saves FAILED — state is NOT being updated; server remains ONLINE. علت: ${DETAIL}" || true
                   echo "[keepalive] ${CONSEC} consecutive save failures — keeping server ONLINE, will retry"
                   CONSEC=0
                 fi

@@ -166,6 +166,15 @@ EXCL=(
   --exclude=./root/.bun                 --exclude=root/.bun
   --exclude=./root/go                   --exclude=root/go
   --exclude=./root/.omniroute/call_logs --exclude=root/.omniroute/call_logs
+  # Composio executable/adapters are rebuilt by provisioning. Keep its small
+  # config/credential files, but never spend the Telegram recovery budget on
+  # downloaded toolchain binaries.
+  --exclude=./root/.composio/composio --exclude=root/.composio/composio
+  --exclude=./root/.composio/acp-adapters --exclude=root/.composio/acp-adapters
+  --exclude=./root/.composio/local-tools-binaries --exclude=root/.composio/local-tools-binaries
+  --exclude=./root/.composio/services --exclude=root/.composio/services
+  --exclude=./root/.composio/cache --exclude=root/.composio/cache
+  --exclude=./root/.composio/logs --exclude=root/.composio/logs
   --exclude=*.jsonl.deleted.*.zst
   # آرشیوهای نجات/بکاپ قبلی داخل /root — خودشان بکاپ‌اند، نباید تودرتو بیایند
   --exclude=./root/*.tar.gz             --exclude=root/*.tar.gz

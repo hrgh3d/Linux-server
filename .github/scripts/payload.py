@@ -78,6 +78,12 @@ PRUNE_ABS_DIRS = [
     "root/.launchpadlib",
     "root/.local/share/powershell",
     "root/.rpmdb",
+    # Composio's downloaded CLI, ACP adapters and helper runtime are
+    # reinstallable toolchain (hundreds of MB), not account/config state.
+    # Keep the rest of ~/.composio so future login/config data still persists.
+    "root/.composio/acp-adapters",
+    "root/.composio/local-tools-binaries",
+    "root/.composio/services",
 ]
 PRUNE_ABS_FILES = [
     "usr/local/x-ui/x-ui",
@@ -85,6 +91,9 @@ PRUNE_ABS_FILES = [
     # Hermes secrets are held by env_vault under /var/lib/hermes-guard. Never
     # mutate the live .env while archiving just to hide tokens from state.
     "root/.hermes/.env",
+    # The Composio CLI binary is recreated by provisioning; config/credential
+    # files in ~/.composio remain included by the policy above.
+    "root/.composio/composio",
 ]
 
 # /etc host/image transient entries never stored.
@@ -504,6 +513,10 @@ def selftest():
     assert prune_dir("root/.local/share/powershell") is True
     assert prune_dir("root/.rpmdb") is True
     assert prune_dir("root/.config/.android/cache") is True
+    # Composio's toolchain is rebuilt; its account/config files are state.
+    assert prune_dir("root/.composio/acp-adapters") is True
+    assert prune_file("root/.composio/composio") is True
+    assert prune_file("root/.composio/credentials.json") is False
     # user-created/edited skills must NOT be pruned
     assert prune_dir("root/.hermes/skills") is False
     assert prune_dir("root/.hermes/bin") is False  # v4.5: keep cloudflared

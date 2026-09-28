@@ -34,9 +34,10 @@ SNAP_LIST=/tmp/sqlite-snap.list
 SNAP_DIR=/tmp/persist-sqlite
 STATS=/tmp/payload.stats.json
 MEMBERS=/tmp/state.members
+ERROR_DETAIL=/tmp/persist-last-error.txt
 sudo rm -rf "$META" "$SNAP_DIR"
 mkdir -p "$META/_meta" "$SNAP_DIR"
-rm -f "$LIST" "$LIST_FINAL" "$SNAP_LIST" "$STATS" "$MEMBERS" /tmp/state.tar.gz
+rm -f "$LIST" "$LIST_FINAL" "$SNAP_LIST" "$STATS" "$MEMBERS" "$ERROR_DETAIL" /tmp/state.tar.gz
 
 T0=$(date +%s)
 phase() { echo "[persist $(date -u '+%T') +$(( $(date +%s) - T0 ))s] $*"; }
@@ -44,6 +45,8 @@ log "Starting v5.1 payload snapshot..."
 
 fatal() {
   log "ERROR: $*"
+  printf 'save failed: %s\n' "$*" > "$ERROR_DETAIL" 2>/dev/null || true
+  chmod 600 "$ERROR_DETAIL" 2>/dev/null || true
   sudo rm -rf "$META" "$SNAP_DIR" 2>/dev/null || true
   sudo rm -f /tmp/state.tar.gz 2>/dev/null || true
   exit 1
@@ -306,9 +309,21 @@ fi
 
 if [ $VALIDATE_FAIL -ne 0 ]; then
   log "Archive validation FAILED — upload skipped; previous healthy state is untouched."
-  # v6.36: شکست ذخیره‌سازی دیگر بی‌صدا نیست — همان لحظه به تلگرام هشدار می‌رود.
-  bash "$SCRIPT_DIR/notify.sh" --type backup --stage archive-validation \
-    --error "ذخیره‌سازی state انجام نشد: آرشیو در اعتبارسنجی رد شد و بازسازی خودکار هم جواب نداد. تا رفع این مشکل، دادهٔ جدید بین رانرها منتقل نمی‌شود. $(tail -5 /tmp/validate.log 2>/dev/null | tr '\n' ' ')" || true
+  # Keep a short, path-only diagnostic for the workflow's thresholded alert.
+  # Do not send a Telegram message here: periodic saves already report after
+  # three consecutive failures, and immediate messages here caused duplicate
+  # VPSReport spam for one healthy server.
+  {
+    printf 'archive validation failed: '
+    if [ -s /tmp/validate.log ]; then
+      grep -E '^\[validate\] (members_total|FAIL)|^[[:space:]]+[^[:space:]]' /tmp/validate.log \
+        | head -4 | tr '\n' ' '
+    else
+      printf 'no validator detail available'
+    fi
+    printf '\n'
+  } | cut -c1-500 > "$ERROR_DETAIL"
+  chmod 600 "$ERROR_DETAIL" 2>/dev/null || true
   sudo rm -f /tmp/state.tar.gz
   exit 1
 fi
@@ -320,6 +335,8 @@ if upload_state /tmp/state.tar.gz; then
 else
   STATUS=1
   log "ERROR: state upload failed (previous healthy state untouched)"
+  printf 'state upload failed: inspect state_sync HTTP/network detail in workflow log\n' > "$ERROR_DETAIL"
+  chmod 600 "$ERROR_DETAIL" 2>/dev/null || true
 fi
 sudo rm -rf "$META" "$SNAP_DIR"
 sudo rm -f /tmp/state.tar.gz

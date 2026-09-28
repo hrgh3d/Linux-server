@@ -76,9 +76,30 @@ fi
 #   2) NOTIFY_WEBHOOK_URL که می‌توانست Discord یا هر URL دلخواه باشد
 # طبق درخواست کاربر «فقط ربات آخر، نه هیچ جای دیگر» هر دو حذف شدند.
 # تنها مسیر مجاز: report.sh → REPORT_BOT_TOKEN + NOTIFY_CHAT_ID.
-_MSG="سیستم ${VPS_NAME:-hrgh3d} قطع شد ❌
+# A persistence warning is not an outage. The old one-size-fits-all "system
+# disconnected" headline caused false VPSReport alarms even while every
+# service was healthy. State the affected layer truthfully and leave actual
+# connectivity failures to their explicit server checks.
+case "$TYPE" in
+  backup)
+    _HEAD="⚠️ هشدار پایداری/backup ${VPS_NAME:-hrgh3d} — سرویس آنلاین است"
+    ;;
+  restore)
+    _HEAD="⚠️ هشدار بازیابی state ${VPS_NAME:-hrgh3d}"
+    ;;
+  server)
+    _HEAD="⚠️ هشدار سلامت سرویس ${VPS_NAME:-hrgh3d}"
+    ;;
+  workflow)
+    _HEAD="⚠️ هشدار workflow ${VPS_NAME:-hrgh3d}"
+    ;;
+  *)
+    _HEAD="⚠️ هشدار عملیاتی ${VPS_NAME:-hrgh3d}"
+    ;;
+esac
+_MSG="${_HEAD}
 مرحله: ${STAGE} (run ${RUN}#${ATT})
-$(printf '%s' "${ERR}" | head -c 300)"
+$(printf '%s' "${ERR}" | head -c 420)"
 
 _RPT=""
 for _c in "${GITHUB_WORKSPACE:-}/.github/scripts/report.sh" /usr/local/bin/report.sh \
