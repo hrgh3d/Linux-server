@@ -123,7 +123,9 @@ server {
 }
 NGINX
 sed -i "s/__HERMES_TSIP__/${TSIP}/g" "$SITE"
-chmod 600 "$AUTH"
+# nginx workers must read the verifier but no non-web user may edit it.
+chown root:www-data "$AUTH" 2>/dev/null || chown root:root "$AUTH"
+chmod 640 "$AUTH"
 ln -sfn "$SITE" "$ENABLED"
 nginx -t >/dev/null 2>&1 || { say 'nginx validation failed — Funnel unchanged'; exit 1; }
 systemctl reload nginx >/dev/null 2>&1 || { say 'nginx reload failed — Funnel unchanged'; exit 1; }
