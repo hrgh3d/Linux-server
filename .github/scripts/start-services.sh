@@ -260,9 +260,8 @@ if [ -f /etc/systemd/system/headroom.service ]; then
 fi
 
 # --- CloudCLI UI (Claude Code web interface) — v6.43 -----------------------
-# رابط وب Claude Code روی 3001. سه چیز باید بعد از هر چرخش برگردد:
-#   ۱) یونیت systemd  ۲) فایل env زیر /etc  ۳) مسیر Tailscale Serve روی 8443
-# پورت 443 مال OpenClaw است، پس CloudCLI روی 8443 می‌نشیند.
+# رابط وب CloudCLI روی 3001. یونیت و فایل env بعد از هر چرخش برمی‌گردند؛
+# ورودی عمومی آن را public_webui_guard زیر /cloudcli/ مدیریت می‌کند.
 ensure_cloudcli() {
   command -v cloudcli >/dev/null 2>&1 || return 0
   if [ ! -f /etc/systemd/system/cloudcli.service ]; then
@@ -360,14 +359,8 @@ if [ -f /etc/systemd/system/cloudcli.service ] && [ -s /etc/cloudcli.env ]; then
     curl -fsS -m 3 -o /dev/null http://127.0.0.1:3001/ 2>/dev/null && break
     sleep 5
   done
-  # مسیر Serve روی 8443 بعد از چرخش/ری‌استارت tailscaled از بین می‌رود
-  if ! tailscale serve status 2>/dev/null | grep -q '127.0.0.1:3001'; then
-    tailscale serve --bg --https=8443 http://127.0.0.1:3001 >/dev/null 2>&1 \
-      && echo "[services] cloudcli: tailscale serve 8443 re-established" \
-      || echo "[services] cloudcli: WARNING tailscale serve 8443 failed"
-  fi
   if curl -fsS -m 3 -o /dev/null http://127.0.0.1:3001/ 2>/dev/null; then
-    echo "[services] cloudcli: UI healthy on 127.0.0.1:3001 (https :8443 via tailnet)"
+    echo "[services] cloudcli: UI healthy on 127.0.0.1:3001 (public path: /cloudcli/)"
     ensure_cloudcli_combos
   else
     echo "[services] cloudcli: not answering yet — Restart=always will keep retrying"
@@ -442,14 +435,14 @@ done
 # عمداً ۲۰۱۲۸ نیست: آن پورت در اختیار 9router است و هر چهار ایجنت به آن
 # وصل‌اند. دو دروازه کنار هم زندگی می‌کنند.
 ensure_omniroute() {
-  # The public OmniRoute UI lives below /omniroute/.  Keep its client-side
-  # canonical URL aligned with the Funnel hostname after a fresh runner boot.
+  # OmniRoute owns the public 443 root. Keep its client-side canonical URL
+  # aligned with the Funnel hostname after a fresh runner boot.
   _omni_fqdn=$(tailscale status --json 2>/dev/null | python3 -c '
 import json,sys
 try: print(json.load(sys.stdin).get("Self",{}).get("DNSName", "").rstrip("."))
 except Exception: pass' 2>/dev/null || true)
   _omni_public_base=""
-  [ -n "${_omni_fqdn:-}" ] && _omni_public_base="https://${_omni_fqdn}/omniroute"
+  [ -n "${_omni_fqdn:-}" ] && _omni_public_base="https://${_omni_fqdn}"
 
   command -v omniroute >/dev/null 2>&1 || {
     echo "[services] omniroute: not installed, installing"
