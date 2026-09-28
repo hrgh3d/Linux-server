@@ -28,5 +28,8 @@ ensure_route() {
   timeout 60 tailscale serve --bg --https="$hp" "http://127.0.0.1:$lp" >>"$LOG" 2>&1 || true
 }
 printf '%s\n' "$SERVE_MAP" | while IFS='|' read -r hp lp req label; do
-  [ -n "${hp:-}" ] && ensure_route "$hp" "$lp" "$req" "$label"
+  [ -n "${hp:-}" ] || continue
+  ensure_route "$hp" "$lp" "$req" "$label" || true
 done
+# A blank trailing map line must not make the oneshot unit fail.
+exit 0
