@@ -32,6 +32,33 @@ retire_removed_ai_components() {
               /usr/local/lib/node_modules/openclaw \
               /usr/local/lib/node_modules/@earendil-works/pi-coding-agent \
               /usr/local/lib/node_modules/@agegr/pi-web
+  # An old Tailscale state snapshot can still contain a Serve handler for
+  # OpenClaw (including its former MagicDNS alias). Remove only handlers that
+  # proxy to its retired port; leave all retained dashboard/Funnel config intact.
+  local _serve_cfg
+  _serve_cfg=$(mktemp)
+  if sudo tailscale serve get-config >"$_serve_cfg" 2>/dev/null; then
+    python3 - "$_serve_cfg" <<'PYRETIRE'
+import json, sys
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+    web = d.get("Web") or {}
+    for host, cfg in list(web.items()):
+        handlers = (cfg or {}).get("Handlers") or {}
+        if any(":18789" in str((h or {}).get("Proxy", "")) for h in handlers.values()):
+            web.pop(host, None)
+    tcp = d.get("TCP") or {}
+    tcp.pop("443", None)
+    d["Web"] = web
+    d["TCP"] = tcp
+    json.dump(d, open(p, "w"), separators=(",", ":"))
+except Exception:
+    pass
+PYRETIRE
+    sudo tailscale serve set-config "$_serve_cfg" >/dev/null 2>&1 || true
+  fi
+  rm -f "$_serve_cfg"
   # They were installed globally with npm on earlier runners. Removal is
   # intentionally non-fatal: paths have already been removed above.
   if command -v npm >/dev/null 2>&1; then
