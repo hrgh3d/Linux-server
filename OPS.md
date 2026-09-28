@@ -20,6 +20,14 @@ workflow، restore یا backup دوباره ایجاد شوند.
 5. runهای `main.yml` در concurrency مشترک صف می‌شوند؛ runner جدید runner قبلی را
    به‌زور cancel نمی‌کند.
 
+## ورودی عمومی وب
+
+Funnel فقط سه پورت عمومی ۴۴۳، ۸۴۴۳ و ۱۰۰۰۰ را پشتیبانی می‌کند. اگر public
+web UI فعال باشد، `public-webui-guard` همهٔ ورودی‌ها را ابتدا از nginx Basic
+Auth عبور می‌دهد و سپس Funnel را برقرار می‌کند. فایل احراز هویت جدا از source
+و با مجوز محدود نگه‌داری می‌شود؛ اگر در state موجود نباشد guard به‌صورت
+fail-closed هیچ Funnel جدیدی باز نمی‌کند.
+
 ## کنترل‌های ضروری پس از تغییر
 
 ```bash

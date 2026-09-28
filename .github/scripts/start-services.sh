@@ -626,10 +626,11 @@ EOF
     sleep 4
   done
   # Funnel: دسترسی عمومی بدون نیاز به Tailscale روی دستگاه کاربر.
-  # فقط پورت‌های 443/8443/10000 مجازند؛ ۴۴۳ و ۸۴۴۳ گرفته‌اند.
+  # اگر facade عمومی nginx از state برگردد، public_webui_guard تنها مالک
+  # Funnel است تا مسیر مستقیمِ بدون Basic Auth حتی موقتاً جایگزین نشود.
   # ⚠️ نگهبان DNS-rebinding بدون dashboard.public_url هر درخواستی را که
   # Host‌اش با آدرس bind فرق دارد با ۴۰۰ رد می‌کند.
-  if ! tailscale funnel status 2>/dev/null | grep -q ':10000'; then
+  if [ ! -f /etc/nginx/sites-enabled/public-webui ] && ! tailscale funnel status 2>/dev/null | grep -q ':10000'; then
     tailscale funnel --bg --https=10000 "http://${TSIP}:9122" >/dev/null 2>&1 \
       && echo "[services] hermes-serve: funnel 10000 re-established" \
       || echo "[services] hermes-serve: WARNING funnel failed (node may need the funnel nodeAttr)"
@@ -840,6 +841,44 @@ UNIT
     || echo "[services] WARNING: could not enable tailscale-serve-guard.timer"
 else
   echo "[services] tailscale_serve_guard.sh not found — guard skipped"
+fi
+
+# --- public Funnel facade: nginx Basic Auth before every internet route ---
+# The auth file is intentionally not generated here. It is created only during
+# the explicit, user-approved public deployment and then persisted in state.
+# If it is absent, the guard fails closed and never invents an internet password.
+if [ -f "$SCRIPT_DIR/public_webui_guard.sh" ]; then
+  sudo install -m 0755 "$SCRIPT_DIR/public_webui_guard.sh" /usr/local/bin/public_webui_guard.sh
+  sudo tee /etc/systemd/system/public-webui-guard.service >/dev/null <<'UNIT'
+[Unit]
+Description=Authenticated public web UI Funnel guard
+After=network-online.target tailscaled.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/public_webui_guard.sh
+UNIT
+  sudo tee /etc/systemd/system/public-webui-guard.timer >/dev/null <<'UNIT'
+[Unit]
+Description=Refresh authenticated public Funnel routes every two minutes
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=2min
+AccuracySec=20s
+Unit=public-webui-guard.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+  sudo systemctl daemon-reload >/dev/null 2>&1 || true
+  sudo systemctl enable --now public-webui-guard.timer >/dev/null 2>&1 \
+    && echo "[services] public-webui-guard.timer: enabled" \
+    || echo "[services] WARNING: could not enable public-webui-guard.timer"
+  sudo /usr/local/bin/public_webui_guard.sh >/dev/null 2>&1 || true
+else
+  echo "[services] public_webui_guard.sh not found — public facade skipped"
 fi
 
 # --- راستی‌آزمایی ---

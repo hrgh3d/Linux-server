@@ -10,9 +10,14 @@ import sys,json
 try: print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))
 except Exception: pass' 2>/dev/null)
 [ -n "$DN" ] || exit 0
+# CloudCLI uses the authenticated public facade after it has been deployed.
+# On an earlier runner (or before first deployment), preserve the direct tailnet
+# route so a missing facade cannot break the existing private UI.
+CLOUDCLI_PORT=3001
+[ -f /etc/nginx/sites-enabled/public-webui ] && CLOUDCLI_PORT=18443
 # https_port|loopback_port|required_unit|label
 SERVE_MAP="
-8443|3001|cloudcli.service|CloudCLI
+8443|${CLOUDCLI_PORT}|cloudcli.service|CloudCLI
 9443|9119||Hermes Dashboard
 9444|9121||9Router
 9447|20130|omniroute.service|OmniRoute
