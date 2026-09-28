@@ -65,7 +65,10 @@ server {
     proxy_set_header Connection "upgrade";
 
     location = /portal { return 301 /portal/; }
-    location = /portal/ { root /var/www/public-webui; try_files /index.html =404; }
+    location = /portal/ {
+        default_type text/html;
+        return 200 '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><title>Hamid Web UI</title><style>body{max-width:700px;margin:3rem auto;padding:0 1rem;font:16px/1.8 system-ui;background:#10151f;color:#edf2f7}a{display:block;margin:12px 0;padding:14px;background:#1f2a3a;color:#9fe3ff;border-radius:10px;text-decoration:none}</style><h1>ورود عمومی امن</h1><a href="/">9router</a><a href="/hermes-dashboard/">Hermes Dashboard</a><a href="/omniroute/">OmniRoute</a><a href="https://$host:8443/">CloudCLI</a><a href="https://$host:10000/">Hermes Serve</a></html>';
+    }
 
     # 9router owns the public root, avoiding broken absolute static paths.
     location / { proxy_pass http://127.0.0.1:9121; }
@@ -76,7 +79,10 @@ server {
     location /hermes-dashboard/ {
         proxy_set_header X-Forwarded-Prefix /hermes-dashboard;
         proxy_pass http://127.0.0.1:9120/;
-        proxy_redirect ~^(/.*)$ /hermes-dashboard$1;
+        # Hermes already honors X-Forwarded-Prefix. Rewrite only the backend
+        # scheme/port, never add the path prefix a second time.
+        proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
+        proxy_redirect ~^(/.*)$ https://$host$1;
         sub_filter_once off;
         sub_filter 'href="/' 'href="/hermes-dashboard/';
         sub_filter 'src="/' 'src="/hermes-dashboard/';
@@ -85,7 +91,10 @@ server {
     location /omniroute/ {
         proxy_set_header X-Forwarded-Prefix /omniroute;
         proxy_pass http://127.0.0.1:20130/;
-        proxy_redirect ~^(/.*)$ /omniroute$1;
+        # OmniRoute does not always honor a forwarded prefix, so preserve it
+        # when a relative redirect is returned.
+        proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
+        proxy_redirect ~^/(.*)$ https://$host/omniroute/$1;
         sub_filter_once off;
         sub_filter 'href="/' 'href="/omniroute/';
         sub_filter 'src="/' 'src="/omniroute/';
