@@ -77,7 +77,7 @@ server {
         # CloudCLI is a root-built SPA. Rewrite its browser-visible resources
         # and API base to the dedicated /cloudcli prefix.
         sub_filter_once off;
-        sub_filter_types text/html text/css application/javascript application/json;
+        sub_filter_types text/css application/javascript application/json;
         sub_filter 'window.location.origin' 'window.location.origin+"/cloudcli"';
         sub_filter 'href="/' 'href="/cloudcli/';
         sub_filter 'src="/' 'src="/cloudcli/';
@@ -111,7 +111,7 @@ server {
         proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
         proxy_redirect ~^(/.*)$ https://$host$1;
         sub_filter_once off;
-        sub_filter_types text/html text/css application/javascript application/json;
+        sub_filter_types text/css application/javascript application/json;
         sub_filter 'href="/' 'href="/hermes-dashboard/';
         sub_filter 'src="/' 'src="/hermes-dashboard/';
         sub_filter '"/auth/' '"/hermes-dashboard/auth/';
