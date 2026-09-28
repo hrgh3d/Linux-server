@@ -83,8 +83,6 @@ provision_9router() {
   fi
 }
 
-# OpenClaw retired on 2026-09-28; no runtime or state is provisioned.
-
 provision_hermes() {
   if has_hermes_binary_live; then
     note "hermes: present — kept (Mode 2)"
@@ -142,11 +140,8 @@ provision_hermes() {
 # ---------------------------------------------------------------------------
 # v6.39: کلاینت CLI هوش مصنوعی (Claude Code)
 # v6.41: Grok حذف شد — کاربر Grok Bot می‌خواست که به 9router وصل نمی‌شود.
-# همان الگوی 9router/OpenClaw: «تنظیمات می‌ماند، کد بازنصب می‌شود».
-#   * تنظیمات کاربر : /root/.claude، /root/.pi و /etc/profile.d/ai-clients.sh
-#                     → زیر /root و /etc هستند، پس در آرشیو حفظ می‌شوند.
-#   * کد npm        : /usr/local/lib/node_modules/... → آرشیو نمی‌شود
-#                     (حجیم و پر از node_modules) و اینجا بازنصب می‌شود.
+# تنظیمات فعال در /etc و مسیرهای کاربر نگه‌داری می‌شوند؛ کد npm در
+# /usr/local/lib/node_modules بازساختنی است و در archive نمی‌آید.
 # هر دو کلاینت به 9router محلی وصل‌اند، پس بدون 9router بی‌معنا هستند.
 # ---------------------------------------------------------------------------
 provision_ai_clients() {
@@ -155,7 +150,6 @@ provision_ai_clients() {
   # ⚠️ درس v6.43.1: --ignore-scripts را نمی‌شود سراسری داد. CloudCLI ماژول
   # نیتیو better-sqlite3 دارد و بدون postinstall باینری .node ساخته نمی‌شود
   # («Could not locate the bindings file») و سرویس در حلقهٔ کرش می‌افتد.
-  # Pi خودش توصیه به --ignore-scripts کرده، پس فلگ per-package است.
   local flags
   for spec in "@anthropic-ai/claude-code:claude:Claude Code:" \
               "@cloudcli-ai/cloudcli:cloudcli:CloudCLI UI:"; do
@@ -181,24 +175,6 @@ provision_ai_clients() {
     fi
   done
 
-  # اگر فایل env مشترک گم شده بود، از روی کلید 9router در کانفیگ OpenClaw بسازش
-  if [ ! -f /etc/profile.d/ai-clients.sh ] && [ -f /root/.openclaw/openclaw.json ]; then
-    local key
-    key=$(python3 -c "import json;print(json.load(open('/root/.openclaw/openclaw.json'))['models']['providers']['ninerouter']['apiKey'])" 2>/dev/null || true)
-    if [ -n "$key" ]; then
-      $SUDO tee /etc/profile.d/ai-clients.sh >/dev/null <<PROF
-export ANTHROPIC_BASE_URL=http://127.0.0.1:20128
-export ANTHROPIC_AUTH_TOKEN=${key}
-export ANTHROPIC_MODEL=Agentic
-export CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1
-export CLAUDE_CODE_MAX_CONTEXT_TOKENS=128000
-export OPENAI_BASE_URL=http://127.0.0.1:20128/v1
-export OPENAI_API_KEY=${key}
-PROF
-      $SUDO chmod 644 /etc/profile.d/ai-clients.sh
-      note "ai-clients: /etc/profile.d/ai-clients.sh rebuilt"
-    fi
-  fi
 
 
   # CloudCLI UI: فایل env را زیر /etc نگه می‌داریم، نه داخل پوشهٔ
@@ -206,31 +182,7 @@ PROF
   # <install-dir>/.env می‌گردد که زیر node_modules است و هرگز آرشیو نمی‌شود،
   # پس با هر چرخش رانر تنظیمات و اتصال به 9router از بین می‌رفت.
   # یونیت systemd آن را با EnvironmentFile=/etc/cloudcli.env می‌خواند.
-  if [ ! -s /etc/cloudcli.env ] && [ -f /root/.openclaw/openclaw.json ]; then
-    local ckey
-    ckey=$(python3 -c "import json;print(json.load(open('/root/.openclaw/openclaw.json'))['models']['providers']['ninerouter']['apiKey'])" 2>/dev/null || true)
-    if [ -n "$ckey" ]; then
-      $SUDO tee /etc/cloudcli.env >/dev/null <<CCENV
-SERVER_PORT=3001
-HOST=0.0.0.0
-DATABASE_PATH=/root/.cloudcli/auth.db
-CLAUDE_CLI_PATH=/usr/local/bin/claude
-CONTEXT_WINDOW=128000
-VITE_CONTEXT_WINDOW=128000
-ANTHROPIC_BASE_URL=http://127.0.0.1:20128
-ANTHROPIC_AUTH_TOKEN=${ckey}
-ANTHROPIC_MODEL=Agentic
-ANTHROPIC_SMALL_FAST_MODEL=Agentic
-ANTHROPIC_DEFAULT_SONNET_MODEL=Agentic
-ANTHROPIC_DEFAULT_OPUS_MODEL=Agentic
-ANTHROPIC_DEFAULT_HAIKU_MODEL=Agentic
-CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1
-CLAUDE_CODE_MAX_CONTEXT_TOKENS=128000
-CCENV
-      $SUDO chmod 600 /etc/cloudcli.env
-      note "CloudCLI: /etc/cloudcli.env rebuilt"
-    fi
-  fi
+
 
   # v6.44: بلافاصله بعد از بازنصب npm، وصله‌های سمت مرورگر را دوباره بزن.
   # (dist تازه است و فونت گوگل و sw.js اصلی برگشته‌اند.)

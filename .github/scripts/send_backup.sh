@@ -147,45 +147,25 @@ set -u
 B=/tmp/bkbuild; rm -rf "$B"; mkdir -p "$B"
 MAN="$B/manifest.txt"; : > "$MAN"
 add() { printf '  %s\n' "$1" >> "$MAN"; }
-# v6.51 — بودجه از ۳۶MB به ۴۴MB. اندازه‌گیری واقعی بعد از حذف بازساختنی‌ها:
-# openclaw 19MB (شامل دیتابیس ۴۵MB گفت‌وگوها) + app-code 9MB + home-root 9MB
-# + بقیه ≈ ۳۴MB. سقف ۴۴MB یعنی همه جا می‌شوند و باندل نهایی هنوز زیر حد
-# ۴۵MBـی split می‌ماند ⇒ یک فایل تلگرام، بدون تکه‌تکه شدن.
+# سقف فشردهٔ bundle از split غیرضروری جلوگیری می‌کند و فقط دادهٔ عملیاتی
+# پشتیبانی‌شده را نگه می‌دارد.
 BUDGET=$((44000 * 1024))
 total=0
 
-# v6.35 — مسیرهایی که هرگز نباید در باندل بیایند: بازساختنی‌اند ولی حجیم‌اند و
-# باعث می‌شدند کل /root از بودجه رد شود و SKIP بخورد (یعنی کانفیگ OpenClaw و
-# دستگاه‌های جفت‌شده اصلاً بکاپ نمی‌شدند).
+# مسیرهای بازساختنی و حجیم نباید بودجهٔ bundle را مصرف کنند.
 EXCL=(
-  --exclude=./root/.openclaw/cache      --exclude=root/.openclaw/cache
-  --exclude=./root/.openclaw/tmp        --exclude=root/.openclaw/tmp
-  --exclude=./root/.openclaw/media      --exclude=root/.openclaw/media
   --exclude=./root/.npm                 --exclude=root/.npm
   --exclude=./root/.cache               --exclude=root/.cache
   --exclude=./root/.9router/logs        --exclude=root/.9router/logs
   --exclude=*/node_modules              --exclude=*/__pycache__
   --exclude=*.sock                      --exclude=*.pid
-  # v6.51 — اندازه‌گیری‌شده روی سرور: اینها ۳۲۴MB از ۳۶MB بودجه می‌خوردند و
-  # باعث SKIP شدن openclaw.tar.gz و home-root.tar.gz می‌شدند؛ یعنی باندل
-  # «موفق» بدون کانفیگ اوپن‌کلاو و بدون /root تحویل می‌شد.
   --exclude=./root/backups              --exclude=root/backups
   --exclude=./root/.local               --exclude=root/.local
   --exclude=./root/.headroom            --exclude=root/.headroom
   --exclude=./root/.nvm                 --exclude=root/.nvm
   --exclude=./root/.bun                 --exclude=root/.bun
   --exclude=./root/go                   --exclude=root/go
-  # workspace اوپن‌کلاو ۲۱۴MB است: خروجی کار و کلون ریپوهاست، نه پیکربندی.
-  # چیزی که واقعاً لازم است (config + state + agents) جداگانه گرفته می‌شود.
-  --exclude=./root/.openclaw/workspace  --exclude=root/.openclaw/workspace
   --exclude=./root/.omniroute/call_logs --exclude=root/.omniroute/call_logs
-  # باینری‌های دانلودی داخل agents (fd و امثالش، ۳.۵MB هرکدام) و نسخهٔ
-  # legacy که فقط کپی قدیمی همان است. خودِ openclaw-agent.sqlite (۴۵MB،
-  # ۱۹MB فشرده) عمداً می‌ماند: تاریخچهٔ گفت‌وگوهاست و بازساختنی نیست.
-  --exclude=./root/.openclaw/agents/*/agent/bin
-  --exclude=root/.openclaw/agents/*/agent/bin
-  --exclude=./root/.openclaw/agents/*/agent.legacy-*
-  --exclude=root/.openclaw/agents/*/agent.legacy-*
   --exclude=*.jsonl.deleted.*.zst
   # آرشیوهای نجات/بکاپ قبلی داخل /root — خودشان بکاپ‌اند، نباید تودرتو بیایند
   --exclude=./root/*.tar.gz             --exclude=root/*.tar.gz
@@ -225,9 +205,7 @@ try_tar() {
   add "$name ($(du -h "$out" | cut -f1))"
 }
 
-# v6.35: دیتابیس‌های زندهٔ sqlite را با VACUUM INTO می‌گیریم تا torn نباشند.
-# مهم‌ترینش /root/.openclaw/state/openclaw.sqlite است: جدول دستگاه‌های
-# جفت‌شده. بدون آن، بعد از بازیابی باید همهٔ گوشی‌ها دوباره pair شوند.
+# دیتابیس‌های زندهٔ SQLite با VACUUM INTO گرفته می‌شوند تا snapshot torn نباشد.
 snap_sqlite() {
   local src="$1" dst="$B/sqlite/$2"
   [ -f "$src" ] || return 0
@@ -269,8 +247,7 @@ try_tar services.tar.gz /etc/nginx /etc/cron.d /etc/systemd/system /etc/systemd/
 #    v6.35.2: /usr/local/bin روی رانرهای گیت‌هاب ۱.۲ گیگابایت است — پر از
 #    ابزارهای پیش‌فرض (minikube, pulumi, packer, node, helm…) که همه از ایمیج
 #    رانر می‌آیند و بازساختنی‌اند. فقط فایل‌های زیر ۲ مگابایت را می‌گیریم؛
-#    همهٔ اسکریپت‌های ما (gateway_guard, openclaw_serve_guard, tunnel-watch،
-#    wrapper openclaw…) در همین دسته‌اند. نتیجه: ۱.۲GB → ۱۶۰KB.
+#    فقط اسکریپت‌های کوچک عملیاتی وارد bundle می‌شوند.
 if find /usr/local/bin /usr/local/sbin -maxdepth 1 -type f -size -2M -print0 \
      2>/dev/null > /tmp/binlist.z && [ -s /tmp/binlist.z ]; then
   if tar -czf "$B/bin-scripts.tar.gz" --ignore-failed-read --null -T /tmp/binlist.z 2>/dev/null \
@@ -281,12 +258,10 @@ if find /usr/local/bin /usr/local/sbin -maxdepth 1 -type f -size -2M -print0 \
 fi
 rm -f /tmp/binlist.z
 
-# ۵) کد و دادهٔ اپ‌ها (منهای /root/.hermes/bin که ۸۵MB باینری دانلودی است)
+# ۵) کد و دادهٔ اپ‌ها (منهای /root/.hermes/bin که بازساختنی است)
 try_tar app-code.tar.gz --exclude=root/.hermes/bin --exclude=./root/.hermes/bin \
   -- /opt/9router /root/9router /root/.hermes /var/www
-# v6.50: AI Hub — کد، رابط، و دادهٔ کاربر (پروژه‌ها/حافظه/سطل زباله).
-# venv عمداً نیست: ۷۱MB و با install.sh در چند ثانیه بازساخته می‌شود.
-# v6.52: پیکربندی OmniRoute + کلیدهای رمزش.
+# پیکربندی OmniRoute + کلیدهای رمزش.
 # call_logs یک پوشهٔ ۲۵ مگابایتیِ لاگ است و بازساختنی؛ داخلش نمی‌آید.
 # قبلاً omniroute فقط به‌طور اتفاقی داخل home-root بود — یعنی همان چیزی
 # که یک بار بی‌صدا از بودجه جا ماند.
@@ -303,8 +278,6 @@ try_tar home-root.tar.gz \
   --exclude=root/Documents --exclude=./root/Documents \
   --exclude=root/user_workspace --exclude=./root/user_workspace \
   --exclude=root/workspace.zip --exclude=./root/workspace.zip \
-  --exclude=root/.openclaw --exclude=./root/.openclaw \
-  --exclude=root/.pi --exclude=./root/.pi \
   --exclude=root/.hermes --exclude=./root/.hermes \
   --exclude=root/.omniroute --exclude=./root/.omniroute \
   -- /root

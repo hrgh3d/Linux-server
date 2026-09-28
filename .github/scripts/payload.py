@@ -169,59 +169,6 @@ def _retired_component(rel):
     return any(rel == p or rel.startswith(p + "/") for p in _RETIRED_COMPONENT_PATHS)
 
 
-# v6.26: OpenClaw — داده‌ی کاربر باید کامل بماند، کد بازنصب می‌شود.
-# /root/.openclaw شامل agents/ (سشن‌ها و حافظه)، workspace/ و openclaw.json است.
-# داخل آن پوشه‌هایی به نام cache/tmp/logs و حتی node_modules (پلاگین‌ها و skillها)
-# وجود دارد که با قواعد عمومی prune حذف می‌شدند؛ این‌ها را استثنا می‌کنیم مگر
-# آن‌هایی که واقعاً دور‌ریختنی‌اند.
-#
-# v6.36 (حادثهٔ 2026-09-17): استثنای v6.26 بی‌قید بود و *هر* چیزی زیر .openclaw
-# را نگه می‌داشت — از جمله .git یک پروژهٔ استخراج‌شده که خود ایجنت ساخته بود.
-# اعتبارسنجِ پیش از آپلود چنین استثنایی نداشت، پس آرشیو مردود می‌شد و ذخیره‌سازی
-# کاملاً متوقف شد (≈۹ ساعت داده از دست رفت). درمان دو لایه دارد:
-#   1) همین‌جا: نام‌های واقعاً دورریختنی حتی زیر .openclaw هم prune می‌شوند.
-#   2) validate(): دیگر قواعد را دوباره پیاده‌سازی نمی‌کند، بلکه *همین* توابع را
-#      صدا می‌زند؛ پس تناقض جمع‌آورنده/اعتبارسنج از نظر ساختاری ناممکن می‌شود.
-# نکته: node_modules زیر .openclaw عمداً نگه داشته می‌شود (پلاگین‌ها و skillها
-# با آن کار می‌کنند و چیزی آن‌ها را بازنصب نمی‌کند) — و چون اعتبارسنج از همین
-# تابع استفاده می‌کند، نگه‌داشتنش دیگر بی‌خطر است.
-_OPENCLAW_DATA = "root/.openclaw"
-_OPENCLAW_DROP = (
-    "root/.openclaw/cache",
-    "root/.openclaw/tmp",
-    "root/.openclaw/media",   # فایل‌های حجیم رسانه‌ای؛ در صورت نیاز دوباره ساخته می‌شوند
-)
-# نام پوشه‌هایی که حتی داخل دادهٔ OpenClaw هم دورریختنی‌اند (هر عمقی).
-# .git عمداً اینجاست: ایجنت مرتب مخزن clone/extract می‌کند و تاریخچهٔ git
-# نه دادهٔ سشن است نه بازسازی‌ناپذیر — ولی آرشیو را مسموم می‌کرد.
-_OPENCLAW_DROP_NAMES = {
-    ".git", "__pycache__", ".cache", ".npm", ".nvm", ".bun",
-    ".pytest_cache", ".mypy_cache", ".tox", ".nox", ".gradle",
-    ".nuget", ".conda", ".venv", "venv", "Trash",
-}
-
-
-def _under_openclaw(rel):
-    return rel == _OPENCLAW_DATA or rel.startswith(_OPENCLAW_DATA + "/")
-
-
-def _openclaw_drop(rel):
-    """True اگر مسیرِ زیر .openclaw دورریختنی است (باید prune شود)."""
-    for d in _OPENCLAW_DROP:
-        if rel == d or rel.startswith(d + "/"):
-            return True
-    # segmentهای بعد از 'root/.openclaw'
-    segs = rel.split("/")[2:]
-    return any(s in _OPENCLAW_DROP_NAMES for s in segs)
-
-
-def _openclaw_keep(rel):
-    """True اگر مسیر زیر دادهٔ OpenClaw است و باید علیرغم نام عمومی حفظ شود."""
-    if not _under_openclaw(rel):
-        return False
-    return not _openclaw_drop(rel)
-
-
 def _in_site_packages(rel):
     """v6.39: آیا مسیر داخل درخت پکیج‌های نصب‌شدهٔ پایتون است؟
 
@@ -243,20 +190,10 @@ def prune_dir(rel):
         return False
     if rel == "usr/local/lib/hermes-agent/venv" or rel == "usr/local/lib/hermes-agent/.venv":
         return False
-    # v6.26: کد OpenClaw (رانتایم Node 24 + node_modules) هرگز آرشیو نمی‌شود —
-    # حجیم است و provision.sh آن را با نسخهٔ دقیق بازنصب می‌کند (مثل 9router).
-    if rel == "opt/openclaw-node" or rel.startswith("opt/openclaw-node/"):
-        return True
-    if rel == "opt/openclaw-app" or rel.startswith("opt/openclaw-app/"):
-        return True
     # v6.41: Grok Build حذف شد (کاربر Grok Bot می‌خواست که به 9router وصل
     # نمی‌شود). اگر بقایایی از نصب قبلی مانده باشد، آرشیو نشود.
     if rel == "root/.grok" or rel.startswith("root/.grok/"):
         return True
-    # v6.36: دورریختنی‌های زیر .openclaw صریحاً prune می‌شوند (.git/cache/…)،
-    # وگرنه walk داخلشان می‌رود و آرشیو در اعتبارسنجی مردود می‌شود.
-    if _under_openclaw(rel):
-        return _openclaw_drop(rel)
     name = rel.rstrip("/").rsplit("/", 1)[-1]
     # v6.39: مهم — داخل درخت site-packages / dist-packages، پوشه‌هایی مثل
     # cache, logs, tmp, venv, target «کش» نیستند؛ زیرپکیج واقعی پایتون‌اند.
@@ -291,20 +228,6 @@ def prune_file(rel):
     # sqlite_stage.py جداگانه stage می‌کند.
     if name.endswith(("-wal", "-shm")):
         return True
-    # v6.26: کد OpenClaw آرشیو نمی‌شود (بازنصب می‌شود)
-    if rel.startswith("opt/openclaw-node/") or rel.startswith("opt/openclaw-app/"):
-        return True
-    # v6.36: فایل‌های دور‌ریختنی زیر .openclaw (cache/tmp/media/.git/…) حذف می‌شوند
-    if _under_openclaw(rel):
-        if _openclaw_drop(rel):
-            return True
-        # بقیهٔ فایل‌های دادهٔ OpenClaw می‌مانند؛ فقط موارد گذرا حذف می‌شوند.
-        # -wal/-shm ژورنال‌های زندهٔ SQLite‌اند و هرگز نباید خام آرشیو شوند
-        # (خود دیتابیس توسط sqlite_stage.py سازگار snapshot می‌شود).
-        return name.endswith((".sock", ".pid", ".lock", ".log",
-                              "-wal", "-shm",
-                              ".sqlite-wal", ".sqlite-shm",
-                              ".db-wal", ".db-shm"))
     if name in PRUNE_FILE_NAMES or name.endswith(PRUNE_FILE_SUFFIXES):
         return True
     if rel in PRUNE_ABS_FILES or any(rel.startswith(d + "/") for d in PRUNE_ABS_DIRS):
@@ -597,56 +520,27 @@ def selftest():
                "opt/openclaw-node/bin/node", "opt/aihub/data/hub.sqlite"):
         assert prune_dir(_p) or prune_file(_p), _p
 
-    # Historical nested-state regression inputs remain rejected because the
-    # entire retired OpenClaw tree is now excluded.
-    _POISON = ("root/.openclaw/workspace/backups/live-20260916-2245/us/"
-               "mirza-pro-extracted/mirza_pro/.git")
-    assert prune_dir(_POISON) is True, "‌.git زیر .openclaw باید prune شود"
-    assert member_violation(_POISON + "/hooks/pre-commit.sample") is not None
-    assert prune_dir("root/.openclaw/.git") is True
-    assert prune_dir("root/.openclaw/workspace/proj/__pycache__") is True
-    # The former user-data paths are now retired and always rejected.
-    assert prune_dir("root/.openclaw/agents/main") is True
-    assert prune_dir("root/.openclaw/workspace") is True
-    assert prune_dir("root/.openclaw/workspace/skills/my/node_modules") is True
-    assert prune_file("root/.openclaw/openclaw.json") is True
-    assert member_violation("root/.openclaw/agents/main/agent/"
-                            "openclaw-agent.sqlite") is not None
-    assert member_violation("root/.openclaw/workspace/skills/my/"
-                            "node_modules/x/index.js") is not None
     # The collector and validator remain aligned for retained data.
     for _p in ("root/.hermes/skills/a/skill.py",
                "usr/local/lib/hermes-agent/venv/bin/python"):
         assert member_violation(_p) is None, f"collector/validator mismatch: {_p}"
     # و هر چیزی که prune می‌شود، اعتبارسنج هم باید رد کند.
-    for _p in ("root/node_modules/pkg/index.js",
-               "root/.cache/x/y",
-               "root/.openclaw/cache/blob.bin",
-               "root/.openclaw/tmp/scratch"):
+    for _p in ("root/node_modules/pkg/index.js", "root/.cache/x/y"):
         assert member_violation(_p) is not None, f"validator too permissive: {_p}"
-    # Hermes همچنان طبق قواعد عمومی prune می‌شود (استثنای OpenClaw ندارد)
+    # Hermes همچنان طبق قواعد عمومی prune می‌شود.
     assert prune_dir("root/.hermes/.git") is True
     assert prune_dir("root/.hermes/skills/x/node_modules") is True
 
     # ژورنال SQLite با نام پایهٔ غیرمتعارف (نمونهٔ واقعی روی سرور، v6.36):
     # قبلاً جمع‌آورنده نگهش می‌داشت ولی اعتبارسنج ردش می‌کرد — همان الگوی باگ اصلی.
     for _j in ("root/.9router/db/data.sqlite.fresh-bak-wal",
-               "root/.9router/db/data.sqlite.prepwfix-shm",
-               "root/.openclaw/state/openclaw.sqlite-wal"):
+               "root/.9router/db/data.sqlite.prepwfix-shm"):
         assert prune_file(_j) is True, f"journal not pruned: {_j}"
         assert member_violation(_j, "f") is not None
 
     # ---- قرارداد سراسری: جمع‌آورنده و اعتبارسنج هرگز نباید اختلاف داشته باشند.
     # این حلقه همان کلاس باگی را می‌گیرد که حادثه را ساخت، برای *هر* مسیری.
     _probe = [
-        "root/.openclaw", "root/.openclaw/openclaw.json",
-        "root/.openclaw/agents/main/agent/openclaw-agent.sqlite",
-        "root/.openclaw/agents/main/memory/notes.md",
-        "root/.openclaw/workspace/a/.git/config",
-        "root/.openclaw/workspace/a/node_modules/p/i.js",
-        "root/.openclaw/workspace/a/__pycache__/m.pyc",
-        "root/.openclaw/cache/x", "root/.openclaw/tmp/y",
-        "root/.openclaw/logs/app.txt",
         "root/.hermes/.env", "root/.hermes/skills/s/main.py",
         "root/.hermes/.git/HEAD", "root/.hermes/x/node_modules/a.js",
         "usr/local/lib/hermes-agent/venv/bin/python",
