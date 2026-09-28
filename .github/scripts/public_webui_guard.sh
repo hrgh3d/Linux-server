@@ -75,10 +75,17 @@ server {
         proxy_pass http://127.0.0.1:9120/;
         proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
         proxy_redirect ~^(/.*)$ https://$host$1;
+        # Hermes' login page has an inline fetch('/auth/password-login').
+        # Rewrite it and the post-login JSON target under the public prefix;
+        # otherwise the browser posts to the 9router root and reports failure.
         sub_filter_once off;
-        sub_filter_types text/html text/css application/javascript;
+        sub_filter_types text/html text/css application/javascript application/json;
         sub_filter 'href="/' 'href="/hermes-dashboard/';
         sub_filter 'src="/' 'src="/hermes-dashboard/';
+        sub_filter '"/auth/' '"/hermes-dashboard/auth/';
+        sub_filter "'/auth/" "'/hermes-dashboard/auth/";
+        sub_filter '`/auth/' '`/hermes-dashboard/auth/';
+        sub_filter '"next":"/"' '"next":"/hermes-dashboard/"';
     }
 
     location = /omniroute { return 301 /omniroute/; }
@@ -94,7 +101,10 @@ server {
         # Without these rewrites a browser requests 9router at the public root
         # and remains on the OmniRoute loading screen.
         sub_filter_once off;
-        sub_filter_types text/html text/css application/javascript;
+        # Login returns JSON containing its post-login route, so JSON must be
+        # filtered too; otherwise its /home target leaves /omniroute/ and lands
+        # on the 9router public root.
+        sub_filter_types text/html text/css application/javascript application/json;
         sub_filter 'window.location.origin' 'window.location.origin+"/omniroute"';
         sub_filter 'href="/' 'href="/omniroute/';
         sub_filter 'src="/' 'src="/omniroute/';
@@ -110,6 +120,9 @@ server {
         sub_filter '"/login' '"/omniroute/login';
         sub_filter "'/login" "'/omniroute/login";
         sub_filter '`/login' '`/omniroute/login';
+        sub_filter '"/home' '"/omniroute/home';
+        sub_filter "'/home" "'/omniroute/home";
+        sub_filter '`/home' '`/omniroute/home';
         sub_filter '"/forgot-password' '"/omniroute/forgot-password';
         sub_filter "'/forgot-password" "'/omniroute/forgot-password";
         sub_filter '`/forgot-password' '`/omniroute/forgot-password';
