@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Verified continuity transport for Hermes conversation state.
-# The archive deliberately excludes .env/secrets and all runtime/toolchain files.
+# Verified continuity transport for Hermes' durable agent state.
+# The archive covers non-ephemeral Hermes/Bot Mode state and approved Composio
+# state roots. The top-level Hermes .env remains in the persistent secret vault;
+# toolchains, caches and logs are deliberately excluded.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="$SCRIPT_DIR/hermes_continuity.py"
 HOME_DIR="${HERMES_HOME:-/root/.hermes}"
+ROOT_HOME="${HERMES_ROOT_HOME:-/root}"
 ARCHIVE="${HERMES_CONTINUITY_ARCHIVE:-/tmp/hermes-continuity.tar.gz}"
 MARKER="${HERMES_CONTINUITY_MARKER:-/var/lib/hermes-continuity/last-restore.json}"
 LOCK="${HERMES_CONTINUITY_LOCK:-/run/hermes-continuity.lock}"
@@ -66,14 +69,14 @@ checkpoint() {
     return 0
   fi
   local fingerprint
-  fingerprint="$(python3 "$PY" fingerprint --home "$HOME_DIR")"
+  fingerprint="$(python3 "$PY" fingerprint --home "$HOME_DIR" --root-home "$ROOT_HOME")"
   if [ "$handoff" != "--handoff" ] && [ -s "$FINGERPRINT_FILE" ] && \
      [ "$(cat "$FINGERPRINT_FILE")" = "$fingerprint" ]; then
     log "state unchanged — checkpoint upload skipped"
     return 0
   fi
   rm -f "$ARCHIVE"
-  local args=(checkpoint --home "$HOME_DIR" --out "$ARCHIVE")
+  local args=(checkpoint --home "$HOME_DIR" --root-home "$ROOT_HOME" --out "$ARCHIVE")
   [ "$handoff" = "--handoff" ] && args+=(--handoff)
   python3 "$PY" "${args[@]}"
   # state_sync verifies the uploaded object before it retires any previous copy.
@@ -94,7 +97,7 @@ restore() {
     rm -f "$ARCHIVE"
     if PERSIST_DOWNLOAD_OFFSET="$offset" python3 "$SCRIPT_DIR/state_sync.py" download "$ARCHIVE" --kind hermes; then
       if python3 "$PY" validate --archive "$ARCHIVE" && \
-         python3 "$PY" restore --home "$HOME_DIR" --archive "$ARCHIVE" --marker "$MARKER"; then
+         python3 "$PY" restore --home "$HOME_DIR" --root-home "$ROOT_HOME" --archive "$ARCHIVE" --marker "$MARKER"; then
         rm -f "$ARCHIVE"
         log "verified continuity state restored (rollback offset=$offset)"
         return 0

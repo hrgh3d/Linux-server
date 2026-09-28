@@ -15,13 +15,17 @@ Tailscale فعلی است.
 1. runner جدید را از `main.yml` راه‌اندازی کنید.
 2. restore state عمومی را اجرا کنید. اگر archive عمومی نبود، فقط بخش‌های قابل
    بازسازی شروع می‌شوند؛ secretهای لازم از vault پایدار برمی‌گردند.
-3. `hermes_continuity.sh restore` باید پیش از بالا آمدن Hermes اجرا شود.
-   این مرحله archive را hash، manifest و SQLite integrity check می‌کند.
-4. اگر جدیدترین checkpoint Hermes نامعتبر بود، restore حداکثر سه نسخهٔ قبلی را
+3. `hermes_continuity.sh restore` باید پیش از بالا آمدن Hermes اجرا شود. این
+   مرحله skill، profile، Bot Mode، topic binding، session، config و state مجاز
+   Composio را همراه با state SQLite بازیابی می‌کند.
+4. archive ابتدا از نظر manifest، SHA-256 و SQLite integrity check اعتبارسنجی
+   می‌شود. restore فایل‌ها را stage می‌کند و با rollback transaction نصب می‌کند؛
+   پس از اعتبارسنجی هیچ secret یا متن conversation در log نمی‌آید.
+5. اگر جدیدترین checkpoint Hermes نامعتبر بود، restore حداکثر سه نسخهٔ قبلی را
    بررسی می‌کند. اگر هیچ نسخهٔ معتبری نبود، Hermes نباید با history خالی جایگزین
    وضعیت قبلی شود.
-5. سرویس‌ها را بالا بیاورید و سلامت Gateway، Serve و routeها را بررسی کنید.
-6. یک checkpoint تأییدشدهٔ Hermes ایجاد کنید تا runner جدید نقطهٔ بازیابی تازه
+6. سرویس‌ها را بالا بیاورید و سلامت Gateway، Serve و routeها را بررسی کنید.
+7. یک checkpoint تأییدشدهٔ Hermes ایجاد کنید تا runner جدید نقطهٔ بازیابی تازه
    داشته باشد.
 
 ## آزمون‌های صحت بعد از recovery
@@ -32,8 +36,10 @@ systemctl is-active hermes-serve.service
 sqlite3 /root/.hermes/state.db 'PRAGMA integrity_check;'
 ```
 
-همچنین log workflow باید تعداد session/message restoreشده و digest تأییدشده را
-بدون نمایش secret نشان دهد.
+همچنین log workflow باید تعداد session/message restoreشده، تعداد memberها و
+digest تأییدشده را بدون نمایش secret نشان دهد. تست archive/restore باید فقط با
+home موقت اجرا شود؛ هیچ test نباید Telegram message، topic، Instagram post یا
+تغییر state کاربر ایجاد کند.
 
 ## handoff
 
