@@ -78,24 +78,28 @@ server {
     location = /hermes-dashboard { return 301 /hermes-dashboard/; }
     location /hermes-dashboard/ {
         proxy_set_header X-Forwarded-Prefix /hermes-dashboard;
+        proxy_set_header Accept-Encoding "";
         proxy_pass http://127.0.0.1:9120/;
         # Hermes already honors X-Forwarded-Prefix. Rewrite only the backend
         # scheme/port, never add the path prefix a second time.
         proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
         proxy_redirect ~^(/.*)$ https://$host$1;
         sub_filter_once off;
+        sub_filter_types text/html text/css application/javascript;
         sub_filter 'href="/' 'href="/hermes-dashboard/';
         sub_filter 'src="/' 'src="/hermes-dashboard/';
     }
     location = /omniroute { return 301 /omniroute/; }
     location /omniroute/ {
         proxy_set_header X-Forwarded-Prefix /omniroute;
+        proxy_set_header Accept-Encoding "";
         proxy_pass http://127.0.0.1:20130/;
         # OmniRoute does not always honor a forwarded prefix, so preserve it
         # when a relative redirect is returned.
         proxy_redirect ~^https?://[^/]+(/.*)$ https://$host$1;
         proxy_redirect ~^/(.*)$ https://$host/omniroute/$1;
         sub_filter_once off;
+        sub_filter_types text/html text/css application/javascript;
         sub_filter 'href="/' 'href="/omniroute/';
         sub_filter 'src="/' 'src="/omniroute/';
     }
