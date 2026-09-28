@@ -154,6 +154,18 @@ def big_keep_under(rel):
     return any(rel == p or rel.startswith(p + "/") for p in _BIG_KEEP)
 
 
+# Retired by explicit user request (2026-09-28). /root and /opt are broad
+# persistence roots, therefore these exact subtrees must be excluded from all
+# future state snapshots even if an old runner state still contains them.
+_RETIRED_COMPONENT_PATHS = (
+    "root/.openclaw", "root/.pi", "opt/openclaw-node", "opt/openclaw-app", "opt/aihub",
+)
+
+
+def _retired_component(rel):
+    return any(rel == p or rel.startswith(p + "/") for p in _RETIRED_COMPONENT_PATHS)
+
+
 # v6.26: OpenClaw — داده‌ی کاربر باید کامل بماند، کد بازنصب می‌شود.
 # /root/.openclaw شامل agents/ (سشن‌ها و حافظه)، workspace/ و openclaw.json است.
 # داخل آن پوشه‌هایی به نام cache/tmp/logs و حتی node_modules (پلاگین‌ها و skillها)
@@ -217,6 +229,8 @@ def _in_site_packages(rel):
 
 
 def prune_dir(rel):
+    if _retired_component(rel):
+        return True
     # v6.39: __pycache__ همیشه دورریختنی است — این بررسی باید *قبل* از هر
     # معافیتی بیاید، وگرنه معافیت venv هرمس آن را هم نگه می‌دارد (حجم اضافه).
     if rel.rstrip("/").rsplit("/", 1)[-1] == "__pycache__":
@@ -264,6 +278,8 @@ def prune_dir(rel):
 
 
 def prune_file(rel):
+    if _retired_component(rel):
+        return True
     name = rel.rsplit("/", 1)[-1]
     # v6.36: ژورنال زندهٔ SQLite هرگز نباید خام آرشیو شود — مستقل از اینکه
     # نام پایه چه پسوندی دارد. (نمونهٔ واقعی روی سرور: data.sqlite.fresh-bak-wal
@@ -572,27 +588,31 @@ def selftest():
     assert prune_file("root/.9router/db/data.sqlite-wal") is True
     assert prune_file("etc/x-ui/install-result.env") is True
     assert prune_file("etc/x-ui/system_metrics.gob") is True
-    # ---- v6.36 regression tests: حادثهٔ 2026-09-17 (از دست رفتن سشن OpenClaw)
-    # مسیر دقیقی که رانر #148 را شکست داد:
+    # ---- retired components must never enter a future state snapshot ----
+    for _p in ("root/.openclaw", "root/.pi/agent/sessions/x.jsonl",
+               "opt/openclaw-app/lib/node_modules/openclaw/openclaw.mjs",
+               "opt/openclaw-node/bin/node", "opt/aihub/data/hub.sqlite"):
+        assert prune_dir(_p) or prune_file(_p), _p
+
+    # Historical nested-state regression inputs remain rejected because the
+    # entire retired OpenClaw tree is now excluded.
     _POISON = ("root/.openclaw/workspace/backups/live-20260916-2245/us/"
                "mirza-pro-extracted/mirza_pro/.git")
     assert prune_dir(_POISON) is True, "‌.git زیر .openclaw باید prune شود"
     assert member_violation(_POISON + "/hooks/pre-commit.sample") is not None
     assert prune_dir("root/.openclaw/.git") is True
     assert prune_dir("root/.openclaw/workspace/proj/__pycache__") is True
-    # دادهٔ واقعی کاربر باید دست‌نخورده بماند:
-    assert prune_dir("root/.openclaw/agents/main") is False
-    assert prune_dir("root/.openclaw/workspace") is False
-    assert prune_dir("root/.openclaw/workspace/skills/my/node_modules") is False
-    assert prune_file("root/.openclaw/openclaw.json") is False
+    # The former user-data paths are now retired and always rejected.
+    assert prune_dir("root/.openclaw/agents/main") is True
+    assert prune_dir("root/.openclaw/workspace") is True
+    assert prune_dir("root/.openclaw/workspace/skills/my/node_modules") is True
+    assert prune_file("root/.openclaw/openclaw.json") is True
     assert member_violation("root/.openclaw/agents/main/agent/"
-                            "openclaw-agent.sqlite") is None
+                            "openclaw-agent.sqlite") is not None
     assert member_violation("root/.openclaw/workspace/skills/my/"
-                            "node_modules/x/index.js") is None
-    # قرارداد اصلی: هر چیزی که جمع‌آورنده نگه می‌دارد، اعتبارسنج هم باید بپذیرد.
-    for _p in ("root/.openclaw/agents/main/memory.json",
-               "root/.openclaw/workspace/notes/todo.md",
-               "root/.hermes/skills/a/skill.py",
+                            "node_modules/x/index.js") is not None
+    # The collector and validator remain aligned for retained data.
+    for _p in ("root/.hermes/skills/a/skill.py",
                "usr/local/lib/hermes-agent/venv/bin/python"):
         assert member_violation(_p) is None, f"collector/validator mismatch: {_p}"
     # و هر چیزی که prune می‌شود، اعتبارسنج هم باید رد کند.

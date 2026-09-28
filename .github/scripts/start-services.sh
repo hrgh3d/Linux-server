@@ -10,6 +10,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 fail=0
 
+# Retired by explicit user request (2026-09-28): OpenClaw, Pi/Pi Web and AI Hub.
+# This runs after every restore as a defence-in-depth barrier: even an old state
+# snapshot cannot revive the retired programs on a later GitHub runner.
+retire_removed_ai_components() {
+  local u p
+  for u in openclaw-gateway.service pi-web.service aihub.service \
+           openclaw-serve-guard.service openclaw-serve-guard.timer; do
+    sudo systemctl disable --now "$u" >/dev/null 2>&1 || true
+  done
+  # Explicitly remove old units before daemon-reload. The replacement
+  # tailscale-serve-guard maintains only the services which remain supported.
+  sudo rm -f /etc/systemd/system/openclaw-gateway.service \
+             /etc/systemd/system/pi-web.service \
+             /etc/systemd/system/aihub.service \
+             /etc/systemd/system/openclaw-serve-guard.service \
+             /etc/systemd/system/openclaw-serve-guard.timer \
+             /usr/local/bin/openclaw_serve_guard.sh
+  sudo rm -f /etc/pi-web.env /usr/local/bin/openclaw /usr/local/bin/pi /usr/local/bin/pi-web
+  sudo rm -rf /opt/openclaw-node /opt/openclaw-app /root/.openclaw /root/.pi /opt/aihub \
+              /usr/local/lib/node_modules/openclaw \
+              /usr/local/lib/node_modules/@earendil-works/pi-coding-agent \
+              /usr/local/lib/node_modules/@agegr/pi-web
+  # They were installed globally with npm on earlier runners. Removal is
+  # intentionally non-fatal: paths have already been removed above.
+  if command -v npm >/dev/null 2>&1; then
+    sudo npm uninstall -g @earendil-works/pi-coding-agent @agegr/pi-web >/dev/null 2>&1 || true
+  fi
+  sudo systemctl daemon-reload >/dev/null 2>&1 || true
+}
+retire_removed_ai_components
+
 start_system() {
   local u="$1"
   if [ ! -f "/etc/systemd/system/$u" ]; then
@@ -182,10 +213,6 @@ ensure_tunnel_stack
 start_system 9router.service
 start_system 9router-tunnel.service
 start_system tunnel-watch.service
-# v6.26: OpenClaw Gateway — فقط اگر provision.sh یونیت را ساخته باشد
-if [ -f /etc/systemd/system/openclaw-gateway.service ]; then
-  start_system openclaw-gateway.service
-fi
 
 # --- v6.38: Headroom — پروکسی فشرده‌سازی کانتکست برای «Token Saver» پنل 9router
 # پنل 9router خودش این پروسه را اجرا نمی‌کند («Headroom proxies must be started
@@ -307,192 +334,6 @@ except Exception as exc:
     print("[services] cloudcli combos: skipped (%s)" % exc)
 PYCOMBO
 }
-
-# --- همان کامبوها برای Pi ---------------------------------------------------
-ensure_pi_combos() {
-  local mj=/root/.pi/agent/models.json
-  [ -s "$mj" ] || return 0
-  local names; names="$(read_9router_combos | paste -sd, -)"
-  [ -n "$names" ] || return 0
-  python3 - "$mj" "$names" <<'PYPI'
-import json, sys
-mj, names = sys.argv[1], [x for x in sys.argv[2].split(",") if x]
-try:
-    d = json.load(open(mj))
-    prov = d.setdefault("providers", {}).setdefault("ninerouter", {})
-    cur = {m.get("id") for m in prov.get("models", [])}
-    add = [n for n in names if n not in cur]
-    if add:
-        prov.setdefault("models", []).extend(
-            {"id": n, "contextWindow": 128000} for n in add)
-        json.dump(d, open(mj, "w"), indent=2)
-        print("[services] pi combos: %s added" % ", ".join(add))
-    else:
-        print("[services] pi combos: already present")
-except Exception as exc:
-    print("[services] pi combos: skipped (%s)" % exc)
-PYPI
-}
-
-# --- همان کامبوها برای OpenClaw --------------------------------------------
-ensure_openclaw_combos() {
-  local cfg=/root/.openclaw/openclaw.json
-  [ -s "$cfg" ] || return 0
-  local names; names="$(read_9router_combos | paste -sd, -)"
-  [ -n "$names" ] || return 0
-  python3 - "$cfg" "$names" <<'PYOC'
-import json, sys
-cfg, names = sys.argv[1], [x for x in sys.argv[2].split(",") if x]
-try:
-    d = json.load(open(cfg))
-    prov = d.setdefault("models", {}).setdefault("providers", {}).setdefault("ninerouter", {})
-    models = prov.setdefault("models", [])
-    cur = {m.get("id") if isinstance(m, dict) else m for m in models}
-    add = [n for n in names if n not in cur]
-    if add:
-        models.extend({"id": n, "name": "9router " + n, "contextWindow": 128000}
-                      for n in add)
-        json.dump(d, open(cfg, "w"), indent=2)
-        print("[services] openclaw combos: %s added" % ", ".join(add))
-    else:
-        print("[services] openclaw combos: already present")
-except Exception as exc:
-    print("[services] openclaw combos: skipped (%s)" % exc)
-PYOC
-}
-
-ensure_pi_combos
-ensure_openclaw_combos
-
-# --- v6.47: Pi Web — رابط وب برای Pi -----------------------------------------
-# خود Pi هیچ web UI داخلی ندارد (در pi --help هیچ فعل serve/web نیست).
-# @agegr/pi-web بالغ‌ترین گزینهٔ موجود است: همان فایل‌های نشست Pi در
-# ~/.pi/agent/sessions را می‌خواند (پس ترمینال و مرورگر دو نمای یک حالت‌اند)،
-# و مهم‌تر: PI_WEB_PASSWORD، PI_WEB_HOSTNAME و PI_WEB_ALLOWED_HOSTS دارد که
-# برای اجرای پشت Tailscale لازم است.
-ensure_piweb() {
-  command -v pi >/dev/null 2>&1 || return 0
-
-  if [ ! -x /usr/local/bin/pi-web ]; then
-    echo "[services] installing @agegr/pi-web"
-    timeout 900 sudo npm install -g --no-fund --no-audit @agegr/pi-web@latest \
-      >/tmp/piweb-install.log 2>&1 \
-      || { echo "[services] pi-web install failed: $(tail -3 /tmp/piweb-install.log | tr '\n' ' ')"; return 0; }
-  fi
-  [ -x /usr/local/bin/pi-web ] || return 0
-
-  # درس v6.34/v6.43: نام میزبان Tailscale باید در allowed hosts باشد وگرنه
-  # Next.js درخواست پروکسی‌شده را رد می‌کند و کاربر صفحهٔ خطا می‌بیند.
-  local DN
-  DN=$(tailscale status --json 2>/dev/null | python3 -c "
-import sys,json
-try: print(json.load(sys.stdin).get('Self',{}).get('DNSName','').rstrip('.'))
-except Exception: pass" 2>/dev/null)
-  local PW="${DASHBOARD_PASSWORD:-hamidgh69}"
-
-  sudo tee /etc/pi-web.env >/dev/null <<ENVF
-PORT=30141
-PI_WEB_HOSTNAME=127.0.0.1
-PI_WEB_NO_OPEN=1
-PI_WEB_SKIP_VERSION_CHECK=1
-PI_WEB_PASSWORD=${PW}
-PI_WEB_ALLOWED_HOSTS=${DN},${DN}:9445,127.0.0.1,localhost
-PI_WEB_IDLE_TIMEOUT_MS=0
-PI_CODING_AGENT_DIR=/root/.pi/agent
-HOME=/root
-ENVF
-  sudo chmod 600 /etc/pi-web.env
-
-  if [ ! -f /etc/systemd/system/pi-web.service ]; then
-    sudo tee /etc/systemd/system/pi-web.service >/dev/null <<'UNIT'
-[Unit]
-Description=Pi Web — browser UI for the Pi coding agent
-After=network-online.target 9router.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-EnvironmentFile=/etc/pi-web.env
-ExecStart=/usr/local/bin/pi-web
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-    sudo systemctl daemon-reload
-  fi
-
-  start_system pi-web.service
-  local _i
-  for _i in $(seq 1 12); do
-    curl -fsS -m 3 -o /dev/null http://127.0.0.1:30141/ 2>/dev/null && break
-    sleep 5
-  done
-  echo "[services] pi-web local: $(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:30141/)"
-}
-ensure_piweb
-
-
-# ---------------------------------------------------------------- AI Hub
-# پنل یکپارچهٔ مدیریت همهٔ برنامه‌های AI روی پورت 9446.
-# درس v6.x: start-services.sh یونیت‌ها را خودکار کشف نمی‌کند، پس هر سرویس
-# جدید باید صراحتاً اینجا اضافه شود وگرنه بعد از چرخش رانر برنمی‌گردد.
-ensure_aihub() {
-  local SRC="$SCRIPT_DIR/../../aihub"
-  [ -d "$SRC/app" ] || { echo "[services] aihub source missing, skip"; return 0; }
-
-  sudo mkdir -p /opt/aihub /opt/aihub/data
-  sudo cp -r "$SRC/app" "$SRC/static" "$SRC/requirements.txt" /opt/aihub/ 2>/dev/null || true
-
-  if [ ! -x /opt/aihub/venv/bin/python ]; then
-    echo "[services] creating aihub venv"
-    sudo python3 -m venv /opt/aihub/venv >/tmp/aihub-venv.log 2>&1 || {
-      echo "[services] aihub venv failed"; return 0; }
-  fi
-  # نصب فقط وقتی fastapi غایب است تا هر بوت چند دقیقه تلف نشود
-  if ! /opt/aihub/venv/bin/python -c "import fastapi" >/dev/null 2>&1; then
-    echo "[services] installing aihub deps"
-    sudo /opt/aihub/venv/bin/pip -q install -r /opt/aihub/requirements.txt \
-      >/tmp/aihub-pip.log 2>&1 || {
-      echo "[services] aihub pip failed: $(tail -2 /tmp/aihub-pip.log | tr '\n' ' ')"; return 0; }
-  fi
-
-  sudo tee /etc/systemd/system/aihub.service >/dev/null <<'AIHUBUNIT'
-[Unit]
-Description=AI Hub - unified control panel for all AI programs
-After=network-online.target 9router.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/aihub
-EnvironmentFile=-/etc/profile.d/ai-clients.sh
-Environment=PYTHONUNBUFFERED=1
-Environment=XDG_RUNTIME_DIR=/run/user/0
-ExecStart=/opt/aihub/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 9446 --no-access-log
-Restart=always
-RestartSec=5
-KillMode=mixed
-TimeoutStopSec=15
-
-[Install]
-WantedBy=multi-user.target
-AIHUBUNIT
-
-  sudo systemctl daemon-reload
-  sudo systemctl enable aihub.service >/dev/null 2>&1 || true
-  sudo systemctl restart aihub.service || true
-  local i
-  for i in $(seq 1 10); do
-    curl -fsS -m 3 -o /dev/null http://127.0.0.1:9446/api/health 2>/dev/null && break
-    sleep 2
-  done
-  echo "[services] aihub: $(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1:9446/api/health)"
-}
-ensure_aihub
 
 
 ensure_cloudcli
@@ -955,43 +796,40 @@ else
   echo "[services] gateway_guard.sh not found — guard skipped"
 fi
 
-# --- v6.32: نگهبان Tailscale Serve برای OpenClaw ---
-# درس ۱۶ سپتامبر (بعدازظهر): با gateway.tailscale.mode=serve، خودِ OpenClaw
-# مسیر Serve را هنگام استارت claim می‌کند. اگر tailscaled ری‌استارت شود آن
-# claim از بین می‌رود و OpenClaw دوباره نمی‌گیردش؛ فقط لاگ می‌کند
-# "serve route claim exited ... until the Gateway restarts".
-# نتیجه: سرویس active، لوپ‌بک ۲۰۰، ولی داشبورد HTTPS و اپ موبایل قطع.
-if [ -f "$SCRIPT_DIR/openclaw_serve_guard.sh" ]; then
-  sudo install -m 0755 "$SCRIPT_DIR/openclaw_serve_guard.sh" \
-    /usr/local/bin/openclaw_serve_guard.sh
-  sudo tee /etc/systemd/system/openclaw-serve-guard.service >/dev/null <<'UNIT'
+# --- نگهبان عمومی Tailscale Serve برای پنل‌های باقی‌مانده ---
+# OpenClaw/Pi/AI Hub retired هستند؛ این نگهبان فقط مسیرهای CloudCLI, Hermes,
+# 9Router و OmniRoute را بعد از restart شدن tailscaled بازمی‌گرداند.
+if [ -f "$SCRIPT_DIR/tailscale_serve_guard.sh" ]; then
+  sudo install -m 0755 "$SCRIPT_DIR/tailscale_serve_guard.sh" \
+    /usr/local/bin/tailscale_serve_guard.sh
+  sudo tee /etc/systemd/system/tailscale-serve-guard.service >/dev/null <<'UNIT'
 [Unit]
-Description=OpenClaw Tailscale Serve ingress guard (re-claim after tailscaled restart)
+Description=Tailscale Serve guard for retained dashboards
 After=network-online.target tailscaled.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/openclaw_serve_guard.sh
+ExecStart=/usr/local/bin/tailscale_serve_guard.sh
 UNIT
-  sudo tee /etc/systemd/system/openclaw-serve-guard.timer >/dev/null <<'UNIT'
+  sudo tee /etc/systemd/system/tailscale-serve-guard.timer >/dev/null <<'UNIT'
 [Unit]
-Description=Run the OpenClaw Serve ingress guard every 60s
+Description=Run the retained-dashboard Serve guard every 60s
 
 [Timer]
 OnBootSec=90
 OnUnitActiveSec=60
 AccuracySec=10s
-Unit=openclaw-serve-guard.service
+Unit=tailscale-serve-guard.service
 
 [Install]
 WantedBy=timers.target
 UNIT
   sudo systemctl daemon-reload >/dev/null 2>&1 || true
-  sudo systemctl enable --now openclaw-serve-guard.timer >/dev/null 2>&1 \
-    && echo "[services] openclaw-serve-guard.timer: enabled (60s)" \
-    || echo "[services] WARNING: could not enable openclaw-serve-guard.timer"
+  sudo systemctl enable --now tailscale-serve-guard.timer >/dev/null 2>&1 \
+    && echo "[services] tailscale-serve-guard.timer: enabled (60s)" \
+    || echo "[services] WARNING: could not enable tailscale-serve-guard.timer"
 else
-  echo "[services] openclaw_serve_guard.sh not found — serve guard skipped"
+  echo "[services] tailscale_serve_guard.sh not found — guard skipped"
 fi
 
 # --- راستی‌آزمایی ---

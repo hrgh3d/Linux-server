@@ -31,10 +31,6 @@
 # داده‌های عمومی سرویس‌ها (دیتابیس و …)
 /var/lib
 /var/opt
-/opt/aihub/app
-/opt/aihub/static
-/opt/aihub/requirements.txt
-/opt/aihub/data
 
 # OmniRoute — دروازهٔ AI روی پورت ۲۰۱۳۰ (۲۰۱۲۸ در اختیار 9router است).
 # دیتابیس، کلیدهای ارائه‌دهنده و .env اینجاست؛ بدون این، بعد از تعویض

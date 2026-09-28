@@ -252,11 +252,7 @@ if command -v mysqldump >/dev/null 2>&1; then
   fi
 fi
 # --- v6.35: اسنپ‌شات دیتابیس‌های زنده قبل از tar ---
-snap_sqlite /root/.openclaw/state/openclaw.sqlite openclaw-state.sqlite
 snap_sqlite /root/.9router/db/data.sqlite 9router-data.sqlite
-# v6.50: دیتابیس خود هاب — نام نشست‌ها، پروژه‌ها، حافظهٔ مشترک، مهارت‌ها.
-# بدون این، بعد از بازیابی همهٔ نام‌گذاری‌ها و پروژه‌های مشترک صفر می‌شود.
-snap_sqlite /opt/aihub/data/hub.sqlite aihub-hub.sqlite
 # v6.52: OmniRoute — کاربر ارائه‌دهنده‌ها و کلیدها را دستی تنظیم کرده.
 # اعتبارنامه‌ها با AES رمز شده‌اند و کلیدش در .env است، پس دیتابیس بدون
 # .env بی‌فایده است و برعکس. هر دو باید با هم در باندل باشند.
@@ -267,8 +263,6 @@ snap_sqlite /root/.omniroute/storage.sqlite omniroute-storage.sqlite
 # ۱) هویت گره تیل‌اسکیل + مسیر ماندگار Serve. بدون آن، بعد از بازیابی آدرس
 #    MagicDNS عوض می‌شود و همهٔ setup codeها و لینک داشبورد باطل می‌شوند.
 try_tar tailscale-state.tar.gz /var/lib/tailscale
-# ۲) کانفیگ/سشن OpenClaw (منهای cache/tmp/media)
-try_tar openclaw.tar.gz /root/.openclaw
 # ۳) یونیت‌ها و کانفیگ سرویس‌ها (system + user برای hermes)
 try_tar services.tar.gz /etc/nginx /etc/cron.d /etc/systemd/system /etc/systemd/user
 # ۴) نگهبان‌ها و اسکریپت‌های عملیاتی.
@@ -302,10 +296,6 @@ try_tar omniroute.tar.gz \
   --exclude=*.sqlite-wal --exclude=*.sqlite-shm \
   -- /root/.omniroute /root/.omniroute-secrets
 
-try_tar aihub.tar.gz --exclude=opt/aihub/venv --exclude=./opt/aihub/venv \
-  --exclude=opt/aihub/data/hub.sqlite-wal --exclude=./opt/aihub/data/hub.sqlite-wal \
-  --exclude=opt/aihub/data/hub.sqlite-shm --exclude=./opt/aihub/data/hub.sqlite-shm \
-  -- /opt/aihub
 # ۶) باقی /root به‌عنوان تور ایمنی — بدون چیزهایی که جداگانه گرفته شدند یا
 #    بازساختنی‌اند (.codex 336M، .npm 311M، Documents/user_workspace/workspace.zip)
 try_tar home-root.tar.gz \
@@ -314,6 +304,7 @@ try_tar home-root.tar.gz \
   --exclude=root/user_workspace --exclude=./root/user_workspace \
   --exclude=root/workspace.zip --exclude=./root/workspace.zip \
   --exclude=root/.openclaw --exclude=./root/.openclaw \
+  --exclude=root/.pi --exclude=./root/.pi \
   --exclude=root/.hermes --exclude=./root/.hermes \
   --exclude=root/.omniroute --exclude=./root/.omniroute \
   -- /root
@@ -327,17 +318,12 @@ import sys,json
 try: print('  magicdns:', json.load(sys.stdin).get('Self',{}).get('DNSName','').rstrip('.'))
 except Exception: pass" 2>/dev/null
   echo "--- tailscale serve ---"; tailscale serve status 2>/dev/null | head -4
-  echo "--- openclaw ---"
-  /usr/local/bin/openclaw --version 2>/dev/null | head -1
-  /usr/local/bin/openclaw devices list 2>/dev/null | grep -E "^ +[0-9a-f]{16}" | head -5
   echo "--- versions ---"
   echo "  node(system): $(node -v 2>/dev/null)"
-  echo "  node(openclaw): $(/opt/openclaw-node/bin/node -v 2>/dev/null)"
   echo "  hermes: $(/root/.hermes/bin/hermes --version 2>/dev/null | head -1)"
-  echo "  aihub: $(curl -s -m 5 http://127.0.0.1:9446/api/health 2>/dev/null | head -c 120)"
   echo "--- enabled units (بازیابی باید همین‌ها را enable کند) ---"
   systemctl list-unit-files --state=enabled --no-legend 2>/dev/null \
-    | awk '{print "  "$1}' | grep -iE "aihub|9router|openclaw|hermes|cloudcli|tailscale|nginx|headroom"
+    | awk '{print "  "$1}' | grep -iE "9router|omniroute|hermes|cloudcli|tailscale|nginx|headroom"
   echo "  user-linger: $(loginctl show-user root -p Linger --value 2>/dev/null)"
   echo "--- crontab ---"; crontab -l 2>/dev/null | grep -v "^#" | head -10
   echo "--- manifest ---"; cat "$MAN" 2>/dev/null
@@ -384,10 +370,8 @@ verify_bundle() {
     VERDICT="⚠️ بدون دادهٔ سرور (SSH قطع بود) — bootstrap + state"
     return 0
   fi
-  for crit in tailscale-state.tar.gz openclaw.tar.gz sqlite/openclaw-state.sqlite \
-              app-code.tar.gz services.tar.gz bin-scripts.tar.gz home-root.tar.gz \
-              aihub.tar.gz sqlite/aihub-hub.sqlite sqlite/9router-data.sqlite \
-              omniroute.tar.gz sqlite/omniroute-storage.sqlite; do
+  for crit in tailscale-state.tar.gz app-code.tar.gz services.tar.gz bin-scripts.tar.gz home-root.tar.gz \
+              sqlite/9router-data.sqlite omniroute.tar.gz sqlite/omniroute-storage.sqlite; do
     printf '%s\n' "$list" | grep -q "$crit" || { echo "[verify] MISSING $crit"; missing=$((missing+1)); }
   done
   ok=$(printf '%s\n' "$list" | grep -c 'tar.gz\|sqlite')
@@ -395,18 +379,6 @@ verify_bundle() {
   # v6.35.3 — بازرسی عمیق: فقط «فایل هست» کافی نیست، محتوا هم باید سالم باشد.
   local deep="" tmpd
   tmpd=$(mktemp -d)
-  if tar -xzf "$f" -C "$tmpd" ./sqlite/openclaw-state.sqlite 2>/dev/null \
-     || tar -xzf "$f" -C "$tmpd" sqlite/openclaw-state.sqlite 2>/dev/null; then
-    local db; db=$(find "$tmpd" -name openclaw-state.sqlite | head -1)
-    if [ -n "$db" ] && command -v sqlite3 >/dev/null 2>&1; then
-      local ic pd
-      ic=$(sqlite3 "$db" "pragma integrity_check" 2>/dev/null | head -1)
-      pd=$(sqlite3 "$db" "select count(*) from device_pairing_paired" 2>/dev/null)
-      [ "$ic" = "ok" ] && deep="${deep} db:ok" || { deep="${deep} db:CORRUPT"; missing=$((missing+1)); }
-      [ -n "$pd" ] && deep="${deep} paired:${pd}"
-      echo "[verify] sqlite integrity=$ic paired_devices=${pd:-?}"
-    fi
-  fi
   # هویت گره تیل‌اسکیل بدون tailscaled.state بی‌فایده است
   if tar -xzOf "$f" ./tailscale-state.tar.gz 2>/dev/null | tar -tz 2>/dev/null | grep -q tailscaled.state \
      || tar -xzOf "$f" tailscale-state.tar.gz 2>/dev/null | tar -tz 2>/dev/null | grep -q tailscaled.state; then
@@ -422,9 +394,9 @@ verify_bundle() {
   else
     # v6.51: نام اجزای غایب را هم بگو، وگرنه «⚠️ ناقص — ۲ ایراد» یعنی هیچ.
     local miss_names=""
-    for crit in openclaw.tar.gz home-root.tar.gz aihub.tar.gz omniroute.tar.gz \
-                tailscale-state.tar.gz app-code.tar.gz services.tar.gz \
-                sqlite/aihub-hub.sqlite sqlite/openclaw-state.sqlite; do
+    for crit in home-root.tar.gz omniroute.tar.gz tailscale-state.tar.gz \
+                app-code.tar.gz services.tar.gz sqlite/9router-data.sqlite \
+                sqlite/omniroute-storage.sqlite; do
       printf '%s\n' "$list" | grep -q "$crit" || miss_names="${miss_names} ${crit%%.tar.gz}"
     done
     VERDICT="⚠️ ناقص — $missing ایراد:${miss_names},${deep}"
@@ -439,7 +411,7 @@ send_doc() {
   rpt_file "$1" "$2"
 }
 CAP="🗄 بکاپ کامل سیستم ${VPS_NAME} — $(date -u '+%Y-%m-%d %H:%M') UTC (رویداد: ${TRIGGER})
-شامل: دادهٔ سرور + هویت Tailscale + OpenClaw (کانفیگ و دستگاه‌های جفت‌شده) + کل ریپو + کلیدها + RECOVERY.md
+شامل: دادهٔ سرویس‌های باقی‌مانده + هویت Tailscale + کل ریپو + کلیدها + RECOVERY.md
 بازرسی: ${VERDICT}
 بازگردانی: RECOVERY.md بخش ۵ را دنبال کن (روی سرور خالی هم کار می‌کند)"
 SENT_OK=0

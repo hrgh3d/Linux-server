@@ -83,175 +83,7 @@ provision_9router() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# OpenClaw (v6.26)
-# معماری ماندگاری — عمداً مثل 9router: «داده می‌ماند، کد بازنصب می‌شود».
-#   * دادهٔ کاربر  : /root/.openclaw  → در آرشیو state حفظ می‌شود
-#                    (agents/ = سشن‌ها و حافظه، workspace/، openclaw.json،
-#                     .gateway-token، دستگاه‌های pair شده)
-#   * کد و رانتایم : /opt/openclaw-node (Node 24) + /opt/openclaw-app
-#                    → آرشیو نمی‌شوند (۷۵۰MB و پر از node_modules) و اینجا
-#                      در صورت نبود بازنصب می‌شوند.
-# نکتهٔ مهم: OpenClaw حداقل Node 24 می‌خواهد ولی Node سیستمی روی ۲۲ می‌ماند،
-# چون 9router به ماژول بومی better-sqlite3 کامپایل‌شده برای ABI نود ۲۲ وابسته
-# است. پس OpenClaw رانتایم جدا و ایزولهٔ خودش را دارد.
-OPENCLAW_NODE_DIR=/opt/openclaw-node
-OPENCLAW_APP_DIR=/opt/openclaw-app
-
-has_openclaw_data() {
-  [ -f /root/.openclaw/openclaw.json ] || [ -f "$RESTORE_ROOT/root/.openclaw/openclaw.json" ]
-}
-has_openclaw_runtime() {
-  [ -x "$OPENCLAW_NODE_DIR/bin/node" ] && \
-  [ -f "$OPENCLAW_APP_DIR/lib/node_modules/openclaw/openclaw.mjs" ]
-}
-
-install_openclaw_node() {
-  [ -x "$OPENCLAW_NODE_DIR/bin/node" ] && return 0
-  local v
-  v=$(curl -s --max-time 30 https://nodejs.org/dist/index.json 2>/dev/null | python3 -c "
-import sys,json
-try:
-    for r in json.load(sys.stdin):
-        if int(r['version'].lstrip('v').split('.')[0])==24:
-            print(r['version']); break
-except Exception: pass
-" 2>/dev/null)
-  [ -z "$v" ] && v="v24.21.0"   # fallback اگر API در دسترس نبود
-  $SUDO mkdir -p "$OPENCLAW_NODE_DIR"
-  curl -sL --max-time 300 -o /tmp/ocnode.tar.xz \
-    "https://nodejs.org/dist/$v/node-$v-linux-x64.tar.xz" || return 1
-  $SUDO tar -xJf /tmp/ocnode.tar.xz -C "$OPENCLAW_NODE_DIR" --strip-components=1 || return 1
-  rm -f /tmp/ocnode.tar.xz
-  [ -x "$OPENCLAW_NODE_DIR/bin/node" ]
-}
-
-write_openclaw_wrapper() {
-  $SUDO tee /usr/local/bin/openclaw >/dev/null <<WRAP
-#!/bin/sh
-# OpenClaw با رانتایم Node 24 اختصاصی اجرا می‌شود تا Node 22 سیستمی
-# (وابستگی 9router / better-sqlite3) دست‌نخورده بماند.
-export PATH="$OPENCLAW_NODE_DIR/bin:\$PATH"
-export OPENCLAW_STATE_DIR="\${OPENCLAW_STATE_DIR:-/root/.openclaw}"
-exec "$OPENCLAW_NODE_DIR/bin/node" "$OPENCLAW_APP_DIR/lib/node_modules/openclaw/openclaw.mjs" "\$@"
-WRAP
-  $SUDO chmod +x /usr/local/bin/openclaw
-}
-
-provision_openclaw() {
-  if ! has_openclaw_data; then
-    note "openclaw: no data — NOT installing (Mode 2)"
-    return 0
-  fi
-  if has_openclaw_runtime; then
-    write_openclaw_wrapper
-    note "openclaw: runtime present — kept"
-  else
-    log "openclaw: data exists but runtime missing — reinstalling (expected after a new runner)..."
-    if install_openclaw_node; then
-      if timeout 900 $SUDO env PATH="$OPENCLAW_NODE_DIR/bin:$PATH" \
-           "$OPENCLAW_NODE_DIR/bin/npm" install -g --prefix "$OPENCLAW_APP_DIR" \
-           openclaw@latest >"${LOG_DIR}/openclaw.log" 2>&1 && has_openclaw_runtime; then
-        write_openclaw_wrapper
-        note "openclaw: REINSTALLED (data preserved)"
-      else
-        note "openclaw: npm install FAILED"
-        tail -20 "${LOG_DIR}/openclaw.log" 2>/dev/null | tee -a "${LOG_DIR}/summary.txt"
-        return 0
-      fi
-    else
-      note "openclaw: Node 24 download FAILED"
-      return 0
-    fi
-  fi
-
-  # سرویس دائمی — در هر بوت بازنویسی می‌شود تا همیشه درست باشد
-  $SUDO tee /etc/systemd/system/openclaw-gateway.service >/dev/null <<UNIT
-[Unit]
-Description=OpenClaw Gateway (AI agent, 9router provider)
-After=network-online.target tailscaled.service 9router.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-Environment=PATH=$OPENCLAW_NODE_DIR/bin:/usr/local/bin:/usr/bin:/bin
-Environment=HOME=/root
-Environment=OPENCLAW_STATE_DIR=/root/.openclaw
-Environment=NODE_ENV=production
-WorkingDirectory=/root/.openclaw
-ExecStart=$OPENCLAW_NODE_DIR/bin/node $OPENCLAW_APP_DIR/lib/node_modules/openclaw/openclaw.mjs gateway run --port 18789
-Restart=always
-RestartSec=5
-RestartPreventExitStatus=78
-TimeoutStopSec=60
-KillMode=mixed
-StandardOutput=append:/var/log/openclaw-gateway.log
-StandardError=append:/var/log/openclaw-gateway.log
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-  $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
-  $SUDO systemctl enable openclaw-gateway.service >/dev/null 2>&1 || true
-  note "openclaw: service unit written + enabled"
-
-  # v6.28: اپ‌های موبایل/دسکتاپ برای pairing حتماً wss:// معتبر می‌خواهند و با
-  # http روی IP تیل‌نت کد اتصال صادر نمی‌شود. Tailscale Serve یک گواهی واقعی
-  # روی نام MagicDNS می‌دهد. نام گره ثابت است (هویت در /var/lib/tailscale حفظ
-  # می‌شود) پس آدرس بین رانرها عوض نمی‌شود و کدهای قبلی معتبر می‌مانند.
-  local _dn
-  _dn=$(tailscale status --json 2>/dev/null | python3 -c "
-import sys,json
-try: print(json.load(sys.stdin).get('Self',{}).get('DNSName','').rstrip('.'))
-except Exception: pass
-" 2>/dev/null)
-  if [ -n "$_dn" ]; then
-    timeout 90 tailscale cert "$_dn" >/dev/null 2>&1 || true
-
-    if [ -x /usr/local/bin/openclaw ]; then
-      local _oc=/usr/local/bin/openclaw
-      # v6.34 — معماری نهایی Serve:
-      #   * حالت داخلی OpenClaw (gateway.tailscale.mode=serve) claim را فقط
-      #     in-process نگه می‌دارد. هر Stop/Start سرویس tailscaled (که هر
-      #     اجرای ops-exec و واچ‌داگ انجام می‌دهد) آن را می‌کشد و OpenClaw
-      #     دوباره نمی‌گیردش ⇒ داشبورد هر ~۱۰ دقیقه می‌مرد.
-      #   * پس Serve را دستی و ماندگار می‌سازیم: در /var/lib/tailscale ذخیره
-      #     می‌شود که خودش یکی از روت‌های persist است.
-      #   * علت شکست قبلیِ همین روش، نبودِ gateway.trustedProxies بود
-      #     (proxy_attribution_required) که حالا تنظیم می‌شود.
-      timeout 60 $_oc config set gateway.bind loopback >/dev/null 2>&1 || true
-      timeout 60 $_oc config set gateway.tailscale.mode off >/dev/null 2>&1 || true
-      timeout 60 $_oc config set --json gateway.trustedProxies \
-        '["127.0.0.1/32","::1/128"]' >/dev/null 2>&1 || true
-      timeout 60 $_oc config set gateway.auth.allowTailscale true >/dev/null 2>&1 || true
-      timeout 60 $_oc config set --json gateway.controlUi.allowedOrigins \
-        "[\"https://$_dn\",\"http://127.0.0.1:18789\",\"http://localhost:18789\"]" \
-        >/dev/null 2>&1 || true
-      # هر دستگاهی که از داخل tailnet بیاید خودکار تأیید شود؛ وگرنه اپ موبایل
-      # با http101 403 forbidden در صف Pending می‌ماند.
-      timeout 60 $_oc config set gateway.nodes.pairing.autoApproveLocal true \
-        >/dev/null 2>&1 || true
-      timeout 60 $_oc config set --json gateway.nodes.pairing.autoApproveCidrs \
-        '["100.64.0.0/10","127.0.0.1/32","::1/128"]' >/dev/null 2>&1 || true
-      # آدرس pairing باید در کانفیگ بماند وگرنه openclaw qr خطا می‌دهد
-      timeout 60 $_oc config set \
-        plugins.entries.device-pair.config.publicUrl "wss://$_dn" >/dev/null 2>&1 || true
-
-      # Serve ماندگار (idempotent): فقط اگر مسیر نبود بسازش
-      if ! timeout 30 tailscale serve status 2>/dev/null | grep -q '18789'; then
-        timeout 90 tailscale serve --bg --https=443 http://127.0.0.1:18789 >/dev/null 2>&1 \
-          && note "openclaw: persistent tailscale serve installed (https://$_dn)" \
-          || note "openclaw: tailscale serve FAILED"
-      else
-        note "openclaw: persistent tailscale serve already present"
-      fi
-      note "openclaw: proxy trust + tailnet auto-approve applied"
-    fi
-  else
-    note "openclaw: no tailscale DNS name — serve skipped"
-  fi
-}
+# OpenClaw retired on 2026-09-28; no runtime or state is provisioned.
 
 provision_hermes() {
   if has_hermes_binary_live; then
@@ -310,7 +142,6 @@ provision_hermes() {
 # ---------------------------------------------------------------------------
 # v6.39: کلاینت CLI هوش مصنوعی (Claude Code)
 # v6.41: Grok حذف شد — کاربر Grok Bot می‌خواست که به 9router وصل نمی‌شود.
-# v6.42: Pi (@earendil-works/pi-coding-agent) جایگزین شد.
 # همان الگوی 9router/OpenClaw: «تنظیمات می‌ماند، کد بازنصب می‌شود».
 #   * تنظیمات کاربر : /root/.claude، /root/.pi و /etc/profile.d/ai-clients.sh
 #                     → زیر /root و /etc هستند، پس در آرشیو حفظ می‌شوند.
@@ -327,9 +158,7 @@ provision_ai_clients() {
   # Pi خودش توصیه به --ignore-scripts کرده، پس فلگ per-package است.
   local flags
   for spec in "@anthropic-ai/claude-code:claude:Claude Code:" \
-              "@earendil-works/pi-coding-agent:pi:Pi:--ignore-scripts" \
-              "@cloudcli-ai/cloudcli:cloudcli:CloudCLI UI:" \
-              "@agegr/pi-web:pi-web:Pi Web UI:"; do
+              "@cloudcli-ai/cloudcli:cloudcli:CloudCLI UI:"; do
     pkg="${spec%%:*}"; rest="${spec#*:}"; bin="${rest%%:*}"; rest="${rest#*:}"
     name="${rest%%:*}"; flags="${rest#*:}"
     if command -v "$bin" >/dev/null 2>&1; then
@@ -371,49 +200,8 @@ PROF
     fi
   fi
 
-  # v6.42 — Pi: اگر models.json گم شده بود، از روی کلید 9router بازش بساز.
-  # نشست‌ها (~/.pi/agent/sessions) در آرشیو هستند و دست نمی‌خورند.
-  if [ ! -s /root/.pi/agent/models.json ] && [ -f /root/.openclaw/openclaw.json ]; then
-    mkdir -p /root/.pi/agent
-    if python3 - <<'PYEOF' >/dev/null 2>&1; then
-import json, os
-key = json.load(open('/root/.openclaw/openclaw.json'))['models']['providers']['ninerouter']['apiKey']
-combos = ["Agentic", "Brain", "ox-alpha", "vps"]   # ultimate عمداً نیست: provider خرابش Bzrlnk است
-cfg = {"providers": {"ninerouter": {
-    "baseUrl": "http://127.0.0.1:20128/v1",
-    "api": "openai-completions",
-    "apiKey": key,
-    "models": [{"id": c, "name": "9router " + c, "input": ["text"],
-                "contextWindow": 128000, "maxTokens": 8192} for c in combos]}}}
-p = "/root/.pi/agent/models.json"
-json.dump(cfg, open(p, "w"), indent=2)
-os.chmod(p, 0o600)
-PYEOF
-      note "Pi: models.json rebuilt (9router)"
-    else
-      note "Pi: models.json rebuild FAILED (non-fatal)"
-    fi
-  fi
 
-  # پیش‌فرض‌های Pi — فقط اگر نبودند؛ انتخاب‌های بعدی کاربر بازنویسی نمی‌شود.
-  if [ ! -s /root/.pi/agent/settings.json ]; then
-    mkdir -p /root/.pi/agent
-    # نکته: عمداً تورفتگی دارد تا هیچ خطی با «}» در ستون صفر شروع نشود؛
-    # وگرنه ابزارهایی که تابع را با sed/awk بیرون می‌کشند وسط heredoc قطع می‌شوند.
-    cat >/root/.pi/agent/settings.json <<'PISET'
-  {
-    "defaultProvider": "ninerouter",
-    "defaultModel": "Agentic",
-    "defaultThinkingLevel": "off",
-    "defaultProjectTrust": "always",
-    "enabledModels": ["ninerouter/*"],
-    "quietStartup": true
-  }
-PISET
-    note "Pi: settings.json rebuilt"
-  fi
-
-  # v6.43 — CloudCLI UI: فایل env را زیر /etc نگه می‌داریم، نه داخل پوشهٔ
+  # CloudCLI UI: فایل env را زیر /etc نگه می‌داریم، نه داخل پوشهٔ
   # پکیج npm. خود CloudCLI به‌صورت پیش‌فرض دنبال
   # <install-dir>/.env می‌گردد که زیر node_modules است و هرگز آرشیو نمی‌شود،
   # پس با هر چرخش رانر تنظیمات و اتصال به 9router از بین می‌رفت.
@@ -486,7 +274,6 @@ provision_cloudflared() {
 log "=== provisioning start (Mode 2 + recovery v4.5.5 venv-valid check) ==="
 provision_ai_clients
 provision_9router
-provision_openclaw
 provision_hermes
 provision_xui
 provision_cloudflared
