@@ -7,29 +7,17 @@ jobs:
     timeout-minutes: 10
     env:
       TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN }}
-      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
     steps:
       - name: diag
         shell: bash
         run: |
           set -uo pipefail
-          echo "=== [1] API: full hostname list ==="
           curl -s -m 30 -H "Authorization: Bearer ${TAILSCALE_API_TOKEN:-none}" "https://api.tailscale.com/api/v2/tailnet/-/devices" -o /tmp/ts.json
-          jq -r '.devices | length as $n | "device_count=\($n)"' /tmp/ts.json
-          echo "--- all hostnames (sorted) ---"
-          jq -r '.devices[].hostname' /tmp/ts.json | sort
-          echo "--- any device with old server IP 100.70.83.2 ? ---"
-          jq -r '.devices[] | select((.addresses // []) | index("100.70.83.2")) | "MATCH: \(.hostname) \(.addresses)"' /tmp/ts.json
-          echo "=== [2] join tailnet ==="
-          curl -fsSL https://tailscale.com/install.sh | sudo sh >/dev/null 2>&1
-          sudo tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname=mrp-diag2 --accept-routes --ssh=false --advertise-exit-node=false --exit-node= >/tmp/tsup.log 2>&1 || { echo "tailscale up failed:"; tail -5 /tmp/tsup.log; exit 1; }
-          for i in $(seq 1 15); do sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online==true' >/dev/null && break || sleep 2; done
-          echo "--- self ---"
-          sudo tailscale status --json | jq -r '.Self | "self: \(.HostName) dns=\(.DNSName) online=\(.Online) ips=\(.TailscaleIPs)"'
-          echo "--- full peer list (minus mine) ---"
-          sudo tailscale status --json | jq -r '.Peer[] | "\(.HostName) \(.OS) online=\(.Online)"' | sort | head -170
-          echo "--- peers matching linux/vps/runner ---"
-          sudo tailscale status --json | jq -r '.Peer[] | select(.HostName|test("linux|vps|runner|runnervm";"i")) | "\(.HostName) online=\(.Online) ips=\(.TailscaleIPs)"' || true
-      - name: cleanup
-        if: always()
-        run: sudo tailscale logout >/dev/null 2>&1 || true
+          echo "=== devices whose .name matches linux/vps/hamid/gha ==="
+          jq -r '.devices[] | select(.name|test("linux|vps|hamid|gha";"i")) | "\(.name) | host=\(.hostname) | online=\(.online) | lastSeen=\(.lastSeen) | \(.addresses|join(", "))"' /tmp/ts.json
+          echo "=== count devices with name containing linux-server ==="
+          jq -r '[.devices[] | select(.name|test("linux-server";"i"))] | length' /tmp/ts.json
+          echo "=== last 5 devices by name (lexical tail) ==="
+          jq -r '.devices[].name' /tmp/ts.json | sort | tail -5
+          echo "=== which device had the most recent lastSeen (top 5) ==="
+          jq -r '.devices[] | "\(.lastSeen) \(.name)"' /tmp/ts.json | sort -r | head -5
