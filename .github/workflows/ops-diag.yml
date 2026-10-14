@@ -1,0 +1,36 @@
+name: ops-diag (temporary)
+on:
+  workflow_dispatch:
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TAILSCALE_API_TOKEN: ${{ secrets.TAILSCALE_API_TOKEN }}
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      TAILSCALE_FIXED_IP: ${{ secrets.TAILSCALE_FIXED_IP }}
+    steps:
+      - name: diag
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "=== [1] API device list ==="
+          code=$(curl -s -o /tmp/ts.json -w '%{http_code}' -m 30 -H "Authorization: Bearer ${TAILSCALE_API_TOKEN:-none}" "https://api.tailscale.com/api/v2/tailnet/-/devices" || echo 000)
+          echo "api http=$code"
+          jq -r '.devices | length as $n | "device_count=\($n)", (.[] | "  \(.hostname) online=\(.online) lastSeen=\(.lastSeen) ip=\(.addresses[0])")' /tmp/ts.json 2>/dev/null \
+            | grep -Ei "device_count|linux-server|vpshamid|mrp-" || { echo "(no matching devices)"; head -c 300 /tmp/ts.json; echo; }
+          echo "=== [2] join tailnet and inspect ==="
+          curl -fsSL https://tailscale.com/install.sh | sudo sh >/dev/null 2>&1
+          sudo tailscale up --authkey="${TAILSCALE_AUTH_KEY}" --hostname=mrp-diag --accept-routes --ssh=false --advertise-exit-node=false --exit-node= >/tmp/tsup.log 2>&1 || { echo "tailscale up failed:"; tail -5 /tmp/tsup.log; exit 1; }
+          for i in $(seq 1 15); do sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online==true' >/dev/null && break || sleep 2; done
+          echo "--- self ---"
+          sudo tailscale status --json | jq -r '.Self | "self: \(.HostName) online=\(.Online) ips=\(.TailscaleIPs)"'
+          echo "--- server peers ---"
+          sudo tailscale status --json | jq -r '.Peer[] | select(.HostName|test("linux-server|vpshamid")) | "\(.HostName) online=\(.Online) lastSeen=\(.LastSeen) ips=\(.TailscaleIPs) active=\(.Active)"' || true
+          echo "--- ping fixed ip ---"
+          sudo tailscale ping -c 3 --timeout=5s "${TAILSCALE_FIXED_IP:-}" 2>&1 | tail -5
+          echo "--- tcp 22 test ---"
+          timeout 12 bash -c "cat < /dev/null > /dev/tcp/${TAILSCALE_FIXED_IP:-127.0.0.1}/22" && echo "tcp22: OPEN" || echo "tcp22: FAIL"
+      - name: cleanup
+        if: always()
+        run: sudo tailscale logout >/dev/null 2>&1 || true
