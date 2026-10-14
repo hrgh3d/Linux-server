@@ -2,5 +2,5 @@
   "tailscale_api_token_expires": "2026-12-12",
   "tailscale_auth_key_expires": "2026-12-12",
   "successor_pat_expires": "TODO-YYYY-MM-DD",
-  "notes": "تاریخ‌ها secret نیستند. با هر تعویض توکن به‌روز کن؛ هر بوت چک می‌شود (<۱۰ روز = هشدار). node غیر-ephemeral است: بعد از اولین اتصال موفق، reconnect با node key در state انجام می‌شود و auth key فقط برای bootstrap لازم است. Secret اضافی SUCCESSOR_TOKEN حذف شد (۲۰۲۶-09-13) — dispatch جانشین با GITHUB_TOKEN و fallback با PERSIST_TOKEN؛ با هر تعویض PAT فقط PERSIST_TOKEN را به‌روز کن."
+  "notes": "تاریخ‌ها secret نیستند. با هر تعویض توکن به‌روز کن؛ هر بوت چک می‌شود (<۱۰ روز = هشدار). node غیر-ephemeral است: بعد از اولین اتصال موفق، reconnect با node key در state انجام می‌شود و auth key فقط برای bootstrap لازم است. Secret اضافی SUCCESSOR_TOKEN حذف شد (۲۰۲۶-09-13) — dispatch جانشین با GITHUB_TOKEN و fallback با PERSIST_TOKEN؛ با هر تعویض PAT فقط PERSIST_TOKEN را به‌روز کن. ۲۰۲۶-10-14: PAT قدیمی بدون تاریخ ثبت‌شده در key-dates منقضی شد (هشدار ۱۰روزه فعال نشد) و کل زنجیره با 401 خوابید؛ PERSIST_TOKEN روتیت شد. تاریخ انقضای PAT جدید را از GitHub → Settings → Developer settings → Tokens بردار و در successor_pat_expires بگذار."
 }
