@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# tailscale-setup.sh — اتصال Tailscale با هویت پایدار (v6.9.2)
+# tailscale-setup.sh — اتصال Tailscale با هویت پایدار (v6.9.2 + v6.13.1)
 #  - v6.9.2: حذف google-chrome repo قبل از apt update (جلوگیری از Hash Sum mismatch)
 #  - تلاش برای reconnect با هویت قبلی (state) و fallback به auth key
 # ============================================================================
@@ -121,6 +121,22 @@ if [ -f "$MARKER" ] && [ -s /var/lib/tailscale/tailscaled.state ]; then
   if do_tailscale_up ""; then
     IP=$(sudo tailscale ip -4 2>/dev/null | head -1 || echo "pending")
     log "reconnected, IP=$IP"
+    # v6.13.1 (agent fix, 2026-10-14): اگر node key باطل/حذف شده باشد،
+    # 'tailscale up' می‌تواند با rc=0 برگردد و IP از cache خوانده شود —
+    # نتیجه: بوت با هویت شبح (بدون دسترسی واقعی به tailnet) ادامه می‌دهد.
+    # (سناریوی واقعی ۲۰۲۶-۱۰-۱۴: نود در بازهٔ خاموشی از tailnet حذف شده بود.)
+    # پس قبل از اعتماد به هویت بازیابی‌شده، Online واقعی را تأیید کن؛ در غیر
+    # این صورت IP=pending بگذار تا مسیر auth-key پایین‌تر اجرا شود.
+    ONLINE_CHECK="false"
+    for i in 1 2 3 4 5 6; do
+      ONLINE_CHECK=$(timeout 30 sudo tailscale status --json 2>/dev/null | jq -r '.Self.Online // false' 2>/dev/null || echo false)
+      [ "$ONLINE_CHECK" = "true" ] && break
+      sleep 5
+    done
+    if [ "$ONLINE_CHECK" != "true" ]; then
+      log "restored identity NOT online after ~30s (Online=$ONLINE_CHECK) — forcing auth-key re-registration"
+      IP="pending"
+    fi
   else
     log "reconnect failed ($(cat /tmp/ts_up_*.log 2>/dev/null | tail -1)); authenticating with auth key."
   fi
