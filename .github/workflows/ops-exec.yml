@@ -18,6 +18,9 @@ jobs:
       # Used only for explicit, audited state operations. It is substituted into
       # stdin after the public cmd_b64 has been logged, never printed.
       PERSIST_TOKEN: ${{ secrets.PERSIST_TOKEN }}
+      # v6.14 (agent): کلید Azure Foundry برای عملیات یک‌بارهٔ تزریق در .env.
+      # مقدار هرگز در input عمومی نمی‌آید؛ با placeholder روی رانر جایگزین می‌شود.
+      AZURE_FOUNDRY_API_KEY: ${{ secrets.AZURE_FOUNDRY_API_KEY }}
     steps:
       - name: exec on server
         shell: bash
@@ -29,6 +32,7 @@ jobs:
           echo "::add-mask::$SSH_PASS"
           [ -n "${TS_API:-}" ] && echo "::add-mask::$TS_API"
           [ -n "${PERSIST_TOKEN:-}" ] && echo "::add-mask::$PERSIST_TOKEN"
+          [ -n "${AZURE_FOUNDRY_API_KEY:-}" ] && echo "::add-mask::$AZURE_FOUNDRY_API_KEY"
           sudo apt-get update -y >/dev/null 2>&1
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y -o DPkg::Lock::Timeout=120 curl jq sshpass openssh-client >/dev/null 2>&1
           if ! sudo tailscale status --json 2>/dev/null | jq -e '.Self.Online == true' >/dev/null 2>&1; then
@@ -46,6 +50,7 @@ jobs:
           sed -i "s|__HAMID_PASSWORD__|${SSH_PASS}|g" /tmp/remote.sh
           sed -i "s|__TS_API__|${TS_API:-}|g" /tmp/remote.sh
           sed -i "s|__PERSIST_TOKEN__|${PERSIST_TOKEN:-}|g" /tmp/remote.sh
+          sed -i "s|__AZURE_FOUNDRY_API_KEY__|${AZURE_FOUNDRY_API_KEY:-}|g" /tmp/remote.sh
           echo "[ops-exec] secret placeholder substitutions: ${SUBS}"
           sshpass -p "$SSH_PASS" ssh "${SSHOPTS[@]}" root@"$TARGET_IP" 'bash -s' < /tmp/remote.sh 2>&1 | tail -120
           echo "=== OPS-EXEC DONE ==="
