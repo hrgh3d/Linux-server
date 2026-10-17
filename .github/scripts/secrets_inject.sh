@@ -6,6 +6,7 @@
 # معماری: secretها هرگز وارد آرشیو state نمی‌شوند (save.sh قبل از tar خط
 # متناظر را خالی می‌کند) و در هر بوت از GitHub Secrets تزریق می‌شوند:
 #   * TELEGRAM_BOT_TOKEN  ->  /root/.hermes/.env  (خط واحد، idempotent)
+#   * AZURE_FOUNDRY_API_KEY -> /root/.hermes/.env (v6.14 — ماندگاری provider اصلی)
 #
 # Non-fatal: اگر secret تنظیم نباشد، فقط WARN می‌زند و بوت ادامه می‌یابد.
 # ============================================================================
@@ -50,5 +51,12 @@ inject_env_line "TELEGRAM_BOT_TOKEN" "${TELEGRAM_BOT_TOKEN:-}" "$ENV_FILE"
 # اعلام می‌کند) تزریق می‌شود. save.sh قبل از آرشیو این خط را هم خالی می‌کند.
 inject_env_line "REPORT_BOT_TOKEN" "${REPORT_BOT_TOKEN:-}" "$ENV_FILE"
 inject_env_line "NOTIFY_CHAT_ID" "${NOTIFY_CHAT_ID:-}" "$ENV_FILE"
+
+# v6.14 (agent fix, 2026-10-17): کلید Azure Foundry در `.env` زندگی می‌کرد ولی
+# payload.py خودِ .env را از آرشیو حذف می‌کند و env_vault هم آن را نگرفته بود؛
+# نتیجه: بعد از هر بازسازی رانر، provider اصلی Hermes بدون کلید می‌ماند
+# (خطای «Azure Foundry requires an API key» — حادثهٔ 2026-10-17).
+# حالا مثل تلگرام از GitHub Secret در هر بوت تزریق می‌شود و ماندگار است.
+inject_env_line "AZURE_FOUNDRY_API_KEY" "${AZURE_FOUNDRY_API_KEY:-}" "$ENV_FILE"
 
 log "secrets injection done."
