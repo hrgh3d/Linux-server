@@ -92,6 +92,9 @@ jobs:
       NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || '' }}
       # v6.11: کانال هشدار مستقیم تلگرام (بدون وبهوک) — notify.sh از این استفاده می‌کند
       NOTIFY_CHAT_ID: ${{ secrets.NOTIFY_CHAT_ID }}
+      # v6.14: کلید provider اصلی Hermes (Azure Foundry) — .env در آرشیو state نیست،
+      # پس منبع ماندگار همین secret است و secrets_inject.sh آن را در هر بوت می‌نویسد.
+      AZURE_FOUNDRY_API_KEY: ${{ secrets.AZURE_FOUNDRY_API_KEY || '' }}
       VPS_NAME: hrgh3d
       SAVE_INTERVAL_MIN: '5'      # همگام‌سازی دوره‌ای (فقط در صورت تغییر)
       LIFETIME_MIN: ${{ inputs.lifetime_min || '350' }}
