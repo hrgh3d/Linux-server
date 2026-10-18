@@ -105,6 +105,22 @@ def _hermes_candidate(path: Path, home: Path) -> bool:
         return False
     if "cache" in name.lower():
         return False
+    # Per-profile browser dirs hold Chromium's downloaded engine component
+    # bundles (component_crx_cache, SODA*, WasmTtsEngine, model packs) inside
+    # what is also the browser user-data dir. Those are re-fetched on demand and
+    # were 96% of the "compact" continuity archive (~1.4 GB raw) on 2026-10-18,
+    # which pushed the boot-time restore/checkpoint past its step budget and
+    # failed the run closed before Tailscale setup. Keep the profile's own state
+    # (Default/, Preferences, cookies, small files) and drop engine bulk.
+    rel_parts = set(rel.parts)
+    if "mobile-browser" in rel_parts and "Default" not in rel_parts:
+        if path.suffix in {".pma", ".wasm", ".tflite", ".mmap", ".pak", ".dat", ".bin"}:
+            return False
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                return False
+        except OSError:
+            return False
     return _is_regular_file(path)
 
 
