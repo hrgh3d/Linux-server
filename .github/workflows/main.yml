@@ -184,8 +184,8 @@ jobs:
         # Must happen while every Hermes service is still stopped. If neither the
         # dedicated archive nor a valid generic-restored state exists, fail closed
         # instead of creating a new empty chat history.
-        timeout-minutes: 3
-        run: timeout 90 bash .github/scripts/hermes_continuity.sh restore
+        timeout-minutes: 25
+        run: timeout 1500 bash .github/scripts/hermes_continuity.sh restore
 
       - name: Inject externalized secrets (Telegram bot token)
         # v6.10: secretها در آرشیو state خالی‌اند؛ مقدار واقعی از Secrets تزریق می‌شود
@@ -204,8 +204,8 @@ jobs:
         # The first run after this feature is deployed may use the already
         # validated generic state once; from here onward Hermes has its own
         # compact, independently verified rollback chain.
-        timeout-minutes: 3
-        run: timeout 90 bash .github/scripts/hermes_continuity.sh checkpoint
+        timeout-minutes: 12
+        run: timeout 660 bash .github/scripts/hermes_continuity.sh checkpoint
 
       - name: 9router panel password guard (persist across runners)
         # v6.20: رمز پنل 9router (bcrypt در settings.data داخل SQLite) در هر بوت
@@ -372,7 +372,7 @@ jobs:
             # The script hashes the compact live Hermes state first, so an idle
             # minute makes no upload. A real change is copied with SQLite's
             # online-backup API, verified, then uploaded as an independent asset.
-            timeout 90 bash "$SCRIPT_DIR/hermes_continuity.sh" checkpoint "$@"
+            timeout 480 bash "$SCRIPT_DIR/hermes_continuity.sh" checkpoint "$@"
           }
           PULSE_PID=""
           start_continuity_pulse() {
