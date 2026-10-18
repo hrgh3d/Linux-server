@@ -35,6 +35,10 @@ PRUNE_DIR_NAMES = {
     "hostedtoolcache", "containerd", "target", ".pytest_cache",
     ".mypy_cache", ".tox", ".nox", ".gradle", ".nuget", ".conda",
     "audio_cache", "image_cache", "video_cache", "browser_cache",
+    # Chromium engine component packs land inside per-profile browser dirs
+    # (re-downloadable; ~1.4 GB on 2026-10-18) — see hermes_continuity.py.
+    "component_crx_cache", "SODA", "SODALanguagePacks", "WasmTtsEngine",
+    "OnDeviceHeadSuggestModel", "ActorSafetyLists",
     "logs", "tmp", "Trash",
 }
 
@@ -50,7 +54,8 @@ PRUNE_FILE_NAMES = {
 # itself is snapshotted consistently (sqlite_stage.py) so these must never be
 # archived raw.
 PRUNE_FILE_SUFFIXES = (".sock", ".pid", ".lock", ".pyc", ".log", ".tmp",
-                       ".db-wal", ".db-shm", ".sqlite-wal", ".sqlite-shm")
+                       ".db-wal", ".db-shm", ".sqlite-wal", ".sqlite-shm",
+                       ".pma", ".wasm", ".tflite", ".mmap")
 
 # Default per-file size cap (override with env PAYLOAD_MAX_FILE_BYTES). Files
 # larger than this are treated as package binaries/runtime and reinstalled
